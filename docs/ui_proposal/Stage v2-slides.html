@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Stage v2 — slides</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="tokens.css">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #f0eee9; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    #root { height: 100%; }
+    .slide-stage {
+      width: 100vw; height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      background: #f0eee9;
+    }
+    .slide {
+      width: 1280px; height: 820px;
+      background: #fff;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.18), 0 4px 16px rgba(0,0,0,0.08);
+      border-radius: 6px;
+      overflow: hidden;
+      position: relative;
+      transform-origin: center center;
+    }
+    .slide-banner {
+      position: absolute; top: 0; left: 0; right: 0;
+      padding: 8px 16px;
+      background: rgba(0,0,0,0.86);
+      color: #fff;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+      display: flex; align-items: center; justify-content: space-between;
+      z-index: 10;
+    }
+    .slide-banner .right { font-weight: 500; opacity: 0.75; letter-spacing: 0.04em; text-transform: none; }
+  </style>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Pre-define a stub before Babel async-compiles the JSX, so any
+       early showJs call from the PPTX exporter doesn't throw. -->
+  <script>
+    window.__pendingSlide = 0;
+    window.goToSlide = (n) => { window.__pendingSlide = n; };
+  </script>
+
+  <script type="text/babel" src="chrome.jsx"></script>
+  <script type="text/babel" src="data.jsx"></script>
+  <script type="text/babel" src="data-v2.jsx"></script>
+  <script type="text/babel" src="direction-a-1.jsx"></script>
+  <script type="text/babel" src="direction-a-2.jsx"></script>
+  <script type="text/babel" src="screens-v2-workspaces.jsx"></script>
+  <script type="text/babel" src="screens-v2-createpr.jsx"></script>
+  <script type="text/babel" src="screens-v2-storyline.jsx"></script>
+  <script type="text/babel" src="screens-v2-publish.jsx"></script>
+
+  <script type="text/babel">
+    const SLIDES = [
+      { section: '1 · Workspaces',       label: 'Authored vs awaiting review',  comp: () => <V2_Workspaces /> },
+      { section: '2 · Local review',     label: 'Diff · summary · transmit',    comp: () => <A_LocalReview /> },
+      { section: '3a · Create PR',       label: 'Order files (drag and drop)',  comp: () => <V2_CreatePR_Order /> },
+      { section: '3b · Create PR',       label: 'Write intros (with preview)',  comp: () => <V2_CreatePR_Intro /> },
+      { section: '4 · Storyline review', label: 'Walk through author\u2019s order', comp: () => <V2_StorylineReview /> },
+      { section: '5 · Publish review',   label: 'Summary · state · submit',     comp: () => <V2_PublishReview /> },
+    ];
+
+    function Deck() {
+      const [idx, setIdx] = React.useState(() => {
+        if (typeof window.__pendingSlide === 'number') return window.__pendingSlide;
+        const m = location.hash.match(/^#(\d+)/);
+        return m ? Math.max(0, Math.min(SLIDES.length - 1, parseInt(m[1], 10))) : 0;
+      });
+
+      // Scale slide to viewport
+      const [scale, setScale] = React.useState(1);
+      React.useLayoutEffect(() => {
+        const fit = () => {
+          const s = Math.min(window.innerWidth / 1280, window.innerHeight / 820);
+          setScale(s);
+        };
+        fit();
+        window.addEventListener('resize', fit);
+        return () => window.removeEventListener('resize', fit);
+      }, []);
+
+      React.useEffect(() => {
+        const k = (e) => {
+          if (e.key === 'ArrowRight' || e.key === ' ') setIdx(i => Math.min(SLIDES.length - 1, i + 1));
+          else if (e.key === 'ArrowLeft') setIdx(i => Math.max(0, i - 1));
+        };
+        window.addEventListener('keydown', k);
+        return () => window.removeEventListener('keydown', k);
+      }, []);
+
+      // Expose nav for the PPTX exporter (replace the bootstrap stub)
+      window.goToSlide = (n) => setIdx(Math.max(0, Math.min(SLIDES.length - 1, n)));
+
+      const s = SLIDES[idx];
+      const Comp = s.comp;
+      return (
+        <div className="slide-stage">
+          <div className="slide" style={{ transform: `scale(${scale})` }}>
+            <div className="slide-banner">
+              <span>{s.section}</span>
+              <span className="right">{s.label} · {idx + 1} / {SLIDES.length}</span>
+            </div>
+            <Comp />
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<Deck />);
+  </script>
+</body>
+</html>
