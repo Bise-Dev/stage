@@ -7,14 +7,21 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.exceptions import ApplicationError
+from apps.github_proxy.gateway import GithubGateway
 from apps.users.models import User
 from apps.workspaces.models import Workspace
-from apps.workspaces.selectors import workspace_get, workspace_list, workspace_lookup
+from apps.workspaces.selectors import storyline_read, workspace_get, workspace_list, workspace_lookup
+from apps.workspaces.serializers.storyline_update_input import StorylineUpdateInputSerializer
 from apps.workspaces.serializers.workspace_create_input import WorkspaceCreateInputSerializer
 from apps.workspaces.serializers.workspace_lookup_output import WorkspaceLookupOutputSerializer
 from apps.workspaces.serializers.workspace_output import WorkspaceOutputSerializer
 from apps.workspaces.serializers.workspace_update_input import WorkspaceUpdateInputSerializer
-from apps.workspaces.services import workspace_create, workspace_update_local_phase
+from apps.workspaces.services import storyline_replace, workspace_create, workspace_update_local_phase
+from config.settings.env_schemas import env
+
+
+def _gateway() -> GithubGateway:
+    return GithubGateway(token=env.GITHUB_ADMIN_PAT)
 
 
 class WorkspaceListApi(APIView):
@@ -68,3 +75,47 @@ class WorkspaceDetailApi(APIView):
         serializer.is_valid(raise_exception=True)
         updated = workspace_update_local_phase(workspace=ws, **serializer.validated_data)
         return Response(WorkspaceOutputSerializer(updated).data)
+
+
+class StorylineDetailApi(APIView):
+    def get(self, request: Request, workspace_id: uuid.UUID) -> Response:
+        ws = workspace_get(workspace_id=workspace_id)
+        with _gateway() as g:
+            data, etag = storyline_read(workspace=ws, gateway=g)
+        response = Response(data)
+        response["ETag"] = etag
+        return response
+
+    def put(self, request: Request, workspace_id: uuid.UUID) -> Response:
+        ws = workspace_get(workspace_id=workspace_id)
+        if_match = request.headers.get("If-Match")
+        if not if_match:
+            return Response(
+                {"message": "precondition_required", "extra": {}},
+                status=status.HTTP_412_PRECONDITION_FAILED,
+            )
+        serializer = StorylineUpdateInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with _gateway() as g:
+            storyline_replace(
+                workspace=ws,
+                user=cast(User, request.user),
+                files=[dict(f) for f in serializer.validated_data["files"]],
+                if_match=if_match,
+                gateway=g,
+            )
+            data, etag = storyline_read(workspace=ws, gateway=g)
+        response = Response(data)
+        response["ETag"] = etag
+        return response
+
+
+class StorylineFileDetailApi(APIView):
+    def get(self, request: Request, workspace_id: uuid.UUID, file_id: uuid.UUID) -> Response:
+        ws = workspace_get(workspace_id=workspace_id)
+        with _gateway() as g:
+            data, _ = storyline_read(workspace=ws, gateway=g)
+        for f in data["files"]:
+            if str(f["id"]) == str(file_id):
+                return Response(f)
+        raise ApplicationError("not_found", status=404)
