@@ -1,0 +1,135 @@
+<h2>Section 2 · Data model</h2>
+<p class="subtitle">Four bounded contexts, one SQLite file</p>
+
+<div class="section">
+  <h3>Aggregate map</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 10.5px; line-height: 1.5; margin: 0; overflow-x: auto;">
+╔══════════════════════════════════════════════════╗  ╔══════════════════════════════════════════════╗
+║  AGGREGATE 1 · MIRROR  (github-truth)            ║  ║  AGGREGATE 2 · WORKSPACE local state         ║
+║                                                  ║  ║                                              ║
+║  Repository ─┬─ PullRequest ─┬─ DiffFile          ║  ║  Workspace ─┬─ Storyline ── StorylineFile    ║
+║              │               │                    ║  ║   (pr_fk→)  ├─ AIAnalysisDoc ── AIAnalysisFile║
+║              │               ├─ Review ─┐         ║  ║             └─ LocalAnnotation (private)     ║
+║              │               │          │        ║  ║                                              ║
+║              │               ├─ Comment ◄┘        ║  ║  worktree_path  (per-workspace git worktree) ║
+║              │               │   ├─ parent_fk    ║  ║  webhook_sub_id (github hook id, ref-counted)║
+║              │               │   └─ kind: issue  ║  ╚══════════════════════════════════════════════╝
+║              │               │          | review ║
+║              │               ├─ Thread (resolved)║  ╔══════════════════════════════════════════════╗
+║              │               ├─ CheckRun         ║  ║  AGGREGATE 3 · DRAFTS (in-progress)          ║
+║              │               └─ WorkflowRun      ║  ║                                              ║
+║              │                                   ║  ║  DraftReview ── DraftComment (n)             ║
+║              └─ GithubUser (denormalized snapshot)║  ║   (workspace_fk →)                           ║
+║                                                  ║  ║                                              ║
+║  ETags + last_synced_at on every mirrored row    ║  ║  state: building | submitting | submitted    ║
+╚══════════════════════════════════════════════════╝  ╚══════════════════════════════════════════════╝
+
+                            ╔══════════════════════════════════════════════════════╗
+                            ║  AGGREGATE 4 · SYNC INFRA                            ║
+                            ║                                                      ║
+                            ║  Outbox(UUIDv7, action_type, payload, status, ...)   ║
+                            ║       ├─ status: pending | in_flight | succeeded |   ║
+                            ║       │          failed | conflicted                  ║
+                            ║       └─ github_response_ref · precondition_etag      ║
+                            ║                                                      ║
+                            ║  SyncEvent(direction, event_type, payload,           ║
+                            ║       delivery_id UNIQUE, outbox_fk?, occurred_at)   ║
+                            ║                                                      ║
+                            ║  All aggregates write to SyncEvent for audit         ║
+                            ╚══════════════════════════════════════════════════════╝
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Key entities (concise schema sketch)</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 10.5px; line-height: 1.45; margin: 0; overflow-x: auto;">
+Repository       (id, owner, name, default_branch, html_url)
+GithubUser       (login, avatar_url, name?)                      # denormalized
+
+PullRequest      (id, repo_fk, number, title, body, state, draft,
+                  head_ref, head_sha, base_ref, base_sha,
+                  author_login, created_at, updated_at, closed_at?, merged_at?,
+                  mergeable_state, html_url, etag?, last_synced_at)
+
+DiffFile         (id, pr_fk, path, previous_path?, status,
+                  additions, deletions, sha, patch_truncated, patch?)
+
+Review           (id, pr_fk, github_id, state, body, author_login,
+                  submitted_at?, etag?)
+                  # state: PENDING | COMMENTED | APPROVED | CHANGES_REQUESTED | DISMISSED
+
+Comment          (id, pr_fk, review_fk?, parent_fk?, github_id, kind,
+                  body, author_login, path?, position?, line?, side?,
+                  created_at, updated_at, deleted_at?, etag?)
+                  # kind: issue | review
+
+Thread           (id, pr_fk, root_comment_fk, github_thread_id?,
+                  resolved, resolved_by?, resolved_at?)
+
+CheckRun         (id, pr_fk, head_sha, github_id, name, status, conclusion?,
+                  started_at, completed_at?, details_url?, etag?)
+
+WorkflowRun      (id, pr_fk, head_sha, github_id, name, status, conclusion?,
+                  html_url, etag?)
+
+Workspace        (id, pr_fk, mode, worktree_path, created_at,
+                  archived_at?, last_active_at, webhook_subscription_id?)
+                  # mode: author | reviewer
+
+Storyline        (workspace_fk, file_path_in_branch, sha_when_loaded, raw_content)
+StorylineFile    (storyline_fk, diff_file_path, order_index, intro_text?)
+
+AIAnalysisDoc    (workspace_fk, ingested_at, source_label?, raw_content)
+AIAnalysisFile   (ai_doc_fk, diff_file_path, sections_json)
+
+LocalAnnotation  (workspace_fk, diff_file_path, line?, body, created_at)
+                  # private, never syncs
+
+DraftReview      (workspace_fk, state, body?, status)
+                  # state: COMMENT | APPROVE | REQUEST_CHANGES
+                  # status: building | submitting | submitted (→ Review row)
+DraftComment     (draft_review_fk?, diff_file_path?, position?, line?, side?,
+                  body, reply_to_comment_fk?)
+
+Outbox           (id UUIDv7, workspace_fk, action_type, payload_json, status,
+                  attempt_count, last_error?, github_response_ref?,
+                  precondition_etag?, enqueued_at, resolved_at?)
+
+SyncEvent        (id, workspace_fk?, direction, event_type, payload_json,
+                  delivery_id? UNIQUE, outbox_fk?, occurred_at)
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Modeling notes</h3>
+  <ul>
+    <li><strong>Two comment kinds in one table.</strong> <code>kind=issue|review</code>. Issue comments have null path/position/line. Review comments are line-anchored and link to a Review.</li>
+    <li><strong>Threads explicit.</strong> Github GraphQL exposes them; REST does not. Backend reconstructs threads from parent-fk chains; <code>resolved</code> state is fetched via GraphQL.</li>
+    <li><strong>ETags everywhere mirror rows are mutable.</strong> Captured at fetch, sent as <code>If-Match</code> on outbound edits.</li>
+    <li><strong>Drafts are separate from published.</strong> Once a DraftReview submits successfully, a Review + Comment rows are created in the mirror by the worker (from github's response). DraftReview rows are NOT mutated into Reviews — they stay as audit trail of intent.</li>
+    <li><strong>LocalAnnotation never publishes.</strong> Schema-enforced: no outbox action_type writes from it.</li>
+    <li><strong>Storyline is parsed cache.</strong> Truth = the json file at <code>head_sha:.local-review/storyline.json</code>. Cache invalidated when head_sha changes.</li>
+    <li><strong>AI-doc is opaque-ish.</strong> Backend parses known top-level structure (per-file blocks) but stores raw markdown/json for re-render.</li>
+    <li><strong>GithubUser denormalized.</strong> Per-row author_login + lookup table for display data only. Avoids re-fetch on every render.</li>
+    <li><strong>SyncEvent.delivery_id UNIQUE</strong> → inbound webhook dedup, no compound primary key needed.</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>What this model does NOT include (intentional)</h3>
+  <ul>
+    <li><strong>Full file content snapshots</strong> — only the patch (diff hunks). File content fetched on demand via <code>git show head_sha:path</code> through git ops.</li>
+    <li><strong>Per-line blame</strong> — not needed for review storyline.</li>
+    <li><strong>Per-PR settings table</strong> — workspace_id row carries the settings.</li>
+    <li><strong>Inter-workspace links</strong> — each workspace is independent. Cross-PR review (e.g., a stack) is out of scope for v1.</li>
+    <li><strong>Branch-protection / CODEOWNERS mirroring</strong> — fetched on demand at merge time, not mirrored.</li>
+  </ul>
+</div>

@@ -1,0 +1,93 @@
+<h2>Section 1 (revised) · Architecture after pivot</h2>
+<p class="subtitle">Shared Django service · DB is source of truth · multi-user · admin PAT v1</p>
+
+<div class="mockup">
+  <div class="mockup-header">Component map</div>
+  <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.5; margin: 0; overflow-x: auto;">
+   ┌───────────┐    ┌───────────┐    ┌───────────┐
+   │  User A    │   │  User B    │   │  User C    │   (browsers · multi-user)
+   └─────┬─────┘   └─────┬─────┘   └─────┬─────┘
+         │ HTTPS         │ HTTPS         │ HTTPS
+         └───────────────┴───────────────┘
+                         │
+                         ▼
+   ╔══════════════════════════════════════════════════════════════════════════════╗
+   ║                       BACKEND (Django, deployable)                            ║
+   ║                                                                              ║
+   ║   ┌──────────────────────┐                                                   ║
+   ║   │  Auth layer           │                                                  ║
+   ║   │  - OAuth-login (id)   │   ← github OAuth (identity-only scopes)          ║
+   ║   │  - admin PAT (api)    │   ← github API for all data (v1, tech debt)      ║
+   ║   │  - session cookies    │                                                  ║
+   ║   └─────────┬────────────┘                                                   ║
+   ║             ▼                                                                ║
+   ║   ┌────────────────────────────────────────────────────────────────────┐    ║
+   ║   │                       REST API + SSE                                │    ║
+   ║   │  /api/workspaces  /api/workspaces/{id}/*  /api/webhooks/github      │    ║
+   ║   │  /api/oauth/github/callback                                         │    ║
+   ║   │  SSE: /api/workspaces/{id}/events                                   │    ║
+   ║   └─────────────┬─────────────────────────────────────┬─────────────────┘    ║
+   ║                 ▼                                     ▼                     ║
+   ║   ┌─────────────────────────┐         ┌─────────────────────────────┐       ║
+   ║   │  Webhook Receiver        │        │   Outbound Action Service    │       ║
+   ║   │  validates X-Hub-Sig-256 │        │   (writes Outbox row)        │       ║
+   ║   │  appends sync_event +    │        └──────────────┬───────────────┘       ║
+   ║   │  delivery_id dedup       │                       │                       ║
+   ║   └─────────────┬───────────┘                       │ enqueue                ║
+   ║                 │ ingest                            ▼                        ║
+   ║                 ▼                          ┌────────────────────────┐        ║
+   ║   ┌───────────────────────────────────┐    │   django-q worker       │        ║
+   ║   │           SYNC ENGINE              │◄──┤   - drains Outbox       │        ║
+   ║   │  - mirror update                   │   │   - reconciliation poll │        ║
+   ║   │  - audit (sync_event)              │   │   - permission refresh  │        ║
+   ║   │  - SSE broadcast                   │   └───────────┬────────────┘        ║
+   ║   └────────────┬──────────────────────┘               │                     ║
+   ║                ▼                                       │                     ║
+   ║   ┌────────────────────────────────────┐               │                     ║
+   ║   │   Database (Postgres prod / SQLite dev)            │                     ║
+   ║   │   Mirror · Workspace · Drafts · Outbox · SyncEvent │                     ║
+   ║   │   User · UserRepoPermission (auth cache)           │                     ║
+   ║   └────────────────────────────────────┘               │                     ║
+   ║                                                        │ outbound API        ║
+   ║                                                        ▼                     ║
+   ╚════════════════════════════════════════════════════════╪═════════════════════╝
+                                                            │
+                                            ┌───────────────┼──────────────────┐
+                                            │ admin PAT     │                  │
+                                            ▼               ▼                  │
+                                      ┌──────────────────────────┐             │
+                                      │   GITHUB API + WEBHOOKS  │             │
+                                      └──────────┬───────────────┘             │
+                                                 │                             │
+                                                 │  webhooks                   │
+                                                 │  ──────                     │
+                                                 │  prod:  POST → backend URL   │
+                                                 │  dev:   POST → tunnel/smee   │
+                                                 ▼                             │
+                                  ┌─────────────────────────────────────────┐  │
+                                  │  /api/webhooks/github  (re-enters above)│◄─┘
+                                  └─────────────────────────────────────────┘
+</pre>
+  </div>
+</div>
+
+<div class="section">
+  <h3>What changed vs section 1 v1</h3>
+  <ul>
+    <li><strong>"Local backend" → "Backend (deployable)".</strong> One service, many users.</li>
+    <li><strong>Auth layer added.</strong> OAuth-login for identity. Admin PAT for github API. Session cookies for user state.</li>
+    <li><strong>UserRepoPermission cache</strong> added to DB. Authz derived from github permission, cached with TTL.</li>
+    <li><strong>Tunnel arrow now dev-only.</strong> Prod: github → public URL → backend. Dev: github → tunnel/smee → backend.</li>
+    <li><strong>Git ops removed</strong> from the diagram. Storyline = DB row (D2 revised). File content may still be fetched via github API on demand (no need for local clone).</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>SSE fan-out (multi-user)</h3>
+  <p>Each workspace has a server-side event channel. When the sync engine emits a change, it broadcasts to ALL users currently subscribed to that workspace's channel. Per-user filtering happens before publish: a draft change owned by user A is not broadcast to user B.</p>
+  <ul>
+    <li>Workspace-level events (mirror updates, storyline edits, AI-doc updates) → broadcast to everyone in channel.</li>
+    <li>Per-user events (your draft was saved) → unicast to that user's connection within the channel.</li>
+  </ul>
+</div>

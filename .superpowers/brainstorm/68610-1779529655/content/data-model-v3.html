@@ -1,0 +1,95 @@
+<h2>Section 2 (revised v3) · IntroComment + author-only storyline</h2>
+<p class="subtitle">Storyline edit = PR author identity only. Anyone can discuss intros via local threads.</p>
+
+<div class="section">
+  <h3>New entity: <code>IntroComment</code></h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.5; margin: 0;">
+IntroComment (
+  id,
+  storyline_file_fk,    # which storyline file's intro is being discussed
+  user_fk,              # who posted (must have UserRepoPermission.level >= read)
+  parent_fk?,           # for replies, threaded
+  body,
+  created_at,
+  updated_at,
+  deleted_at?,          # soft-delete (preserves thread)
+  resolved_by_user_fk?, # PR author can mark resolved
+  resolved_at?
+)
+</pre>
+    </div>
+  </div>
+  <ul>
+    <li><strong>Local only.</strong> Never syncs to github. Lives in DB.</li>
+    <li><strong>Tool-native concept.</strong> Github has no equivalent — storyline + intros are a backend invention, so the conversation around them is too.</li>
+    <li><strong>Threaded.</strong> <code>parent_fk</code> self-ref builds reply chains.</li>
+    <li><strong>PR author resolves.</strong> Only the author can flip <code>resolved</code> — same identity rule as storyline edit.</li>
+    <li><strong>SSE broadcast.</strong> New IntroComment fires to all workspace subscribers.</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>Tightened authz table</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.6; margin: 0;">
+op                                    required
+─────────────────────────────────  ────────────────────────────────
+view workspace                        permission >= read
+post github comment / submit review   permission >= read
+post IntroComment / reply             permission >= read
+read own drafts/annotations           always (filtered by user_fk)
+read others' drafts/annotations       FORBIDDEN
+edit/delete own IntroComment          self only (same user_fk)
+edit/delete others' IntroComment      FORBIDDEN
+edit Storyline / StorylineFile        is PR author  (github_login == pr.author_login)
+ingest AIAnalysisDoc                  is PR author
+resolve IntroComment thread           is PR author
+close / reopen PR                     permission >= write
+merge PR                              permission >= write (+ github branch protection)
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Updated aggregate 2 (Workspace shared state)</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.5; margin: 0;">
+Workspace (id, pr_fk, mode, created_by_user_fk, created_at,
+           archived_at?, last_active_at, webhook_id?)
+
+Storyline (workspace_fk, raw_json, updated_at, updated_by_user_fk)
+                                                   # always == pr.author
+
+StorylineFile (storyline_fk, diff_file_path,
+               order_index, intro_text?)
+
+  └─ IntroComment (storyline_file_fk, user_fk,
+                   parent_fk?, body, created_at,
+                   resolved_by_user_fk?, resolved_at?)
+                   # anyone read+ can post; resolve = author
+
+AIAnalysisDoc (workspace_fk, raw_content, ingested_at,
+               ingested_by_user_fk)
+                # always == pr.author
+
+AIAnalysisFile (ai_doc_fk, diff_file_path, sections_json)
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>UX implications</h3>
+  <ul>
+    <li>UI shows a thread icon next to each intro that has IntroComments.</li>
+    <li>Author sees "N unresolved intro threads" as part of workspace dashboard.</li>
+    <li>Reviewers can reference an intro by anchor when posting actual github comments (e.g., "see intro thread on file X").</li>
+    <li>When storyline file ordering changes, IntroComment threads follow their <code>storyline_file_fk</code> — they don't break.</li>
+    <li>If author DELETES a file from storyline (or file removed from diff after force-push), its IntroComment thread is orphaned. Two options to decide later: hide / archive / soft-delete.</li>
+  </ul>
+</div>

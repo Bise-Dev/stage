@@ -1,0 +1,145 @@
+<h2>Pivot 2 · Middleware-only backend</h2>
+<p class="subtitle">Github = data source of truth. Backend owns ONLY tool-native enhancement: storyline + intros + AI-doc.</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header" style="background: #14532d;">HOLDS</div>
+    <div class="mockup-body">
+      <ul style="font-size: 12px; line-height: 1.6;">
+        <li><strong>D1</strong> Workspace = PR-scoped pointer (just identity)</li>
+        <li><strong>D2</strong> Storyline = DB row</li>
+        <li><strong>D5</strong> Admin PAT for github API · OAuth-login for identity</li>
+        <li><strong>D6</strong> Self-walkthrough + AI-doc ingestion</li>
+        <li><strong>D8</strong> Lifecycle ops via backend (but as proxy, not mirror)</li>
+        <li><strong>D10</strong> Shared deployable, but DB-truth is now narrowed to tool-native data only</li>
+        <li><strong>D11</strong> Per-user state still applies to <code>IntroComment</code> + <code>LocalAnnotation</code> (if kept)</li>
+        <li><strong>D12</strong> SQLite dev / Postgres prod</li>
+        <li><strong>D13</strong> Permissive authz · storyline edit = PR author identity</li>
+      </ul>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header" style="background: #7c2d12;">DROPPED</div>
+    <div class="mockup-body">
+      <ul style="font-size: 12px; line-height: 1.6;">
+        <li><strong>D3</strong> Event-driven sync · gone</li>
+        <li><strong>D4</strong> Webhook ingress · gone (no tunnel needed in v1)</li>
+        <li><strong>D7</strong> Mirror + Outbox + Audit log · gone</li>
+        <li><strong>D9</strong> Outbox-based idempotency · gone (ETag on storyline writes still applies)</li>
+        <li><strong>D14</strong> Webhook subscription lifecycle · gone</li>
+        <li>All mirror tables (PullRequest, DiffFile, Review, Comment, Thread, CheckRun, WorkflowRun, GithubUser)</li>
+        <li>SyncEvent / Outbox tables</li>
+        <li>Reconciliation loop · gone</li>
+        <li>django-q · probably not needed in v1</li>
+        <li>DraftReview / DraftComment if we adopt github native pending-review drafts (open Q)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>What remains in the DB</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.5; margin: 0;">
+User              (id, github_login, github_user_id, display_name?, avatar_url?,
+                   last_login_at)
+
+Workspace         (id, repo_owner, repo_name, pr_number, mode,
+                   created_by_user_fk, created_at, archived_at?, last_active_at)
+                   # mode: author | reviewer · maybe drop, derive from current user
+
+Storyline         (workspace_fk, raw_json, updated_at, etag, updated_by_user_fk)
+                   # etag = our own ETag for optimistic concurrency on storyline writes
+
+StorylineFile     (storyline_fk, diff_file_path, order_index, intro_text?)
+
+IntroComment      (storyline_file_fk, user_fk, parent_fk?, body, created_at,
+                   updated_at, deleted_at?, resolved_by_user_fk?, resolved_at?)
+
+AIAnalysisDoc     (workspace_fk, raw_content, ingested_at, ingested_by_user_fk,
+                   source_label?)
+AIAnalysisFile    (ai_doc_fk, diff_file_path, sections_json)
+
+# OPEN: keep LocalAnnotation (per-user private notes)? or defer to later?
+# OPEN: keep DraftReview/DraftComment, or use github native review drafts?
+</pre>
+    </div>
+  </div>
+  <p class="subtitle">~6-8 tables vs ~20 in the previous design.</p>
+</div>
+
+<div class="section">
+  <h3>New architecture (radically simpler)</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.5; margin: 0; overflow-x: auto;">
+   ┌──────────┐
+   │  Users    │
+   └────┬─────┘
+        │ HTTPS
+        ▼
+   ╔══════════════════════════════════════════════════════════════════╗
+   ║   BACKEND (Django, REST + optional SSE)                          ║
+   ║                                                                  ║
+   ║   ┌────────────────────┐    ┌─────────────────────────────────┐ ║
+   ║   │  Auth (OAuth login) │    │  Routes                          │ ║
+   ║   └─────────────────────┘    │   /api/workspaces                │ ║
+   ║                              │   /api/workspaces/{id}/storyline │ ║
+   ║                              │   /api/workspaces/{id}/intro-*   │ ║
+   ║                              │   /api/workspaces/{id}/ai-doc    │ ║
+   ║                              │                                   │ ║
+   ║                              │  Github proxy routes              │ ║
+   ║                              │   /api/workspaces/{id}/pr         │ ║
+   ║                              │   /api/workspaces/{id}/files       │ ║
+   ║                              │   /api/workspaces/{id}/comments    │ ║
+   ║                              │   /api/workspaces/{id}/reviews     │ ║
+   ║                              │   /api/workspaces/{id}/checks      │ ║
+   ║                              │   /api/workspaces/{id}/actions/*   │ ║
+   ║                              └───────────┬───────────────────────┘ ║
+   ║                                          │                        ║
+   ║   ┌──────────────────────────────────────┴──────────────────┐    ║
+   ║   │  Github gateway (PyGithub + httpx · admin PAT)           │    ║
+   ║   │   - reads pass through (optional ETag cache, 60s TTL)    │    ║
+   ║   │   - writes pass through, return github response          │    ║
+   ║   └──────────────────────────────────────┬───────────────────┘    ║
+   ║                                          │                        ║
+   ║   ┌──────────────────────────────────────┴──────────────────┐    ║
+   ║   │  DB (Postgres / SQLite)                                  │    ║
+   ║   │  User · Workspace · Storyline · StorylineFile             │    ║
+   ║   │  IntroComment · AIAnalysisDoc · AIAnalysisFile            │    ║
+   ║   └──────────────────────────────────────────────────────────┘    ║
+   ║                                                                  ║
+   ║   ┌──────────────────────────────────────────────────────────┐   ║
+   ║   │  SSE (optional, for storyline + IntroComment live update) │   ║
+   ║   └──────────────────────────────────────────────────────────┘   ║
+   ╚════════════════════════════════════════════════════════════════════╝
+                                          │
+                                          │ HTTPS (admin PAT)
+                                          ▼
+                              ┌──────────────────────────┐
+                              │   GITHUB API             │
+                              └──────────────────────────┘
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Three open questions before I update the spec</h3>
+  <ul>
+    <li><strong>Q-A:</strong> Drop <code>DraftReview</code>/<code>DraftComment</code> and use github native <strong>pending review</strong> drafts? (Github stores them, we just call <code>POST .../reviews</code> incrementally then submit.)</li>
+    <li><strong>Q-B:</strong> Keep <code>LocalAnnotation</code> (per-user private notes that never sync)? Or drop for v1?</li>
+    <li><strong>Q-C:</strong> Github read caching strategy: <strong>no cache</strong> (always fresh, simplest) · <strong>conditional ETag cache</strong> (60s window, cheap revalidation) · <strong>per-route choice</strong>?</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>What feels potentially wrong about this</h3>
+  <ul>
+    <li>Every UI render hitting github = high latency tax. ETag cache mitigates but a "fully fresh on each click" UX may feel slow on remote backend.</li>
+    <li>Github API rate limit (5000/h on PAT) shared across all users + all workspaces. A team of 10 active reviewers each browsing 3 PRs simultaneously could burn through quickly. Cache helps; this needs measurement.</li>
+    <li>No realtime sense of "someone just commented on this PR while you're looking at it". User must click refresh.</li>
+    <li>If we want even basic "live new comments" UX, we'd add SSE-driven server-side polling on backend per active workspace — re-introducing some of the loops we just deleted, but much lighter.</li>
+  </ul>
+</div>

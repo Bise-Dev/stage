@@ -1,0 +1,83 @@
+<h2>Section 1 · High-level architecture</h2>
+<p class="subtitle">Components and data flow inside the local backend</p>
+
+<div class="mockup">
+  <div class="mockup-header">Component map</div>
+  <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.5; margin: 0; overflow-x: auto;">
+                                  ┌────────────────────────┐
+                                  │      GITHUB (cloud)     │
+                                  │  PRs · Comments · Reviews│
+                                  └──────────┬──────────────┘
+                                             │
+                       ╔═════════════════════╪══════════════════════╗
+                       ║   webhooks via tunnel (ngrok/cloudflared)  ║
+                       ║                     │  ↑                  ║
+                       ║   REST API calls    │  │ outbound pushes  ║
+                       ║   (PyGithub + gh)   │  │ (PyGithub + gh)  ║
+                       ║                     ↓  │                  ║
+                       ╚═════════════════════╪══╪══════════════════╝
+                                             │  │
+   ┌─────────────────────────────────────────┼──┼─────────────────────────────────────┐
+   │  LOCAL BACKEND (Django, single process) │  │                                     │
+   │                                         ↓  │                                     │
+   │  ┌─────────────────────┐    ┌───────────────────────┐    ┌──────────────────┐   │
+   │  │  Webhook Receiver   │    │   Outbound Action     │    │ Reconciliation   │   │
+   │  │  (Django view)      │    │   Service             │    │ Poller (django-q) │   │
+   │  │  validates sig      │    │   (PyGithub + gh)     │    │ every 5 min       │   │
+   │  └─────────┬───────────┘    └──────────┬────────────┘    └────────┬─────────┘   │
+   │            │                           ▲                          │             │
+   │            │                           │ drains                    │             │
+   │            ▼                           │                          ▼             │
+   │  ┌───────────────────────────────────────────────────────────────────────────┐  │
+   │  │                       SYNC ENGINE                                          │  │
+   │  │   Inbound: webhook → mirror update + sync_event log                         │  │
+   │  │   Outbound: local action → Outbox row → worker → API → mirror update       │  │
+   │  │   Reconcile: poll PR state, diff vs mirror, repair drift                   │  │
+   │  └─────────────┬─────────────────────────────────────────────────┬───────────┘  │
+   │                │                                                 │              │
+   │                ▼                                                 ▼              │
+   │  ┌─────────────────────────────┐                  ┌──────────────────────────┐ │
+   │  │   SQLite DB (single file)   │                  │   Local git operations    │ │
+   │  │   Workspace · PullRequest    │                  │   (subprocess: git fetch, │ │
+   │  │   File · Comment · Review    │                  │   read storyline.json,    │ │
+   │  │   Outbox · sync_event        │                  │   write+commit+push)      │ │
+   │  │   Storyline (parsed cache)   │                  │                           │ │
+   │  └─────────────┬─────────────────┘                  └──────────────┬──────────┘ │
+   │                │                                                   │            │
+   │                └──────────────────────┬────────────────────────────┘            │
+   │                                       │                                          │
+   │              ┌────────────────────────┴────────────────────────┐                │
+   │              │            REST API + SSE stream                 │                │
+   │              │   /api/workspaces  /api/workspaces/{id}/events   │                │
+   │              └─────────────────────┬────────────────────────────┘                │
+   └────────────────────────────────────┼─────────────────────────────────────────────┘
+                                        │
+                                        ▼
+                              ┌──────────────────┐
+                              │  LOCAL UI (later) │
+                              └──────────────────┘
+</pre>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Component responsibilities</h3>
+  <ul>
+    <li><strong>Webhook Receiver</strong> — public-facing endpoint (behind tunnel). Validates github signature. Translates payload to internal event. Updates mirror + appends to <code>sync_event</code>. Fires SSE to UI.</li>
+    <li><strong>Outbound Action Service</strong> — entry point for any local→github mutation. Writes an <code>Outbox</code> row inside a DB transaction; worker drains.</li>
+    <li><strong>Sync Engine</strong> — the rulebook for how mirror state changes (idempotent updates, conflict detection, audit log writes).</li>
+    <li><strong>Reconciliation Poller</strong> — periodic safety net. Fetches PR state, compares mirror, repairs drift.</li>
+    <li><strong>Git ops</strong> — subprocess wrappers for fetch / read storyline / commit / push. Sandboxed: never touches the user's working repo, uses a managed worktree per workspace.</li>
+    <li><strong>REST + SSE</strong> — the only surface the UI sees. Read endpoints serve mirror data; write endpoints enqueue to Outbox; SSE streams sync events.</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>Three data flow paths</h3>
+  <ul>
+    <li><strong>Inbound (github → local):</strong> Github → tunnel → Webhook Receiver → mirror update + audit + SSE → UI refresh.</li>
+    <li><strong>Outbound (local → github):</strong> UI → REST POST → Outbox row → worker → PyGithub/gh → on success, update mirror + audit → SSE.</li>
+    <li><strong>Reconciliation (drift repair):</strong> Cron → PyGithub fetch → diff vs mirror → patch deltas + audit → SSE if changes.</li>
+  </ul>
+</div>

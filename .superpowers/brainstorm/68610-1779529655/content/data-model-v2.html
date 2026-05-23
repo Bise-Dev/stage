@@ -1,0 +1,108 @@
+<h2>Section 2 (revised) · Data model after pivot</h2>
+<p class="subtitle">Adds User + UserRepoPermission. Per-user FK on drafts/annotations. No more git transport.</p>
+
+<div class="section">
+  <h3>Five aggregates now</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 10.5px; line-height: 1.5; margin: 0; overflow-x: auto;">
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  AGGREGATE 0 · IDENTITY & AUTHZ                                              ║
+║                                                                              ║
+║  User (id, github_login, github_user_id, oauth_access_token_encrypted?,      ║
+║         display_name?, avatar_url?, created_at, last_login_at)                ║
+║                                                                              ║
+║  UserRepoPermission (id, user_fk, repo_fk, level, fetched_at, expires_at)     ║
+║       # level: none | read | triage | write | maintain | admin               ║
+║                                                                              ║
+║  Session (django default)                                                     ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+╔══════════════════════════════════════════════════╗  ╔══════════════════════════════════════════════╗
+║  AGGREGATE 1 · MIRROR  (github-truth-cached)     ║  ║  AGGREGATE 2 · WORKSPACE shared state         ║
+║  (unchanged from v1)                              ║  ║                                              ║
+║                                                  ║  ║  Workspace (id, pr_fk, mode, created_at,     ║
+║  Repository ─┬─ PullRequest ─┬─ DiffFile          ║  ║   archived_at?, last_active_at,              ║
+║              │               ├─ Review            ║  ║   created_by_user_fk, webhook_id?)            ║
+║              │               ├─ Comment           ║  ║                                              ║
+║              │               ├─ Thread (resolved) ║  ║  Storyline (workspace_fk, raw_json,           ║
+║              │               ├─ CheckRun          ║  ║   updated_at, updated_by_user_fk)             ║
+║              │               └─ WorkflowRun       ║  ║                                              ║
+║              └─ GithubUser (denormalized)         ║  ║  StorylineFile (storyline_fk, diff_file_path,║
+║                                                  ║  ║   order_index, intro_text?)                   ║
+║                                                  ║  ║                                              ║
+║                                                  ║  ║  AIAnalysisDoc (workspace_fk, raw_content,    ║
+║                                                  ║  ║   ingested_at, ingested_by_user_fk,           ║
+║                                                  ║  ║   source_label?)                              ║
+║                                                  ║  ║                                              ║
+║                                                  ║  ║  AIAnalysisFile (ai_doc_fk, diff_file_path,   ║
+║                                                  ║  ║   sections_json)                              ║
+╚══════════════════════════════════════════════════╝  ╚══════════════════════════════════════════════╝
+
+╔══════════════════════════════════════════════════╗  ╔══════════════════════════════════════════════╗
+║  AGGREGATE 3 · PER-USER WORKSPACE STATE          ║  ║  AGGREGATE 4 · SYNC INFRA  (unchanged from v1)║
+║                                                  ║  ║                                              ║
+║  DraftReview (id, workspace_fk, user_fk, state,  ║  ║  Outbox (UUIDv7, workspace_fk, user_fk,      ║
+║   body?, status, created_at, updated_at)         ║  ║   action_type, payload, status, ...)         ║
+║   # state: COMMENT | APPROVE | REQUEST_CHANGES   ║  ║                                              ║
+║   # status: building | submitting | submitted    ║  ║  SyncEvent (id, workspace_fk?, user_fk?,     ║
+║                                                  ║  ║   direction, event_type, payload,            ║
+║  DraftComment (draft_review_fk?, workspace_fk,   ║  ║   delivery_id? UNIQUE, outbox_fk?,            ║
+║   user_fk, diff_file_path?, position?, line?,    ║  ║   occurred_at)                               ║
+║   side?, body, reply_to_comment_fk?)              ║  ║                                              ║
+║                                                  ║  ║  AT-LEAST-ONCE inbound, EXACTLY-ONCE effect  ║
+║  LocalAnnotation (workspace_fk, user_fk,         ║  ║                                              ║
+║   diff_file_path, line?, body, created_at)        ║  ║  ETags + precondition checks per Outbox row  ║
+║                                                  ║  ║                                              ║
+║  UNIQUE (workspace_fk, user_fk) on DraftReview    ║  ║                                              ║
+║  → each user has at most one in-flight draft     ║  ║                                              ║
+║  review per workspace                            ║  ║                                              ║
+╚══════════════════════════════════════════════════╝  ╚══════════════════════════════════════════════╝
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>What changed vs v1</h3>
+  <ul>
+    <li><strong>New aggregate 0: Identity & Authz.</strong> <code>User</code> table linked to github login. <code>UserRepoPermission</code> cache for authz.</li>
+    <li><strong>Workspace: <code>worktree_path</code> removed.</strong> No git operations needed for storyline.</li>
+    <li><strong>Storyline: now a plain DB row</strong> (<code>raw_json</code> + <code>updated_by_user_fk</code>), not a parsed cache of a branch file. Storyline edits propagate via SSE immediately.</li>
+    <li><strong>AIAnalysisDoc: <code>ingested_by_user_fk</code> added.</strong> Tracks who fed the doc in.</li>
+    <li><strong>DraftReview / DraftComment / LocalAnnotation: <code>user_fk</code> added.</strong> Per-user scope enforced at query level + UNIQUE on (workspace, user) for in-flight drafts.</li>
+    <li><strong>Outbox + SyncEvent: <code>user_fk</code> added.</strong> Audit log knows which app user triggered the action, even though all github calls go through admin PAT.</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>Authz rules (enforced by views + service layer)</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.6; margin: 0;">
+op                              required permission
+─────────────────────────────  ─────────────────────────────────────
+view workspace                  UserRepoPermission.level >= read
+post comment / submit review    UserRepoPermission.level >= read
+read own drafts/annotations     always (filtered by user_fk)
+read others' drafts/annotations FORBIDDEN (never returned)
+edit storyline                  is PR author (user.github_login == pr.author_login)
+                                 OR level >= maintain
+ingest AI-doc                   same as storyline edit
+close / reopen PR               level >= write  AND is PR author OR level >= maintain
+merge PR                        level >= write  (further gated by github branch protection)
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>What still does NOT live in the schema</h3>
+  <ul>
+    <li>Full file content (fetch on demand via github API).</li>
+    <li>Per-line blame.</li>
+    <li>Organization / team mirroring (authz derived live from github).</li>
+    <li>Cross-PR / stacked-PR links.</li>
+    <li>Branch protection / CODEOWNERS (fetched at merge time, not mirrored).</li>
+  </ul>
+</div>

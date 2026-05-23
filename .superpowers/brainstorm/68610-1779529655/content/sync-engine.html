@@ -1,0 +1,260 @@
+<h2>Section 3 · Sync engine + event loops</h2>
+<p class="subtitle">Seven loops · three sequence flows · explicit github event mapping</p>
+
+<div class="section">
+  <h3>The seven loops in the backend</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 10.5px; line-height: 1.5; margin: 0; overflow-x: auto;">
+#  loop                       trigger                       cadence              writes to
+─  ──────────────────────  ──────────────────────────────  ───────────────────  ─────────────────────
+1  webhook ingestion          github POST → /api/webhooks   reactive (no timer)  mirror + sync_event + SSE
+2  outbox drain               new Outbox row enqueued        immediate + sweep    Outbox + mirror + sync_event + SSE
+                              + periodic retry sweep         every 30s
+3  reconciliation             scheduled per active workspace 5 min                mirror (delta repair) + sync_event + SSE
+4  initial sync               on workspace create            one-shot             mirror (full pull) + sync_event + SSE
+5  permission refresh         on access miss + scheduled     6h TTL refresh       UserRepoPermission cache
+6  workspace archive sweep    scheduled                      1h                   Workspace.archived_at, webhook unregister
+7  SSE broadcast              fires from loops 1/2/3/4       per event            (in-memory pub/sub)
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Sync engine API (Python module, called by every loop)</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.5; margin: 0;">
+sync_engine.apply_github_event(workspace, event)        # webhook + reconciliation
+sync_engine.initial_sync(workspace)                     # on workspace create
+sync_engine.enqueue_outbox(workspace, user, action, payload, etag?)
+sync_engine.execute_outbox(outbox_row)                  # called by worker
+sync_engine.reconcile_workspace(workspace)              # called by scheduler
+
+# every mutation also writes a SyncEvent row + emits SSE
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Flow A · Inbound (github → mirror)</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.5; margin: 0; overflow-x: auto;">
+github                  /api/webhooks/github           sync_engine                DB                SSE bus
+  │                            │                          │                       │                   │
+  │ POST event +               │                          │                       │                   │
+  │  X-Hub-Signature-256       │                          │                       │                   │
+  ├───────────────────────────►│                          │                       │                   │
+  │                            │ verify sig (HMAC)        │                       │                   │
+  │                            │ parse payload            │                       │                   │
+  │                            │ extract delivery_id      │                       │                   │
+  │                            │                          │                       │                   │
+  │                            │ INSERT SyncEvent         │                       │                   │
+  │                            │  (delivery_id UNIQUE)    ├──────────────────────►│                   │
+  │                            │                          │                       │                   │
+  │                            │ if collision → 200 OK    │                       │                   │
+  │                            │ (already processed)       │                       │                   │
+  │                            │                          │                       │                   │
+  │                            │ resolve workspace(s)     │                       │                   │
+  │                            │  by repo + pr_number     │                       │                   │
+  │                            │                          │                       │                   │
+  │                            │ for each workspace:      │                       │                   │
+  │                            │  apply_github_event(...) ├──────────────────────►│                   │
+  │                            │                          │ upsert mirror row     │                   │
+  │                            │                          │  if event.updated_at  │                   │
+  │                            │                          │  > mirror.updated_at  │                   │
+  │                            │                          │                       │                   │
+  │                            │                          │ append sync_event     │                   │
+  │                            │                          │  (direction=inbound)  │                   │
+  │                            │                          │                       │                   │
+  │                            │                          │ emit_sse(workspace,   ├──────────────────►│
+  │                            │                          │  event_summary)       │                   │
+  │                            │                          │                       │                   │ ──► UI
+  │                            │ 200 OK                   │                       │                   │
+  │◄───────────────────────────┤                          │                       │                   │
+</pre>
+    </div>
+  </div>
+  <ul>
+    <li><strong>Signature check first.</strong> Reject unsigned / mis-signed before any DB write.</li>
+    <li><strong>Dedup via delivery_id UNIQUE.</strong> Constraint violation = duplicate delivery, return 200 immediately.</li>
+    <li><strong>Resolve workspaces.</strong> One event may map to N workspaces (e.g., two workspaces on the same PR, one author-mode, one reviewer-mode). All get updated.</li>
+    <li><strong>Idempotent upsert.</strong> If <code>event.updated_at &lt;= mirror.updated_at</code>, skip (we have newer data).</li>
+    <li><strong>SSE always fires on actual change.</strong> No-op upserts do not fire (avoid UI thrash).</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>Flow B · Outbound (user action → github)</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.5; margin: 0; overflow-x: auto;">
+user            REST view              sync_engine              Outbox/worker          github          DB     SSE bus
+ │                  │                       │                        │                   │             │         │
+ │ POST /api/...    │                       │                        │                   │             │         │
+ ├─────────────────►│                       │                        │                   │             │         │
+ │                  │ enqueue_outbox(...)   │                        │                   │             │         │
+ │                  ├──────────────────────►│                        │                   │             │         │
+ │                  │                       │ INSERT Outbox row      │                   │             │         │
+ │                  │                       │  status=pending         │                   │             │         │
+ │                  │                       │  capture mirror etag    │                   │             │         │
+ │                  │                       ├────────────────────────│──────────────────►│             │         │
+ │                  │                       │                        │                   │             │         │
+ │                  │                       │ async_task('drain', id) ├──────────────────►│             │         │
+ │                  │ 202 Accepted          │                        │                   │             │         │
+ │◄─────────────────┤  + outbox_id          │                        │                   │             │         │
+ │                  │                       │                        │ pick up row        │             │         │
+ │                  │                       │                        │ lock: pending → in_flight       │         │
+ │                  │                       │                        │ precondition check (re-read     │         │
+ │                  │                       │                        │  mirror; if already target,     │         │
+ │                  │                       │                        │  skip API → succeeded with note)│         │
+ │                  │                       │                        │                                 │         │
+ │                  │                       │                        │ call github (PyGithub/httpx,    │         │
+ │                  │                       │                        │  If-Match: precondition_etag)   │         │
+ │                  │                       │                        ├────────────────────────────────►│         │
+ │                  │                       │                        │                                 │         │
+ │                  │                       │                        │ ◄─── 200 OK + response          │         │
+ │                  │                       │                        │                                 │         │
+ │                  │                       │                        │ update mirror from response     │         │
+ │                  │                       │                        │  (new github_id, etag, etc.)    │         │
+ │                  │                       │                        │ Outbox.status=succeeded         │         │
+ │                  │                       │                        │ append sync_event (outbound)    │         │
+ │                  │                       │                        │ emit_sse(...)                   ├────────►│
+ │                  │                       │                        │                                 │         │ ──► UI
+</pre>
+    </div>
+  </div>
+  <ul>
+    <li><strong>REST view is non-blocking.</strong> 202 Accepted + outbox_id, UI polls or listens via SSE for completion.</li>
+    <li><strong>Precondition check before push.</strong> Prevents redundant API calls when state is already target (e.g., "close PR" on closed PR).</li>
+    <li><strong>ETag-protected writes</strong> where github supports them. Otherwise mirror-state check.</li>
+    <li><strong>Failure paths:</strong>
+      <ul>
+        <li><code>5xx / network</code> → retry with exponential backoff; cap at N attempts → <code>failed</code>.</li>
+        <li><code>409 / 412</code> (ETag mismatch) → <code>conflicted</code>, never auto-overwrite, UI surface.</li>
+        <li><code>403 / 404</code> → <code>failed</code>, no retry.</li>
+      </ul>
+    </li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>Flow C · Reconciliation (drift repair)</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.5; margin: 0; overflow-x: auto;">
+scheduler (5min)           sync_engine                  github                    DB                SSE bus
+   │                            │                          │                       │                   │
+   │ tick                       │                          │                       │                   │
+   ├───────────────────────────►│ reconcile_workspace(ws)  │                       │                   │
+   │                            │                          │                       │                   │
+   │                            │ GET /repos/.../pulls/{n}  │                       │                   │
+   │                            ├─────────────────────────►│                       │                   │
+   │                            │ ◄─── PR snapshot         │                       │                   │
+   │                            │                          │                       │                   │
+   │                            │ GET /repos/.../pulls/{n}/comments                 │                   │
+   │                            │ GET .../reviews          │                       │                   │
+   │                            │ GET .../commits/{sha}/check-runs                  │                   │
+   │                            │ GET .../commits/{sha}/check-suites                │                   │
+   │                            │ (parallel; conditional with If-None-Match etags)  │                   │
+   │                            ├─────────────────────────►│                       │                   │
+   │                            │                          │                       │                   │
+   │                            │ ◄── 200 changes / 304 no-change                  │                   │
+   │                            │                          │                       │                   │
+   │                            │ diff(remote, mirror)     │                       │                   │
+   │                            │ for each delta:          │                       │                   │
+   │                            │  apply_github_event(...) ├──────────────────────►│                   │
+   │                            │                          │ upsert + sync_event   │                   │
+   │                            │                          │ (event_type='reconcile_*')                │
+   │                            │                          │                       │                   │
+   │                            │                          │ emit_sse if changes   ├──────────────────►│
+   │                            │ done                     │                       │                   │ ──► UI
+</pre>
+    </div>
+  </div>
+  <ul>
+    <li><strong>Per-workspace task</strong> — only active workspaces run reconciliation. Idle (no SSE clients, no recent activity) skip.</li>
+    <li><strong>Conditional GETs (ETags)</strong> minimize rate-limit burn. 304 = nothing changed, no body to diff.</li>
+    <li><strong>Parallel fetches</strong> — PR + comments + reviews + check runs concurrently via httpx async.</li>
+    <li><strong>Drift events labeled.</strong> <code>sync_event.event_type</code> prefix = <code>reconcile_*</code> to distinguish from webhook ingest in audit log.</li>
+    <li><strong>This is the safety net.</strong> If 1 webhook delivery is lost, reconciliation catches it within 5 min.</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>Github event → mirror mutation table (initial set)</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.6; margin: 0;">
+github event                          action(s) on mirror
+──────────────────────────────────  ───────────────────────────────────────────────
+pull_request                          upsert PullRequest (state, draft, title, body, head_sha, ...)
+                                      on head_sha change → invalidate DiffFile + checks (refetch)
+pull_request_review                   upsert Review
+pull_request_review_comment           upsert Comment (kind=review), maybe upsert Thread
+issue_comment (on a PR issue)         upsert Comment (kind=issue)
+pull_request_review_thread            upsert Thread.resolved
+check_run                             upsert CheckRun
+check_suite                           (ignored — CheckRun detail is sufficient)
+workflow_run                          upsert WorkflowRun
+status                                upsert StatusCheck (legacy commit status)
+push                                  if head_sha changed → invalidate DiffFile, schedule diff refetch
+                                      (note: 'push' may not arrive depending on subscription set)
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Outbox action_type → API call table (initial set)</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+<pre style="font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.6; margin: 0;">
+action_type                  precondition check                github API call
+─────────────────────────  ────────────────────────────────  ─────────────────────────────────────────────
+comment.post                 issue/PR exists, not closed?      POST /repos/.../issues/{n}/comments
+                                                              or POST /repos/.../pulls/{n}/comments
+comment.reply                parent comment exists?            POST /repos/.../pulls/{n}/comments/{id}/replies
+comment.edit                 comment exists, ETag match        PATCH /repos/.../*/comments/{id}
+comment.delete               comment exists                    DELETE /repos/.../*/comments/{id}
+comment.react                comment exists                    POST /repos/.../*/comments/{id}/reactions
+thread.resolve               thread exists, unresolved         GraphQL: resolveReviewThread(threadId)
+thread.unresolve             thread exists, resolved           GraphQL: unresolveReviewThread(threadId)
+review.submit                draft exists, PR open             POST /repos/.../pulls/{n}/reviews
+                                                              (with body + comments[] + event)
+pr.toggle_draft              current draft state opposite      PATCH /repos/.../pulls/{n}  {draft: bool}
+pr.close                     PR open                           PATCH /repos/.../pulls/{n}  {state: closed}
+pr.reopen                    PR closed, not merged             PATCH /repos/.../pulls/{n}  {state: open}
+pr.merge                     mergeable_state == clean          PUT /repos/.../pulls/{n}/merge {method: ...}
+webhook.register             repo not already subscribed       POST /repos/.../hooks
+webhook.unregister           ref count == 0                    DELETE /repos/.../hooks/{id}
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>SSE channel mechanics</h3>
+  <ul>
+    <li><strong>One channel per workspace.</strong> Endpoint <code>GET /api/workspaces/{id}/events</code> streams.</li>
+    <li><strong>Multi-user fan-out</strong> — multiple connections per channel; each event copied to all connections.</li>
+    <li><strong>Per-event recipient filter</strong> — a draft-changed event includes <code>target_user_id</code>; the SSE dispatcher drops it for other connections in the channel.</li>
+    <li><strong>In-process bus</strong> for v1: Python pub/sub structure inside Django. When backend is scaled to multiple processes later, swap to Redis pub/sub (one-line change).</li>
+    <li><strong>Heartbeat every 25s</strong> to keep proxies happy.</li>
+    <li><strong>Replay-on-reconnect:</strong> client passes <code>Last-Event-ID</code>, server replays <code>sync_event</code> rows since that id. (Acts as event log for SSE.)</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>Concurrency invariants</h3>
+  <ul>
+    <li>Outbox row drain holds a row-level lock (<code>SELECT ... FOR UPDATE</code>); concurrent workers cannot double-drain.</li>
+    <li>Mirror upserts are gated by <code>(github_id, updated_at)</code> comparison — last-write-wins by github time, not arrival time.</li>
+    <li>Draft writes are gated by <code>(workspace, user)</code> UNIQUE; concurrent UI tabs of the same user are serialized.</li>
+    <li>Storyline writes are gated by <code>storyline.updated_at</code> If-Match (sent by UI); stale clients get a 409 conflict surface.</li>
+    <li>SyncEvent insertion is append-only; never updated; no contention.</li>
+  </ul>
+</div>
