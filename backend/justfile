@@ -1,0 +1,2 @@
+default:
+    @echo "Backend not yet scaffolded. See backend/TODO.md for open design questions."

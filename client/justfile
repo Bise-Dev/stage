@@ -1,0 +1,34 @@
+default:
+    @just --list
+
+# Run the Tauri app (spawns Vite via tauri.conf.json beforeDevCommand)
+dev:
+    bun run tauri dev
+
+# Production build
+build:
+    bun run tauri build
+
+# Install JS deps
+install:
+    bun install
+
+# Lint: Biome (TS) + cargo fmt --check + clippy
+lint:
+    bun run lint
+    cd src-tauri && cargo fmt -- --check
+    cd src-tauri && cargo clippy --all-targets -- -D warnings
+
+# Format: Biome (TS) + cargo fmt
+fmt:
+    bun run format
+    cd src-tauri && cargo fmt
+
+# Typecheck (TS) + cargo check (Rust)
+check:
+    bun run typecheck
+    cd src-tauri && cargo check --all-targets
+
+# Tests
+test:
+    cd src-tauri && cargo test
