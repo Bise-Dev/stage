@@ -1,9 +1,26 @@
+import json
+import uuid
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 
 from apps.core.exceptions import ApplicationError
 from apps.users.models import User
-from apps.workspaces.models import Workspace
+from apps.workspaces.models import Storyline, Workspace
+
+
+def _new_etag() -> str:
+    return str(uuid.uuid4())
+
+
+@transaction.atomic
+def storyline_create(*, workspace: Workspace, author: User) -> Storyline:
+    return Storyline.objects.create(
+        workspace=workspace,
+        raw_json=json.dumps({"files": []}),
+        etag=_new_etag(),
+        updated_by=author,
+    )
 
 
 @transaction.atomic
@@ -16,7 +33,7 @@ def workspace_create(
     base_ref: str,
 ) -> Workspace:
     try:
-        return Workspace.objects.create(
+        ws = Workspace.objects.create(
             created_by=creator,
             repo_owner=repo_owner,
             repo_name=repo_name,
@@ -29,6 +46,8 @@ def workspace_create(
             extra={"repo_owner": repo_owner, "repo_name": repo_name, "head_ref": head_ref},
             status=409,
         ) from exc
+    storyline_create(workspace=ws, author=creator)
+    return ws
 
 
 @transaction.atomic

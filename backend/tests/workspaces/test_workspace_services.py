@@ -44,3 +44,15 @@ def test_workspace_update_local_phase_rejects_when_pr_open() -> None:
     with pytest.raises(ApplicationError) as exc:
         workspace_update_local_phase(workspace=ws, head_ref="other")
     assert exc.value.status == 409
+
+
+@pytest.mark.django_db
+def test_workspace_create_seeds_empty_storyline() -> None:
+    from apps.workspaces.models import Storyline
+    creator = cast(User, UserFactory())
+    ws = workspace_create(
+        creator=creator, repo_owner="o", repo_name="r",
+        head_ref="feat/x", base_ref="main",
+    )
+    assert Storyline.objects.filter(workspace=ws).exists()
+    assert ws.storyline.files.count() == 0  # pyrefly: ignore[missing-attribute]
