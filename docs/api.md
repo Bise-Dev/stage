@@ -2,7 +2,7 @@
 
 REST contract between the Stage Backend and the Local Client. This document is the **interface contract** — the client implements against it; the backend serves it. Both sides agree to this surface.
 
-For the data shapes referenced below, see `docs/data-model.md`. For the rationale behind every choice, see `docs/decisions/2026-05-23-foundational-decisions.md`.
+For the data shapes referenced below, see `docs/data-model.md`. For the rationale behind every choice, see `docs/design.md` (current architecture) and `docs/adr/` (key decision records). Full brainstorming history is preserved verbatim under `docs/history/`.
 
 ---
 
@@ -20,7 +20,7 @@ Every endpoint except the auth ones below requires:
 Authorization: Bearer <stage_session_token>
 ```
 
-The token is obtained via the github device flow (see `POST /api/auth/device/*` below) and stored by the Client (recommended: OS keychain). The Client **never** sends a github credential to anyone except the github device-flow endpoints (and even those go through the backend).
+The token is obtained via the github device flow (see `POST /api/v1/auth/device/*` below) and stored by the Client (recommended: OS keychain). The Client **never** sends a github credential to anyone except the github device-flow endpoints (and even those go through the backend).
 
 ### Error envelope
 Every non-2xx response uses this shape:

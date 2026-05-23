@@ -1,22 +1,36 @@
-# Workspace identity is a UUID with two lifecycle phases
+# ADR-0003 · Workspace identity is a UUID; lifecycle phases are computed
 
 **Status:** accepted
+**Date:** 2026-05-23
 
-A **Workspace** is the backend's container for everything an author and reviewers work on around one body of changes. We identify it by a backend-minted `uuid4`, **not** by `(repo, pr_number)`. The same row exists in two phases:
+## Context
 
-- **`local`** (`pr_number IS NULL`) — author has started a local-review session for a branch; storyline + AI-doc + drafts are being composed; no github PR yet.
-- **`public`** (`pr_number` set) — github PR has been opened; the same row is now the shared workspace for reviewers.
+A **Workspace** is the backend's container for everything an author and reviewers work on around one body of changes. Naming the identity is non-trivial: a Workspace exists *before* a github PR is opened (during Self-Review / Ready-to-share) and *outlives* the PR being closed or merged. Using `(repo, pr_number)` would only identify it during the published portion of its life.
 
-This matters because the UI's "Local review" bucket needs a backend home from the moment the author starts composing; the work survives across sessions and browser-cache clears; and "Open PR" becomes a state transition on an existing row, not a workspace creation.
+## Decision
 
-## Considered Options
+A Workspace is identified by a backend-minted `uuid4`. The github `pr_number` is a nullable field, not part of the identity.
 
-- **PR-scoped only** (the original v1/v2 spec): backend Workspace exists only after PR. Rejected because the local-review state would have to live in the UI's localStorage and would be lost on cache clear; transporting it to the backend at Open-PR moment also re-creates "two entities in disguise" with no real benefit.
-- **Two-entity model** (`DraftWorkspace` → `Workspace` on Open-PR): explicit transition with two tables. Rejected because the data is the same shape in both phases and the transition would require copying rows; one mutable row is simpler.
+The Workspace passes through several **descriptive** phases — not enum values, but *computed* states derived from the workspace row + the github PR state on read:
+
+- **ready-to-share** — `pr_number IS NULL`, storyline incomplete.
+- **ready-to-publish** — `pr_number IS NULL`, storyline complete (≥1 step, every intro non-empty).
+- **published** — `pr_number IS NOT NULL`, github PR is open.
+- **closed / merged** — `pr_number IS NOT NULL`, github PR is closed (the "frozen" state — see `docs/design.md`).
+
+Self-Review is a *client-side only* state and never reaches the backend; the Workspace is created at the "Ready to share" gesture.
+
+## Considered alternatives
+
+- **PR-scoped (`(repo, pr_number)`)** — original v1/v2 spec. Rejected because the storyline-composition state would have to live entirely client-side, lost on a cache clear, and "Open PR" would become a creation step instead of a state transition on an existing row.
+- **Two-entity (`DraftWorkspace` → `Workspace` on Open-PR)** — explicit transition with two tables. Rejected because the data is shape-identical in both phases; one mutable row is simpler.
+- **Stored phase enum (`local | public | frozen | archived`)** — initially proposed during grilling. Rejected because the source of truth is github's PR state; computing the phase on read keeps the backend free of drift bugs and removes a write surface.
 
 ## Consequences
 
-- Workspace primary key changes to UUID; all FKs to Workspace use UUID.
-- Uniqueness is split: `(repo, head_ref)` while local, `(repo, pr_number)` once public.
-- The orchestration endpoint to open a PR (`POST /api/workspaces/{uuid}/open-pr`) **mutates** the existing row rather than creating one.
-- Authz: storyline edit / AI-doc ingest gates were "PR author identity". In `local` phase there is no PR author yet — replace with "workspace creator identity". When the workspace becomes `public`, the gate should agree (the PR author on github IS the workspace creator, because the creator is the one who called `open-pr`).
+- `Workspace.id` is a UUID; all FKs to Workspace use UUID.
+- Uniqueness is split: `(repo_owner, repo_name, head_ref)` unconditional; `(repo_owner, repo_name, pr_number)` conditional on `pr_number IS NOT NULL`.
+- `POST /api/v1/workspaces/<uuid>/open-pr/` **mutates** the existing row (sets `pr_number` + `pr_opened_at`) rather than creating one.
+- "Workspace frozen" is computed on every write inside the workspace surface (one github `GET /pulls/{n}` per write — accepted POC cost; cache is on the roadmap).
+- Authz keys on `workspace.created_by_id` (creator identity), which is stable across all phases.
+- The Workspace outlives PR close/merge — clients can still read the storyline, intro comments, and review activity; writes return `409 workspace_frozen`. Reopening the PR on github thaws the workspace automatically.

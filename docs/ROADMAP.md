@@ -2,13 +2,15 @@
 
 Forward-looking goals that we are deliberately *not* building yet, but are aiming for. Keep this list short — only items that change how we'd design today's code if we forgot about them.
 
-## Stage Backend (phase 2)
+## Stage Backend (POC implemented; hardening to follow)
 
-**Today (POC):** The Stage Backend does not exist yet. The client is built standalone against local git, persisting any Stage-native data (Workspace, Storyline) locally on disk. PR creation and reviewing-other-people's-workspaces flows are not functional yet.
+**Today (POC):** The Stage Backend exists as a Django 5.2 + DRF service (see `docs/design.md`). It holds GitHub credentials (single admin PAT for v1), brokers GitHub API calls, and persists Workspace + Storyline + IntroComment state in Postgres. The client integration is not wired yet on the Rust side; the contract is published in `docs/api.md` + `docs/data-model.md`.
 
-**Goal:** Add the Stage Backend as a separate service (see the three-tier topology in `CONTEXT.md`). The backend will hold GitHub credentials, broker GitHub API calls, and host shared Workspace + Storyline state.
-
-**Implication for today's design:** Reserve a `BackendClient` Tauri command surface inside the Rust side of the client. Today, those commands either do not exist yet or are no-ops; tomorrow, they are implemented against the real backend. The client UI should be coded against this seam (a typed interface), not against direct local-storage calls, so phase 2 is a single-layer swap.
+**Next hardening goals (phase 2):**
+- Per-user GitHub OAuth (replace the shared admin PAT — see ADR-0004 and `docs/design.md` § tech debt). Reuse the device-flow scaffold that already exists for session login.
+- Realtime push (SSE per workspace) to surface storyline edits / new IntroComments / github changes without client polling.
+- GitHub webhook ingress (smee.io for dev; public URL for prod) so PR-side state changes propagate without a client refresh.
+- Per-route conditional ETag cache on github read endpoints to reduce rate-limit pressure.
 
 ## Local-first review actions with eventual sync to GitHub
 

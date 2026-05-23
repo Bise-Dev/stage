@@ -1,10 +1,10 @@
 # Stage — Data Model
 
-Backend persistence layer for the POC. Postgres in production; SQLite in development. All migrations are engine-portable.
+Backend persistence layer for the POC. Postgres only at runtime. Django ORM; engine-portable migrations.
 
 This is what the Stage backend stores. Everything else (PR data, file diffs, github comments, github reviews, branches, repositories) is **not** persisted — it is read on demand from github via the backend's proxy endpoints.
 
-For full rationale on every decision below, see `docs/decisions/2026-05-23-foundational-decisions.md`.
+For full rationale on every decision below, see `docs/design.md` (architecture) and `docs/adr/` (key ADRs). Full brainstorming history preserved under `docs/history/`.
 
 ---
 

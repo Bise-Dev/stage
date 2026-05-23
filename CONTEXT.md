@@ -49,7 +49,7 @@ The action that pushes the workspace to github. First publish creates the github
 _Avoid_: "submit" (used inside publish for the github Review event), "send".
 
 **Workspace lifetime**:
-A Workspace outlives the github PR it points to. PR close / merge does **not** archive the Workspace — the author can resume Self-Review on the same branch, edit the Storyline, and publish again (re-opening a PR if needed). Archival is an explicit, separate action.
+A Workspace outlives the github PR it points to. PR close / merge does not delete the Workspace — reads stay available and the author can resume Self-Review on the same branch, edit the Storyline, and re-publish (re-opening a PR if needed). There is **no archive concept**: mutability follows the github PR state strictly (closed PR → frozen workspace; reopened PR → thawed). See `docs/design.md` § 8.
 
 **Comment** (POC stance — no backend entity):
 For the POC, Stage backend does **not** store a Comment entity. Pre-publish drafts are a Local Client concern; the client posts to the backend, which writes through to github in the same request cycle. The local-first offline-drafts sync model is a roadmap goal, not POC scope. See `docs/adr/0004-write-through-comments-poc.md`.
