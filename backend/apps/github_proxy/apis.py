@@ -1,8 +1,13 @@
+from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.exceptions import ApplicationError
 from apps.github_proxy.gateway import GithubGateway
+from apps.github_proxy.serializers.pr_comment_create_input import PullRequestCommentCreateInputSerializer
+from apps.github_proxy.serializers.pr_merge_input import PullRequestMergeInputSerializer
+from apps.github_proxy.serializers.pr_review_create_input import PullRequestReviewCreateInputSerializer
 from config.settings.env_schemas import env
 
 
@@ -60,3 +65,55 @@ class PullRequestChecksApi(APIView):
             check_runs = g.list_check_runs(o, r, head_sha)
             workflow_runs = g.list_workflow_runs(o, r, head_sha)
         return Response({"check_runs": check_runs, "workflow_runs": workflow_runs})
+
+
+class PullRequestCommentCreateApi(APIView):
+    def post(self, request: Request, o: str, r: str, n: int) -> Response:
+        serializer = PullRequestCommentCreateInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        with _gateway() as g:
+            if data["kind"] == "issue":
+                result = g.post_issue_comment(o, r, n, body=data["body"])
+            else:
+                result = g.post_review_comment(
+                    o,
+                    r,
+                    n,
+                    body=data["body"],
+                    path=data["path"],
+                    line=data["line"],
+                    side=data["side"],
+                    commit_id=data["commit_id"],
+                    in_reply_to=data["in_reply_to"],
+                )
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
+class PullRequestReviewCreateApi(APIView):
+    def post(self, request: Request, o: str, r: str, n: int) -> Response:
+        serializer = PullRequestReviewCreateInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        with _gateway() as g:
+            result = g.post_review(o, r, n, body=data["body"], event=data["event"], comments=data["comments"])
+        return Response(result)
+
+
+class PullRequestActionApi(APIView):
+    def post(self, request: Request, o: str, r: str, n: int, action: str) -> Response:
+        with _gateway() as g:
+            if action == "close":
+                result = g.patch_pr(o, r, n, state="closed")
+            elif action == "reopen":
+                result = g.patch_pr(o, r, n, state="open")
+            elif action == "toggle-draft":
+                pr = g.get_pr(o, r, n)
+                result = g.patch_pr(o, r, n, draft=not pr["draft"])
+            elif action == "merge":
+                serializer = PullRequestMergeInputSerializer(data=request.data)
+                serializer.is_valid(raise_exception=True)
+                result = g.merge_pr(o, r, n, method=serializer.validated_data["method"])
+            else:
+                raise ApplicationError(f"Unknown action: {action}", status=400)
+        return Response(result)
