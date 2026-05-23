@@ -31,7 +31,6 @@ class Workspace(BaseModel):
 
 class Storyline(BaseModel):
     workspace = models.OneToOneField(Workspace, on_delete=models.CASCADE, related_name="storyline")
-    raw_json = models.TextField(default="{}")
     etag = models.CharField(max_length=36)
     updated_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="storyline_updates")
 

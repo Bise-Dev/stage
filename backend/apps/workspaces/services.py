@@ -1,4 +1,3 @@
-import json
 import uuid
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -19,7 +18,6 @@ def _new_etag() -> str:
 def storyline_create(*, workspace: Workspace, author: User) -> Storyline:
     return Storyline.objects.create(
         workspace=workspace,
-        raw_json=json.dumps({"files": []}),
         etag=_new_etag(),
         updated_by=author,
     )
@@ -70,10 +68,9 @@ def storyline_replace(
         for idx, f in enumerate(files)
     ])
 
-    s.raw_json = json.dumps({"files": files})
     s.etag = _new_etag()
     s.updated_by = user
-    s.save(update_fields=["raw_json", "etag", "updated_by", "updated_at"])
+    s.save(update_fields=["etag", "updated_by", "updated_at"])
 
     Workspace.objects.filter(pk=workspace.pk).update(last_active_at=timezone.now())
 
