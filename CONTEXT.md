@@ -52,7 +52,24 @@ _Avoid_: "submit" (used inside publish for the github Review event), "send".
 A Workspace outlives the github PR it points to. PR close / merge does **not** archive the Workspace — the author can resume Self-Review on the same branch, edit the Storyline, and publish again (re-opening a PR if needed). Archival is an explicit, separate action.
 
 **Comment** (POC stance — no backend entity):
-For the POC, Stage backend does **not** store a Comment entity. Pre-publish drafts are a Local Client concern; the client posts to the backend, which writes through to github in the same request cycle. The local-first offline-drafts sync model is a roadmap goal, not POC scope.
+For the POC, Stage backend does **not** store a Comment entity. Pre-publish drafts are a Local Client concern; the client posts to the backend, which writes through to github in the same request cycle. The local-first offline-drafts sync model is a roadmap goal, not POC scope. See `docs/adr/0004-write-through-comments-poc.md`.
 
 **IntroComment** (still backend-native):
 Discussions on Storyline intros remain a backend entity — github has no equivalent surface.
+
+**Stale step**:
+A Storyline step whose `diff_file_path` no longer matches the current PR head (file removed, renamed, or never existed in the new diff). Detected by the backend on storyline read; surfaced as a flag per step. Backend never auto-fixes; the author edits the storyline to resolve.
+_Avoid_: "broken step", "outdated step" (we use "stale" consistently).
+
+**Frozen workspace**:
+A workspace whose github PR is closed or merged. All write endpoints (storyline edit, IntroComment post, github review submission) reject with `409 workspace_frozen`. Reads still work. Re-opening the PR thaws the workspace. There is no manual archive concept; mutability follows the PR's github state strictly.
+_Avoid_: "archived" (no such notion in v1).
+
+**Decisions document** (future):
+A planned export of a frozen workspace into a single self-contained artifact (markdown / structured) capturing the storyline + intros + IntroComments + the github review activity. Out of POC scope, but the immutability rule above guarantees the export is deterministic.
+
+**Workspace-anchored** vs **PR-anchored** endpoints:
+The Stage backend exposes two parallel API surfaces. *Workspace-anchored* endpoints (URL contains `/workspaces/{uuid}/...`) require a Workspace to exist; they serve storyline + IntroComments. *PR-anchored* endpoints (URL contains `/repos/{owner}/{repo}/pulls/{number}/...`) require only a github PR; they pure-passthrough to github. A reviewer whose author did not use Stage uses only PR-anchored endpoints — Stage degrades to a thin review wrapper rather than refusing service.
+
+**Import** (deliberately absent):
+There is no manual "import this PR into Stage" action. A Workspace is created by the author via "Ready to share". When a reviewer encounters a PR with no Workspace, they review through PR-anchored endpoints; they do not create a Workspace on the author's behalf.

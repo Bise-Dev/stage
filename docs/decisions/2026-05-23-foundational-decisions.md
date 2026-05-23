@@ -291,6 +291,320 @@ POST /api/workspaces  { repo_owner, repo_name, head_ref, base_ref }
 
 ---
 
+## D32 · No archive concept (2026-05-23, grilling)
+
+**Removed:** `Workspace.archived_at`, `DELETE /api/workspaces/{uuid}` (archive), `POST /api/workspaces/{uuid}/unarchive`. Supersedes earlier mentions in v2 spec / decisions log.
+
+**Workspace lifetime = branch / PR lifecycle:**
+- Workspace persists until... it doesn't (no deletion in v1).
+- **Mutability is purely a function of github PR state:**
+
+| github PR state | Backend treatment |
+|---|---|
+| no PR yet (`pr_number IS NULL`) | editable |
+| PR open | editable |
+| PR closed / merged | **frozen** (read-only, computed live from github per D24) |
+
+**No manual archive, no manual delete, no auto-archive on merge.** A merged workspace lives forever as a read-only record. A local workspace that the author abandoned lingers forever in `local` phase — accepted as "fine for v1; cleanup heuristics added later if real noise emerges".
+
+**`GET /api/workspaces`** returns all of the calling user's accessible workspaces unconditionally. No filter for archived (because there is no archived).
+
+---
+
+## D31 · No backend repo / branch surface; one github-search endpoint (2026-05-23, grilling)
+
+**No `Repository` entity, no `/branches` endpoint, no `/compare` endpoint.** Client owns repo + branch knowledge via local git.
+
+**Only github-search the backend exposes:**
+```
+GET /api/github/prs?role=author|reviewer
+  → github search for the calling user's PRs, cross-filtered against
+    existing Stage workspaces; returns PRs that don't yet have a workspace
+```
+
+Used by the UI's "Open PRs (not in Stage)" buckets only.
+
+**Workspace listing for the user's own workspaces:**
+```
+GET /api/workspaces?repo_owner=&repo_name=
+  → workspaces the calling user has access to (creator OR reviewer-on-PR)
+```
+
+**The client uses these primitives to compose the UI:**
+- "Branches with no workspace" = client lists local branches, calls `GET /api/workspaces?repo=...`, filters out matches by `head_ref`.
+- "Local review workspaces" = `GET /api/workspaces` filtered to `pr_number IS NULL`.
+- "Public review workspaces" = `GET /api/workspaces` filtered to `pr_number IS NOT NULL`.
+- "Open PRs (not in Stage)" = `GET /api/github/prs?role=author|reviewer`.
+
+Supersedes v2 spec routes: `/api/repos/.../branches`, `/api/repos/.../compare/...`, `/api/external-prs` (renamed/relocated to `/api/github/prs`).
+
+---
+
+## D30 · No import; Stage has two surfaces (workspace-anchored vs PR-anchored) (2026-05-23, grilling)
+
+**There is no "import PR" entry point.** A Workspace can only come into existence via the author's `Ready to share` gesture (`POST /api/workspaces`). Supersedes the `POST /api/workspaces/import` endpoint in v2 spec §6.1.
+
+**Two flows for a reviewer:**
+
+1. **Author used Stage** → a Workspace exists for the PR. Lookup returns its `workspace_id`. Reviewer uses **workspace-anchored** endpoints (storyline, IntroComments) plus the PR-anchored ones below.
+2. **Author did NOT use Stage** → no Workspace exists. Lookup 404s. Reviewer uses **PR-anchored** endpoints only — Stage degrades to a thin github review wrapper (no storyline, no intros).
+
+**Backend surface split:**
+
+```
+WORKSPACE-ANCHORED  (requires Workspace; creator-owned data)
+  GET   /api/workspaces/lookup?repo_owner=&repo_name=&pr_number=
+  GET   /api/workspaces/{uuid}
+  POST  /api/workspaces                       (creator's "Ready to share")
+  GET/PUT /api/workspaces/{uuid}/storyline
+  GET   /api/workspaces/{uuid}/storyline/files/{file_id}
+  GET/POST /api/workspaces/{uuid}/storyline/files/{file_id}/intro-comments
+  PATCH/DELETE/POST resolve   on /api/intro-comments/{id}
+  POST  /api/workspaces/{uuid}/open-pr
+  POST  /api/workspaces/{uuid}/reopen-pr
+
+PR-ANCHORED  (no workspace required; pure github passthrough + identity)
+  GET   /api/repos/{owner}/{repo}/pulls/{number}
+  GET   /api/repos/{owner}/{repo}/pulls/{number}/files
+  GET   /api/repos/{owner}/{repo}/pulls/{number}/files/{path}/diff
+  GET   /api/repos/{owner}/{repo}/pulls/{number}/files/{path}/comments
+  GET   /api/repos/{owner}/{repo}/pulls/{number}/comments
+  GET   /api/repos/{owner}/{repo}/pulls/{number}/reviews
+  GET   /api/repos/{owner}/{repo}/pulls/{number}/checks
+  POST  /api/repos/{owner}/{repo}/pulls/{number}/comments      (write-through)
+  POST  /api/repos/{owner}/{repo}/pulls/{number}/review        (write-through, batched)
+  POST  /api/repos/{owner}/{repo}/pulls/{number}/actions/close|reopen|toggle-draft|merge
+```
+
+**Note:** the old `/api/workspaces/{uuid}/pr`, `/comments`, `/review`, `/actions/*` etc. (workspace-scoped github passthroughs from v2 spec) are **moved** to the PR-anchored surface above. The client can call them with `(repo_owner, repo_name, pr_number)` derived from the workspace (when one exists) or from any github PR URL directly (when no workspace).
+
+**Identity:** `created_by` on a Workspace is always the Stage user who called `POST /api/workspaces`. No stubbing of github authors required.
+
+**Reviewer-discovery flow:**
+
+```
+reviewer pastes / receives github PR URL
+  → client calls GET /api/workspaces/lookup?repo=...&pr=...
+    → 200 { workspace_id }  → render storyline-review screen
+    → 404                  → render plain PR-review screen (PR-anchored endpoints only)
+```
+
+---
+
+## D29 · IntroComment shape (2026-05-23, grilling)
+
+**Threading:** single-level (depth ≤ 1). `parent_fk` nullable. Write-side invariant: `parent.parent_fk IS NULL`.
+
+**Resolution:** lives on root rows only. Workspace creator only can resolve / unresolve. UI default lists hide resolved threads (query param to include).
+
+**Edit/delete:** the comment author can edit and soft-delete their own. Soft-delete preserves thread structure for siblings/replies.
+
+**Final shape:**
+```
+IntroComment
+  id                  PK
+  storyline_file_fk   FK StorylineFile
+  user_fk             FK User                   # author
+  parent_fk           FK IntroComment?          # null = root; depth ≤ 1
+  body                text
+  created_at          timestamp
+  updated_at          timestamp
+  deleted_at          timestamp?                # soft-delete
+  resolved_by_fk      FK User?                  # root rows only
+  resolved_at         timestamp?
+  CHECK: parent_fk IS NULL OR (resolved_by_fk IS NULL AND resolved_at IS NULL)
+```
+
+---
+
+## D28 · AI assistance dropped from v1 backend (2026-05-23, grilling)
+
+`AIAnalysisDoc` + `AIAnalysisFile` tables, the ingestion endpoint, and the Claude-Code skill schema **removed from v1 scope**. Supersedes D6 and v2 spec §5.5.
+
+**Rationale:**
+- Self-Review is purely a client-side / author-only phase (CONTEXT.md).
+- For storyline composition, AI-assisted intro drafting is a client-side workflow whose output is the author's `StorylineFile.intro_text` value — already a backend field.
+- No reviewer-side UI in the mock consumes an "AI summary" panel.
+- YAGNI for v1; revisit only when a concrete reviewer-side use case materializes.
+
+**Practical consequence:**
+- v2 spec §5.5 (AIAnalysisDoc + AIAnalysisFile) deleted.
+- v2 plan tasks T17 + T18 (AI doc model + parser + endpoints) deleted.
+- `StorylineFile.intro_text` remains the single field for authored intent per step.
+
+---
+
+## D27 · Storyline read shape = separated endpoints, client stitches (2026-05-23, grilling)
+
+Reviewer rendering the storyline-review screen uses these distinct endpoints; client composes the view:
+
+**Storyline sidebar (list of steps):**
+```
+GET /api/workspaces/{uuid}/storyline
+→ { id, etag, head_sha,
+    files: [
+      { id, path, order, title, intro,
+        stale, stale_reason?,
+        intro_comment_count, intro_comment_unresolved }
+    ] }
+```
+
+**Focused step (the four data pieces needed for the center panel, four independent calls):**
+```
+GET /api/workspaces/{uuid}/storyline/files/{file_id}
+  → step metadata (title, intro, stale)
+
+GET /api/workspaces/{uuid}/storyline/files/{file_id}/intro-comments
+  → IntroComments tree for this step
+
+GET /api/workspaces/{uuid}/files/{file_path}/diff
+  → github passthrough: this file's diff_patch
+
+GET /api/workspaces/{uuid}/files/{file_path}/comments
+  → github passthrough: line comments anchored to this path
+```
+
+**Why separated:** keeps backend thin (D15/D16). Failure isolation (github outage doesn't break storyline). Per-endpoint caching is straightforward later. Client decides what to refresh on which event.
+
+**Aggregating "compose" endpoint deferred** — can be added later without breaking the separated ones (non-breaking).
+
+---
+
+## D26 · Auth flow = github device flow + opaque Bearer (2026-05-23, grilling)
+
+**First-time identity:** github device flow.
+- Client `POST /api/auth/device/start` → backend calls github `POST /login/device/code`, returns `{device_code, user_code, verification_uri, interval, expires_in}` forwarded to client.
+- Client prompts user: open the URL on any browser, enter the code.
+- Client polls `POST /api/auth/device/poll { device_code }` → backend polls github with client_id/client_secret; when github returns a token, backend calls `GET /user` to capture the user, **discards the github OAuth token** (admin PAT does all github API work, per D5), mints + returns a Stage Bearer session token.
+
+**Session model:** long-lived opaque Bearer token. No refresh in v1. Stored hashed:
+
+```
+Session
+  id              PK
+  user_fk         FK User
+  token_hash      str  (sha256 of token)
+  created_at      timestamp
+  last_used_at    timestamp
+  revoked_at      timestamp?
+```
+
+Every authenticated request: `Authorization: Bearer <session_token>`. No cookies.
+
+**Endpoints:**
+- `POST /api/auth/device/start`
+- `POST /api/auth/device/poll`
+- `GET  /api/auth/me`
+- `POST /api/auth/logout` (revokes the session)
+
+**Github API auth** unchanged: admin PAT per D5. Per-user OAuth tokens remain tech-debt for a later spec.
+
+---
+
+## D25 · Authz for v1 = creator-identity matrix (2026-05-23, grilling)
+
+Supersedes the "PR author" gate in D13. Privileged identity = `current_user.id == Workspace.created_by_user_fk`. Github's `pr.user.login` does **not** enter authz logic (it should equal the creator by construction; backend trusts its own row).
+
+Matrix per (action, phase):
+
+| Action | Pre-PR | Open-PR | Frozen |
+|---|---|---|---|
+| Read workspace + storyline | creator only | any authed | any authed |
+| Edit storyline / AI-doc | creator | creator | nobody |
+| Post / reply IntroComment | n/a (not visible) | any authed | nobody |
+| Resolve IntroComment thread | n/a | creator | nobody |
+| Post github comment (write-through) | n/a | any authed | nobody |
+| Submit github review (write-through) | n/a | any authed | nobody |
+| Open-PR | creator | n/a | creator (re-publish) |
+| Reopen-PR | n/a | n/a | creator |
+| Archive workspace | creator | creator | creator |
+
+"any authed" = logged in to Stage; no github-repo-permission check in v1 (`UserRepoPermission` cache table exists but is not consulted on routes — kept for the future tightening path).
+
+---
+
+## D24 · Reopen / freeze mechanics (2026-05-23, grilling)
+
+**Freeze source-of-truth:** computed live from github on **every write request**. No `pr_state` cache on Workspace in v1. One extra github call per write. Correct-by-construction; perf cache deferred.
+
+**Reopen-PR endpoint:** `POST /api/workspaces/{uuid}/reopen-pr` → thin pass-through to github `PATCH /pulls/{n} {state: open}`. Backend forwards github's response. On success, the next write naturally allowed (recomputed). On failure, client falls back to `POST /open-pr`.
+
+**Merged-PR re-publish path:** `POST /open-pr` on a workspace whose `pr_number` references a merged (or unreopenable-closed) PR is accepted: backend creates a fresh github PR and **overwrites** `pr_number`. The old PR reference is lost from the workspace. Client warns user before triggering (acceptable client-side concern).
+
+**No PR-history table on Workspace** — single active `pr_number` at any time; past PRs gone from the workspace record.
+
+---
+
+## D23 · Workspace visibility + post-close immutability (2026-05-23, grilling)
+
+**Pre-PR (local + ready-to-share + ready-to-publish):** workspace is **author-only**. UUID is not discoverable by other users. No IntroComment surface for non-creators.
+
+**Post Open-PR (published):** workspace is discoverable by anyone with access to the PR. Reviewer client bridges from a github PR URL to the Stage workspace via `GET /api/workspaces/lookup?repo_owner=&repo_name=&pr_number=` → `{ workspace_id }` or 404.
+
+**Post PR close / merge:** workspace becomes **immutable, read-only across the board.**
+- No new IntroComments.
+- No storyline edits (even by author).
+- No `POST /review` writes.
+- All reads still work.
+
+**Why immutable:** the workspace becomes a stable artifact that supports later automatic generation of a "decisions document" — a markdown / structured export encapsulating the storyline + intros + IntroComments + the github review activity referenced by the PR. Mutability after close would invalidate any cached export.
+
+**Enforcement endpoint side:** every write endpoint checks `pr_state ∈ {closed, merged}` and returns 409 with `code: workspace_frozen`. Computed live from github on each request (cheap — already calling github).
+
+**Re-opening for further work:** if author wants to keep working, the path is to (a) reopen the PR on github (`POST /api/workspaces/{uuid}/reopen-pr`) — this thaws the workspace, or (b) create a new workspace on the same branch (the old one stays archived/frozen).
+
+**Decisions-document export endpoint:** out of scope for v1 backend (lives in a later spec), but the data shape must be preserved so the export is deterministic.
+
+---
+
+## D22 · `head_ref` sync = github-truth when public, user-supplied while local (2026-05-23, grilling)
+
+`Workspace.head_ref` is treated as:
+
+- **`local` phase** (`pr_number IS NULL`): exactly what the user supplied at workspace creation. Mutable via `PATCH /api/workspaces/{uuid}`.
+- **`public` phase**: synced from `pr.head.ref` on each github read. If the user renames the branch on github, the workspace silently follows.
+
+**Edge case explicitly deferred:** branch deleted and re-created with same name. Treated as opaque — the per-file stale-step flagging (D20) catches the divergence. No special handling in v1.
+
+**Uniqueness:** `(repo_owner, repo_name, head_ref)` UNIQUE among non-archived workspaces. Rename collision → 409.
+
+---
+
+## D21 · Storyline anchoring = one step ↔ one file (v1) (2026-05-23, grilling)
+
+A `StorylineFile` row anchors **exactly one** diff file path per step. No hunk-level / line-range anchoring (model B). No many-files-per-step (model C).
+
+**Why:**
+- UI mock matches one-step-one-file already; no client rework.
+- Line ranges (B) are fragile under rebase / force-push, the dominant churn pattern in PR review.
+- Many-files-per-step (C) is rarer and can be added later as a presentation grouping without rewriting the model.
+
+**Workarounds for the rare cases:**
+- Two unrelated changes in one file → one step with a multi-paragraph intro that calls out both.
+- A many-file mechanical refactor → one step per primary file + intros that reference the related siblings.
+
+**Future upgrade path:** add a `StorylineChapter` table later as a many-to-one grouping over `StorylineFile`. Existing rows stay intact.
+
+---
+
+## D20 · Storyline writes never touch github; backend flags stale steps (2026-05-23, grilling)
+
+**Storyline is purely a Stage-backend artifact.** Saving / editing the storyline NEVER calls github, even when the workspace is `published`. Storyline is read by the client (and by reviewers' clients) directly from the backend; reviewers refresh to see new versions.
+
+**Stale-step detection:** when the client fetches the storyline (`GET /api/workspaces/{uuid}/storyline`), the backend compares each `StorylineFile.diff_file_path` against the **current** diff (latest head SHA via github API) and returns a `stale: bool` flag per step (and a `stale_reason: 'file_removed' | 'file_renamed_to:<new_path>'` where computable). Backend does not mutate the storyline — author fixes it via the same write endpoint.
+
+**Three orthogonal "publish-time" backend actions (confirmed):**
+
+1. `PUT /api/workspaces/{uuid}/storyline` — pure save. Always available. Never touches github.
+2. `POST /api/workspaces/{uuid}/open-pr` — first PR creation. 422 if a PR is currently open (`pr_number` set AND not closed/merged). Creates github PR; updates `pr_number` + `pr_opened_at`.
+3. `POST /api/workspaces/{uuid}/review` — write-through review submission (D19). Available when a PR is open.
+
+**Re-open semantics:** a `POST /open-pr` on a workspace whose `pr_number` references a closed-or-merged PR is allowed; backend creates a fresh github PR and **overwrites** `pr_number` with the new one. No history of past PR numbers is kept on the workspace. ("One workspace can point to a sequence of PRs over time, but only the active one is referenced.")
+
+**Why backend flags rather than client polls separately:** keeps the staleness contract centralized (one definition of stale across all clients), spends one github call per storyline-read instead of N per file.
+
+---
+
 ## D19 · Write-through review/comment model (POC) (2026-05-23, grilling)
 
 Stage backend **does not store** `DraftReview`, `DraftComment`, or any `Comment` entity in the POC. Comment authoring is a **client-side** concern (the client holds the pre-publish queue). When the user submits, the client calls a Stage backend endpoint that **immediately** writes through to github as native github review activity.
@@ -373,7 +687,7 @@ flow B — reviewer imports existing github PR:
     → creates row, phase=public, returns uuid
 ```
 
-This decision is recorded as **ADR-0001** (`docs/adr/0001-workspace-identity-and-phases.md`).
+This decision is recorded as **ADR-0003** (`docs/adr/0003-workspace-identity-and-phases.md`).
 
 ---
 
