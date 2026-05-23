@@ -194,6 +194,9 @@ def _comment_to_dict(comment: IntroComment) -> dict:
 class IntroCommentCollectionApi(APIView):
     def get(self, request: Request, workspace_id: uuid.UUID, file_id: uuid.UUID) -> Response:
         sf = _get_storyline_file(workspace_id, file_id)
+        ws = sf.storyline.workspace
+        if ws.pr_number is None and request.user.pk != ws.created_by_id:
+            raise ApplicationError("Not found", status=404)
         include_resolved = request.query_params.get("include_resolved", "").lower() in (
             "true",
             "1",

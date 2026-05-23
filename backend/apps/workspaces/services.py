@@ -121,6 +121,8 @@ def intro_comment_create(
     gateway,
 ) -> IntroComment:
     workspace = storyline_file.storyline.workspace
+    if workspace.pr_number is None and user.pk != workspace.created_by_id:
+        raise ApplicationError("creator_only_pre_publish", status=403)
     _assert_not_frozen(workspace, gateway)
     if parent is not None and parent.parent_id is not None:
         raise ApplicationError("depth_exceeded", status=400)

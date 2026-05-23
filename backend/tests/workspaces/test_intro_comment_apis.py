@@ -107,9 +107,12 @@ def test_intro_comment_detail_patch_owner(authed_ws) -> None:
 def test_intro_comment_detail_patch_not_owner(authed_ws) -> None:
     client, user, ws, sf = authed_ws
     gw = _open_gw()
+    comment = intro_comment_create(storyline_file=sf, user=user, body="orig", gateway=gw)
     other = cast(User, UserFactory())
-    comment = intro_comment_create(storyline_file=sf, user=other, body="orig", gateway=gw)
-    resp = client.patch(
+    other_raw, _ = session_issue(user=other)
+    other_client = APIClient()
+    other_client.credentials(HTTP_AUTHORIZATION=f"Bearer {other_raw}")
+    resp = other_client.patch(
         f"/api/v1/intro-comments/{comment.pk}/",
         {"body": "updated"},
         format="json",
@@ -130,9 +133,12 @@ def test_intro_comment_delete_owner(authed_ws) -> None:
 def test_intro_comment_delete_not_owner(authed_ws) -> None:
     client, user, ws, sf = authed_ws
     gw = _open_gw()
+    comment = intro_comment_create(storyline_file=sf, user=user, body="bye", gateway=gw)
     other = cast(User, UserFactory())
-    comment = intro_comment_create(storyline_file=sf, user=other, body="bye", gateway=gw)
-    resp = client.post(f"/api/v1/intro-comments/{comment.pk}/delete/")
+    other_raw, _ = session_issue(user=other)
+    other_client = APIClient()
+    other_client.credentials(HTTP_AUTHORIZATION=f"Bearer {other_raw}")
+    resp = other_client.post(f"/api/v1/intro-comments/{comment.pk}/delete/")
     assert resp.status_code == 403
 
 
@@ -186,3 +192,48 @@ def test_intro_comment_get_includes_resolved(authed_ws) -> None:
         f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/?include_resolved=true"
     )
     assert len(resp_with.json()) == 1
+
+
+@pytest.mark.django_db
+def test_intro_comment_create_pre_publish_blocked_for_non_creator(authed_ws) -> None:
+    _, _, ws, sf = authed_ws
+    user_b = cast(User, UserFactory())
+    raw_b, _ = session_issue(user=user_b)
+    client_b = APIClient()
+    client_b.credentials(HTTP_AUTHORIZATION=f"Bearer {raw_b}")
+    with patch("apps.workspaces.apis._gateway", return_value=_open_gw()):
+        resp = client_b.post(
+            f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/",
+            {"body": "sneaky"},
+            format="json",
+        )
+    assert resp.status_code == 403
+    assert resp.json()["message"] == "creator_only_pre_publish"
+
+
+@pytest.mark.django_db
+def test_intro_comment_create_pre_publish_allowed_for_creator(authed_ws) -> None:
+    client, _, ws, sf = authed_ws
+    with patch("apps.workspaces.apis._gateway", return_value=_open_gw()):
+        resp = client.post(
+            f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/",
+            {"body": "prep note"},
+            format="json",
+        )
+    assert resp.status_code == 201
+    assert resp.json()["body"] == "prep note"
+
+
+@pytest.mark.django_db
+def test_intro_comment_list_pre_publish_404_for_non_creator(authed_ws) -> None:
+    client, user, ws, sf = authed_ws
+    gw = _open_gw()
+    intro_comment_create(storyline_file=sf, user=user, body="prep note", gateway=gw)
+    user_b = cast(User, UserFactory())
+    raw_b, _ = session_issue(user=user_b)
+    client_b = APIClient()
+    client_b.credentials(HTTP_AUTHORIZATION=f"Bearer {raw_b}")
+    resp = client_b.get(
+        f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/"
+    )
+    assert resp.status_code == 404
