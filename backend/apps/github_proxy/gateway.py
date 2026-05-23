@@ -74,3 +74,72 @@ class GithubGateway:
 
     def search_issues(self, query: str) -> dict:
         return self._request("GET", "/search/issues", params={"q": query}).json()
+
+    def post_issue_comment(self, o: str, r: str, n: int, *, body: str) -> dict:
+        return self._request("POST", f"/repos/{o}/{r}/issues/{n}/comments", json={"body": body}).json()
+
+    def post_review_comment(
+        self,
+        o: str,
+        r: str,
+        n: int,
+        *,
+        body: str,
+        path: str,
+        line: int,
+        side: str,
+        commit_id: str | None = None,
+        in_reply_to: int | None = None,
+    ) -> dict:
+        if in_reply_to is not None:
+            payload: dict[str, Any] = {"body": body, "in_reply_to": in_reply_to}
+        else:
+            payload = {"body": body, "path": path, "line": line, "side": side, "commit_id": commit_id}
+        return self._request("POST", f"/repos/{o}/{r}/pulls/{n}/comments", json=payload).json()
+
+    def post_review(self, o: str, r: str, n: int, *, body: str, event: str, comments: list[dict]) -> dict:
+        return self._request(
+            "POST",
+            f"/repos/{o}/{r}/pulls/{n}/reviews",
+            json={"body": body, "event": event, "comments": comments},
+        ).json()
+
+    def patch_pr(self, o: str, r: str, n: int, **fields: Any) -> dict:
+        return self._request("PATCH", f"/repos/{o}/{r}/pulls/{n}", json=fields).json()
+
+    def merge_pr(self, o: str, r: str, n: int, *, method: str) -> dict:
+        return self._request("PUT", f"/repos/{o}/{r}/pulls/{n}/merge", json={"merge_method": method}).json()
+
+    def create_pull(
+        self, o: str, r: str, *, title: str, body: str, base: str, head: str, draft: bool = False
+    ) -> dict:
+        return self._request(
+            "POST",
+            f"/repos/{o}/{r}/pulls",
+            json={"title": title, "body": body, "base": base, "head": head, "draft": draft},
+        ).json()
+
+    def request_reviewers(self, o: str, r: str, n: int, *, reviewers: list[str]) -> dict:
+        return self._request(
+            "POST", f"/repos/{o}/{r}/pulls/{n}/requested_reviewers", json={"reviewers": reviewers}
+        ).json()
+
+    def add_labels(self, o: str, r: str, n: int, *, labels: list[str]) -> list[dict]:
+        return self._request("POST", f"/repos/{o}/{r}/issues/{n}/labels", json={"labels": labels}).json()
+
+    def edit_issue_comment(self, o: str, r: str, comment_id: int, body: str) -> dict:
+        return self._request("PATCH", f"/repos/{o}/{r}/issues/comments/{comment_id}", json={"body": body}).json()
+
+    def delete_issue_comment(self, o: str, r: str, comment_id: int) -> None:
+        self._request("DELETE", f"/repos/{o}/{r}/issues/comments/{comment_id}")
+
+    def edit_review_comment(self, o: str, r: str, comment_id: int, body: str) -> dict:
+        return self._request("PATCH", f"/repos/{o}/{r}/pulls/comments/{comment_id}", json={"body": body}).json()
+
+    def delete_review_comment(self, o: str, r: str, comment_id: int) -> None:
+        self._request("DELETE", f"/repos/{o}/{r}/pulls/comments/{comment_id}")
+
+    def react_to_comment(self, o: str, r: str, kind: str, comment_id: int, content: str) -> dict:
+        return self._request(
+            "POST", f"/repos/{o}/{r}/{kind}/comments/{comment_id}/reactions", json={"content": content}
+        ).json()
