@@ -94,6 +94,17 @@ def workspace_get(*, workspace_id: uuid.UUID) -> Workspace:
     return Workspace.objects.select_related("created_by").get(pk=workspace_id)
 
 
+def workspaces_existing_for_prs(*, prs: list[tuple[str, str, int]]) -> set[tuple[str, str, int]]:
+    if not prs:
+        return set()
+    from django.db.models import Q
+    q = Q()
+    for owner, name, n in prs:
+        q |= Q(repo_owner=owner, repo_name=name, pr_number=n)
+    existing = Workspace.objects.filter(q).values_list("repo_owner", "repo_name", "pr_number")
+    return {(row[0], row[1], row[2]) for row in existing}
+
+
 def workspace_lookup(*, repo_owner: str, repo_name: str, pr_number: int) -> Workspace | None:
     return (
         Workspace.objects.select_related("created_by")

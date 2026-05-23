@@ -1,6 +1,7 @@
 from django.urls import path
 
 from apps.github_proxy.apis import (
+    GithubPullsSearchApi,
     PullRequestActionApi,
     PullRequestChecksApi,
     PullRequestCommentCreateApi,
@@ -26,4 +27,5 @@ urlpatterns = [
     path("repos/<str:o>/<str:r>/pulls/<int:n>/comments/create/", PullRequestCommentCreateApi.as_view(), name="pr-comment-create"),
     path("repos/<str:o>/<str:r>/pulls/<int:n>/review/create/", PullRequestReviewCreateApi.as_view(), name="pr-review-create"),
     path("repos/<str:o>/<str:r>/pulls/<int:n>/actions/<str:action>/", PullRequestActionApi.as_view(), name="pr-action"),
+    path("github/prs/", GithubPullsSearchApi.as_view(), name="github-pulls-search"),
 ]

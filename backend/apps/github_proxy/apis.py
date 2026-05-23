@@ -8,6 +8,7 @@ from apps.github_proxy.gateway import GithubGateway
 from apps.github_proxy.serializers.pr_comment_create_input import PullRequestCommentCreateInputSerializer
 from apps.github_proxy.serializers.pr_merge_input import PullRequestMergeInputSerializer
 from apps.github_proxy.serializers.pr_review_create_input import PullRequestReviewCreateInputSerializer
+from apps.workspaces.selectors import workspaces_existing_for_prs
 from config.settings.env_schemas import env
 
 
@@ -98,6 +99,35 @@ class PullRequestReviewCreateApi(APIView):
         with _gateway() as g:
             result = g.post_review(o, r, n, body=data["body"], event=data["event"], comments=data["comments"])
         return Response(result)
+
+
+class GithubPullsSearchApi(APIView):
+    def get(self, request: Request) -> Response:
+        login = getattr(request.user, "github_login", None)
+        if not login:
+            raise ApplicationError("no_github_identity", status=400)
+
+        role = request.query_params.get("role")
+        if role == "author":
+            query = f"is:pr is:open author:{login}"
+        elif role == "reviewer":
+            query = f"is:pr is:open review-requested:{login}"
+        else:
+            raise ApplicationError("invalid_role", status=400)
+
+        with _gateway() as g:
+            result = g.search_issues(query)
+
+        items = result.get("items", [])
+        prs: list[tuple[str, str, int]] = []
+        for item in items:
+            repo_url: str = item["repository_url"]
+            parts = repo_url.split("/repos/", 1)[1].split("/")
+            prs.append((parts[0], parts[1], item["number"]))
+
+        existing = workspaces_existing_for_prs(prs=prs)
+        filtered = [item for item, key in zip(items, prs) if key not in existing]
+        return Response({"items": filtered, "count": len(filtered)})
 
 
 class PullRequestActionApi(APIView):
