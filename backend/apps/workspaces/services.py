@@ -3,10 +3,11 @@ import uuid
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from apps.core.exceptions import ApplicationError
 from apps.users.models import User
-from apps.workspaces.models import Storyline, Workspace
+from apps.workspaces.models import Storyline, StorylineFile, Workspace
 
 
 def _new_etag() -> str:
@@ -21,6 +22,61 @@ def storyline_create(*, workspace: Workspace, author: User) -> Storyline:
         etag=_new_etag(),
         updated_by=author,
     )
+
+
+@transaction.atomic
+def storyline_replace(
+    *,
+    workspace: Workspace,
+    user: User,
+    files: list[dict],
+    if_match: str,
+    gateway,
+) -> str:
+    if user.pk != workspace.created_by_id:
+        raise ApplicationError(
+            "Only the workspace creator can edit the storyline",
+            extra={"workspace_id": str(workspace.id)},
+            status=403,
+        )
+
+    if workspace.pr_number is not None:
+        pr = gateway.get_pr(workspace.repo_owner, workspace.repo_name, workspace.pr_number)
+        if pr.get("state") == "closed":
+            raise ApplicationError(
+                "workspace_frozen",
+                extra={"workspace_id": str(workspace.id)},
+                status=409,
+            )
+
+    s = Storyline.objects.select_for_update().get(workspace=workspace)
+    if s.etag != if_match:
+        raise ApplicationError(
+            "etag_mismatch",
+            extra={"current_etag": s.etag},
+            status=409,
+        )
+
+    StorylineFile.objects.filter(storyline=s).delete()
+    StorylineFile.objects.bulk_create([
+        StorylineFile(
+            storyline=s,
+            diff_file_path=f["diff_file_path"],
+            order_index=f.get("order_index", idx),
+            title=f.get("title", ""),
+            intro_text=f.get("intro_text", ""),
+        )
+        for idx, f in enumerate(files)
+    ])
+
+    s.raw_json = json.dumps({"files": files})
+    s.etag = _new_etag()
+    s.updated_by = user
+    s.save(update_fields=["raw_json", "etag", "updated_by", "updated_at"])
+
+    Workspace.objects.filter(pk=workspace.pk).update(last_active_at=timezone.now())
+
+    return s.etag
 
 
 @transaction.atomic
