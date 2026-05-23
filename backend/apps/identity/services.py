@@ -23,3 +23,18 @@ def session_issue(*, user: User) -> tuple[str, Session]:
 def session_revoke(*, session: Session) -> None:
     session.revoked_at = timezone.now()
     session.save(update_fields=["revoked_at", "updated_at"])
+
+
+@transaction.atomic
+def user_upsert_from_github(*, github_payload: dict) -> User:
+    user, _ = User.objects.update_or_create(
+        github_user_id=github_payload["id"],
+        defaults={
+            "username": github_payload["login"],
+            "github_login": github_payload["login"],
+            "display_name": github_payload.get("name") or "",
+            "avatar_url": github_payload.get("avatar_url") or "",
+            "last_login_at": timezone.now(),
+        },
+    )
+    return user

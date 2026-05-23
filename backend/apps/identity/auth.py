@@ -16,3 +16,6 @@ class BearerSessionAuthentication(authentication.BaseAuthentication):
         if user is None:
             raise exceptions.AuthenticationFailed("invalid or revoked token")
         return (user, raw)
+
+    def authenticate_header(self, request: Request) -> str:
+        return self.keyword
