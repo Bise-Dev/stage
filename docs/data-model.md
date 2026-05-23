@@ -1,10 +1,10 @@
 # Stage — Data Model
 
-Backend persistence layer for the POC. Postgres in production; SQLite in development. All migrations are engine-portable.
+Backend persistence layer for the POC. Postgres only at runtime. Django ORM; engine-portable migrations.
 
 This is what the Stage backend stores. Everything else (PR data, file diffs, github comments, github reviews, branches, repositories) is **not** persisted — it is read on demand from github via the backend's proxy endpoints.
 
-For full rationale on every decision below, see `docs/decisions/2026-05-23-foundational-decisions.md`.
+For full rationale on every decision below, see `docs/design.md` (architecture) and `docs/adr/` (key ADRs). Full brainstorming history preserved under `docs/history/`.
 
 ---
 
@@ -56,7 +56,7 @@ A long-lived Bearer token issued to a Client after a successful github device-fl
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | integer PK | |
+| `id` | UUID PK | `uuid4`, from `BaseModel` |
 | `user_fk` | FK `User` | |
 | `token_hash` | string | SHA-256 of the opaque Bearer token; raw token never stored |
 | `created_at` | timestamp | |
@@ -86,15 +86,16 @@ A Stage-owned container for one body of changes under review. Identified by a ba
 | `created_at` | timestamp | |
 | `last_active_at` | timestamp | touched on any write to the workspace or its children |
 
-**`head_ref` mutability:**
+**`head_ref` semantics:**
+- Creation-time label + pre-publish lookup index. `(repo_owner, repo_name, head_ref, created_by)` is how a client finds "the workspace for the branch I'm currently on" before it knows the UUID.
 - While `pr_number IS NULL` (local phase): user-supplied at creation, updateable via `PATCH /api/workspaces/{uuid}`.
-- While `pr_number IS NOT NULL` (public phase): synced from `pr.head.ref` on each storyline read (github is the source of truth; the workspace silently follows branch renames).
+- While `pr_number IS NOT NULL` (public phase): **frozen on the backend side.** Github owns the authoritative branch name (`pr.head.ref`); Stage does not sync it back. If github renames the branch, the stored `head_ref` becomes a stale label — this is acceptable because post-publish lookups happen via `(repo, pr_number)`, not via `head_ref`. Clients that need the live branch name read it from the github proxy.
 
 **Uniqueness constraints:**
 - `(repo_owner, repo_name, head_ref)` is UNIQUE.
 - `(repo_owner, repo_name, pr_number)` is UNIQUE when `pr_number IS NOT NULL` (partial unique index).
 
-**No `archived_at` field, no soft-delete.** Workspaces persist; their mutability is purely a function of github PR state (see `docs/adr/0004` and decisions D23 / D32).
+**No `archived_at` field, no soft-delete.** Workspaces persist; their mutability is purely a function of github PR state (see `docs/adr/0002-workspace-identity-and-phases.md` § Consequences).
 
 ---
 
@@ -104,13 +105,13 @@ The author's chosen narrative for how a reviewer should walk through the change.
 
 | Field | Type | Notes |
 |---|---|---|
-| `workspace_fk` | FK `Workspace`, PK | one-to-one; deletion cascades |
-| `raw_json` | text | canonical JSON document (the authoritative payload) |
+| `id` | UUID PK | `uuid4`, from `BaseModel` |
+| `workspace_fk` | OneToOne FK `Workspace`, unique | one-to-one; deletion cascades |
 | `etag` | string (36) | UUID; bumped on every write; required `If-Match` for PUT |
 | `updated_at` | timestamp | |
 | `updated_by_fk` | FK `User` | last writer (always the workspace creator in v1) |
 
-`StorylineFile` rows are a projection of `raw_json` maintained atomically inside the same DB transaction; reads can be served from either, writes touch both.
+`StorylineFile` rows are the **sole source of truth** for the storyline payload — they are read by every API path. No redundant JSON cache.
 
 ---
 
@@ -120,7 +121,7 @@ One step in the storyline. Anchors to exactly one file path in the github diff.
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | integer PK | |
+| `id` | UUID PK | `uuid4`, from `BaseModel` |
 | `storyline_fk` | FK `Storyline` | |
 | `diff_file_path` | string (1024) | path as it appears in github's PR-files response |
 | `order_index` | integer | author-defined position in the storyline; 0-based |
@@ -139,11 +140,11 @@ One step in the storyline. Anchors to exactly one file path in the github diff.
 
 ### `IntroComment`
 
-Tool-native, threaded discussion attached to a `StorylineFile`. Never syncs to github.
+Tool-native, threaded discussion attached to a `StorylineFile`. Never syncs to github. Depth ≤ 1 (replies may only target root comments).
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | integer PK | |
+| `id` | UUID PK | `uuid4`, from `BaseModel` |
 | `storyline_file_fk` | FK `StorylineFile` | |
 | `user_fk` | FK `User` | comment author |
 | `parent_fk` | FK `IntroComment`, optional | null = root; if set, parent must have `parent_fk IS NULL` (depth ≤ 1) |
@@ -174,29 +175,21 @@ Workspace lifecycle states are **all computed**, never stored. The Client render
 
 ---
 
-## Authorization model (v1, intentionally permissive)
+## Authorization model
 
 The **only** stored privileged identity is `Workspace.created_by_fk`. Any rule expressed as "creator only" tests `current_user.id == workspace.created_by_fk`. Github's PR author identity is **not** consulted for backend authz; the invariant is that the github PR author equals the workspace creator (by construction, since only the creator can call Open-PR).
 
-| Action | Pre-PR (local) | Open-PR (published) | Frozen (closed / merged) |
-|---|---|---|---|
-| Read workspace + storyline | creator only | any authenticated user | any authenticated user |
-| Edit storyline | creator | creator | nobody |
-| Post / reply IntroComment | n/a (not visible) | any authenticated user | nobody |
-| Resolve IntroComment thread (root only) | n/a | creator | nobody |
-| Post github comment (write-through) | n/a | any authenticated user | nobody |
-| Submit github review (write-through) | n/a | any authenticated user | nobody |
-| `POST /open-pr` | creator | n/a (PR already open) | creator (re-publish path) |
-| `POST /reopen-pr` | n/a | n/a | creator |
+**Canonical authz matrix lives in `docs/design.md` § 9** (phase-qualified, creator-only pre-publish, permissive post-publish). Two invariants worth restating here because they shape the data shape:
 
-"Any authenticated user" = logged in to Stage; no github-repo-permission check in v1. Tightening (e.g., restrict to repo collaborators) is roadmap.
+- Pre-publish workspaces (`pr_number IS NULL`) are **strictly creator-only** to read. Cross-user lookups return **404** (not 403) to prevent enumeration of other users' draft work.
+- "Any authenticated user" on published workspaces is a POC simplification; the intended end-state ("is creator OR github reviewer/collaborator of the PR") requires the per-repo permission cache (see `design.md` § 14 tech debt).
 
 ---
 
 ## What is intentionally NOT in the model
 
 - **No `Repository` / `Branch` / `Commit` entities** — github knows these. Repo and branch selection is client-side via local git (per `client/STACK.md`).
-- **No `Comment` / `DraftComment` / `Review` / `DraftReview` tables** — review actions are write-through (POC); see `docs/adr/0004`. The Client holds pre-publish drafts in its own state.
+- **No `Comment` / `DraftComment` / `Review` / `DraftReview` tables** — review actions are write-through (POC); see `docs/adr/0003-write-through-comments-poc.md`. The Client holds pre-publish drafts in its own state.
 - **No `AIAnalysisDoc`** — AI assistance is a client-side concern; its output flows into `StorylineFile.intro_text` via the normal storyline PUT.
 - **No `UserRepoPermission`** — permissive authz in v1; not consulted.
 - **No `archived_at` / soft-archive flag** — workspaces persist; mutability follows github PR state strictly.

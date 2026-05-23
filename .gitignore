@@ -395,3 +395,17 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,linux,windows,rust,react,django,python,visualstudiocode
+
+### Stage ###
+# Tauri-generated schemas (regenerated from tauri.conf.json + plugins on build)
+client/src-tauri/gen/
+
+# Tauri app is a binary crate — keep its lockfile.
+!client/src-tauri/Cargo.lock
+
+# TS incremental build artifacts
+*.tsbuildinfo
+
+# Local-dev convenience
+.env.local
+*.local

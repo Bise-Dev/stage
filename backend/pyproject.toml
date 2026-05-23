@@ -1,0 +1,55 @@
+[project]
+name = "stage"
+version = "0.1.0"
+description = "Personal Django + DRF starter template (step 1: plain Django + modern tooling)"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "django>=5.2,<6.0",
+    "djangorestframework>=3.15",
+    "drf-spectacular>=0.27",
+    "django-unfold>=0.43",
+    "psycopg[binary]>=3.2",
+    "pydantic-settings>=2.6",
+    "whitenoise>=6.8",
+    "gunicorn>=23.0",
+    "structlog>=25.5.0",
+    "django-extensions>=4.1",
+    "pydot>=4.0.1",
+    "pygithub>=2.5",
+    "httpx>=0.28",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-django>=4.9",
+    "factory-boy>=3.3",
+    "ruff>=0.8",
+    "pyrefly>=0.42",
+    "django-stubs>=5.1",
+    "djangorestframework-stubs>=3.15",
+    "pre-commit>=4.0",
+    "respx>=0.22",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "DJ"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/migrations/*.py" = ["E501", "RUF012"]
+"**/settings.py" = ["E501"]
+
+[tool.pyrefly]
+project-includes = ["config", "apps", "tests"]
+python-interpreter = ".venv/bin/python"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py"]
+addopts = "--reuse-db"
