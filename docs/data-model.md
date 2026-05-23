@@ -56,7 +56,7 @@ A long-lived Bearer token issued to a Client after a successful github device-fl
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | integer PK | |
+| `id` | UUID PK | `uuid4`, from `BaseModel` |
 | `user_fk` | FK `User` | |
 | `token_hash` | string | SHA-256 of the opaque Bearer token; raw token never stored |
 | `created_at` | timestamp | |
@@ -104,7 +104,8 @@ The author's chosen narrative for how a reviewer should walk through the change.
 
 | Field | Type | Notes |
 |---|---|---|
-| `workspace_fk` | FK `Workspace`, PK | one-to-one; deletion cascades |
+| `id` | UUID PK | `uuid4`, from `BaseModel` |
+| `workspace_fk` | OneToOne FK `Workspace`, unique | one-to-one; deletion cascades |
 | `raw_json` | text | canonical JSON document (the authoritative payload) |
 | `etag` | string (36) | UUID; bumped on every write; required `If-Match` for PUT |
 | `updated_at` | timestamp | |
@@ -120,7 +121,7 @@ One step in the storyline. Anchors to exactly one file path in the github diff.
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | integer PK | |
+| `id` | UUID PK | `uuid4`, from `BaseModel` |
 | `storyline_fk` | FK `Storyline` | |
 | `diff_file_path` | string (1024) | path as it appears in github's PR-files response |
 | `order_index` | integer | author-defined position in the storyline; 0-based |
@@ -139,11 +140,11 @@ One step in the storyline. Anchors to exactly one file path in the github diff.
 
 ### `IntroComment`
 
-Tool-native, threaded discussion attached to a `StorylineFile`. Never syncs to github.
+Tool-native, threaded discussion attached to a `StorylineFile`. Never syncs to github. Depth ≤ 1 (replies may only target root comments).
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | integer PK | |
+| `id` | UUID PK | `uuid4`, from `BaseModel` |
 | `storyline_file_fk` | FK `StorylineFile` | |
 | `user_fk` | FK `User` | comment author |
 | `parent_fk` | FK `IntroComment`, optional | null = root; if set, parent must have `parent_fk IS NULL` (depth ≤ 1) |

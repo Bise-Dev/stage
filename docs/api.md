@@ -9,7 +9,7 @@ For the data shapes referenced below, see `docs/data-model.md`. For the rational
 ## Conventions
 
 ### Base + content type
-- Base URL: `https://<stage-backend>` (deploy-specific). All endpoints prefixed with `/api/`.
+- Base URL: `https://<stage-backend>` (deploy-specific). All endpoints prefixed with `/api/v1/`.
 - Requests: `Content-Type: application/json`.
 - Responses: `Content-Type: application/json` unless noted.
 
@@ -27,16 +27,16 @@ Every non-2xx response uses this shape:
 
 ```json
 {
-  "error": {
-    "code": "machine_readable_slug",
-    "message": "Human-readable explanation"
-  }
+  "message": "Human-readable explanation",
+  "extra": {}
 }
 ```
 
-Common codes:
+`message` is a machine-readable slug string (also human-readable). `extra` carries additional context (field errors, passthrough details, etc.) and may be an empty object.
 
-| `code` | When |
+Common `message` values:
+
+| `message` | When |
 |---|---|
 | `unauthenticated` | missing / invalid / revoked Bearer token (401) |
 | `forbidden` | authenticated, but action requires creator privilege (403) |
@@ -50,8 +50,8 @@ Common codes:
 ### Surface split
 The API has two surfaces:
 
-- **Workspace-anchored** — `/api/workspaces/{uuid}/...` — requires a Workspace; serves storyline + intro comments.
-- **PR-anchored** — `/api/repos/{owner}/{repo}/pulls/{number}/...` — requires only a github PR; pure passthrough to github (read or write-through).
+- **Workspace-anchored** — `/api/v1/workspaces/{uuid}/...` — requires a Workspace; serves storyline + intro comments.
+- **PR-anchored** — `/api/v1/repos/{owner}/{repo}/pulls/{number}/...` — requires only a github PR; pure passthrough to github (read or write-through).
 
 A reviewer whose PR's author did not use Stage uses only the PR-anchored surface — Stage degrades to a thin review wrapper.
 
@@ -67,7 +67,7 @@ Github-paginated responses (branches, comments, etc.) are returned **as-is** wit
 
 ## Authentication
 
-### `POST /api/auth/device/start`
+### `POST /api/v1/auth/device/start/`
 Initiate the github device flow.
 
 **Request:** empty body.
@@ -85,7 +85,7 @@ Initiate the github device flow.
 
 The Client shows `user_code` + `verification_uri` to the user and tells them to enter the code on any browser. Then polls.
 
-### `POST /api/auth/device/poll`
+### `POST /api/v1/auth/device/poll/`
 Poll until github confirms the user entered the code.
 
 **Request:**
@@ -115,7 +115,7 @@ Poll until github confirms the user entered the code.
 
 The Client stores `session_token` securely; backend never re-issues it.
 
-### `GET /api/auth/me`
+### `GET /api/v1/auth/me/`
 Returns the current user. 401 if Bearer token is invalid or revoked.
 
 **Response 200:**
@@ -129,7 +129,7 @@ Returns the current user. 401 if Bearer token is invalid or revoked.
 }
 ```
 
-### `POST /api/auth/logout`
+### `POST /api/v1/auth/logout/`
 Revokes the current session.
 
 **Response 204** (no body).
@@ -138,7 +138,7 @@ Revokes the current session.
 
 ## Workspaces (workspace-anchored)
 
-### `POST /api/workspaces`
+### `POST /api/v1/workspaces/`
 Create a new workspace. The author calls this when transitioning from Self-Review to Ready-to-share. An empty `Storyline` row is created together with the workspace.
 
 **Request:**
@@ -171,7 +171,7 @@ Create a new workspace. The author calls this when transitioning from Self-Revie
 
 **Errors:** `409` if `(repo_owner, repo_name, head_ref)` already has a non-archived workspace.
 
-### `GET /api/workspaces`
+### `GET /api/v1/workspaces/`
 List workspaces the calling user can access. Optional filter `?repo_owner=&repo_name=`.
 
 **Response 200:**
@@ -184,7 +184,7 @@ List workspaces the calling user can access. Optional filter `?repo_owner=&repo_
 
 For each entry, the Client computes the lifecycle state (`ready-to-share` / `ready-to-publish` / `published` / `closed` / `merged`) from the fields + a github PR fetch if needed.
 
-### `GET /api/workspaces/lookup?repo_owner=&repo_name=&pr_number=`
+### `GET /api/v1/workspaces/lookup/?repo_owner=&repo_name=&pr_number=`
 Bridge from a github PR to a Stage workspace. Used by the reviewer's Client to ask "is there a Stage workspace for this PR?"
 
 **Response 200:**
@@ -194,12 +194,12 @@ Bridge from a github PR to a Stage workspace. Used by the reviewer's Client to a
 
 **Response 404:** no workspace exists for that PR. The Client falls back to the PR-anchored surface for plain github review.
 
-### `GET /api/workspaces/{uuid}`
+### `GET /api/v1/workspaces/{uuid}/`
 Workspace metadata.
 
 **Response 200:** same shape as the POST response.
 
-### `PATCH /api/workspaces/{uuid}`
+### `PATCH /api/v1/workspaces/{uuid}/`
 Update workspace metadata. **Only `head_ref` and `base_ref` are mutable**, and only while `pr_number IS NULL` (local phase). Once the PR is open, `head_ref` is synced from github.
 
 **Request:**
@@ -215,7 +215,7 @@ Update workspace metadata. **Only `head_ref` and `base_ref` are mutable**, and o
 
 ## Storyline
 
-### `GET /api/workspaces/{uuid}/storyline`
+### `GET /api/v1/workspaces/{uuid}/storyline/`
 Get the storyline (list shape, for the sidebar).
 
 **Response 200:**
@@ -225,7 +225,7 @@ Get the storyline (list shape, for the sidebar).
   "head_sha": "deadbeef...",
   "files": [
     {
-      "id": 101,
+      "id": "c3d4e5f6-...uuid",
       "diff_file_path": "src/checkout/PaymentStep.tsx",
       "order_index": 0,
       "title": "Payment step entry point",
@@ -245,7 +245,7 @@ Get the storyline (list shape, for the sidebar).
 
 `head_sha` is the current PR head SHA (or the latest commit on `head_ref` if no PR open). Useful for the Client to know when to refetch.
 
-### `PUT /api/workspaces/{uuid}/storyline`
+### `PUT /api/v1/workspaces/{uuid}/storyline/`
 Replace the storyline. **Creator-only.** Requires `If-Match`.
 
 **Request headers:** `If-Match: <etag>`
@@ -271,13 +271,13 @@ The full list replaces the previous one (delete + bulk-insert in one transaction
 
 **Errors:** `403 forbidden` (not creator); `409 etag_mismatch`; `409 workspace_frozen`; `412 precondition_required` (missing `If-Match`).
 
-### `GET /api/workspaces/{uuid}/storyline/files/{file_id}`
-Single step metadata (used when the reviewer focuses a step).
+### `GET /api/v1/workspaces/{uuid}/storyline/files/{file_id}/`
+Single step metadata (used when the reviewer focuses a step). `{file_id}` is a UUID.
 
 **Response 200:**
 ```json
 {
-  "id": 101,
+  "id": "c3d4e5f6-...uuid",
   "diff_file_path": "src/checkout/PaymentStep.tsx",
   "order_index": 0,
   "title": "Payment step entry point",
@@ -293,14 +293,14 @@ The diff content + github comments for that file are fetched separately via the 
 
 ## Intro comments
 
-### `GET /api/workspaces/{uuid}/storyline/files/{file_id}/intro-comments?include_resolved=false`
+### `GET /api/v1/workspaces/{uuid}/storyline/files/{file_id}/intro-comments/?include_resolved=false`
 List intro comments on a step. Single-level threading (each comment is either a root or a reply to a root).
 
 **Response 200:**
 ```json
 [
   {
-    "id": 901,
+    "id": "9a1b2c3d-...uuid",
     "parent_id": null,
     "user": { "id": 88, "github_login": "mira" },
     "body": "Why tokenize here vs in the store?",
@@ -311,8 +311,8 @@ List intro comments on a step. Single-level threading (each comment is either a 
     "resolved_by": null,
     "replies": [
       {
-        "id": 902,
-        "parent_id": 901,
+        "id": "9a1b2c3e-...uuid",
+        "parent_id": "9a1b2c3d-...uuid",
         "user": { "id": 42, "github_login": "octocat" },
         "body": "PCI scope reasons.",
         "created_at": "...",
@@ -326,7 +326,7 @@ List intro comments on a step. Single-level threading (each comment is either a 
 
 Resolved-root threads are excluded by default; pass `include_resolved=true` to include them.
 
-### `POST /api/workspaces/{uuid}/storyline/files/{file_id}/intro-comments`
+### `POST /api/v1/workspaces/{uuid}/storyline/files/{file_id}/intro-comments/`
 Post a new intro comment (root or reply).
 
 **Request:**
@@ -340,8 +340,8 @@ Post a new intro comment (root or reply).
 
 **Errors:** `403` if `parent_id` would create depth > 1; `409 workspace_frozen`.
 
-### `PATCH /api/intro-comments/{id}`
-Edit the body. Only the comment author.
+### `PATCH /api/v1/intro-comments/{id}/`
+Edit the body. Only the comment author. `{id}` is a UUID.
 
 **Request:**
 ```json
@@ -352,22 +352,22 @@ Edit the body. Only the comment author.
 
 **Errors:** `403`; `409 workspace_frozen`.
 
-### `DELETE /api/intro-comments/{id}`
+### `POST /api/v1/intro-comments/{id}/delete/`
 Soft-delete. Only the comment author. Thread structure preserved (`deleted_at` set).
 
 **Response 204.**
 
 **Errors:** `403`; `409 workspace_frozen`.
 
-### `POST /api/intro-comments/{id}/resolve`
+### `POST /api/v1/intro-comments/{id}/resolve/`
 Mark a root thread as resolved. **Creator-only.** Only roots (`parent_id IS NULL`) can be resolved.
 
 **Response 200:** updated comment with `resolved_at` / `resolved_by` set.
 
 **Errors:** `403`; `409 workspace_frozen`; `400 validation_error` if comment is not a root.
 
-### `POST /api/intro-comments/{id}/unresolve`
-Inverse of `/resolve`. **Creator-only.**
+### `POST /api/v1/intro-comments/{id}/unresolve/`
+Inverse of `/resolve/`. **Creator-only.**
 
 **Response 200:** updated comment with `resolved_at` / `resolved_by` cleared.
 
@@ -375,7 +375,7 @@ Inverse of `/resolve`. **Creator-only.**
 
 ## Publish lifecycle
 
-### `POST /api/workspaces/{uuid}/open-pr`
+### `POST /api/v1/workspaces/{uuid}/open-pr/`
 First publish: open a github PR for this workspace. **Creator-only.** Calls github to create the PR atomically with setting `pr_number`. Reviewer / label assignment is best-effort; failures are returned as warnings, not blockers.
 
 **Request:**
@@ -411,14 +411,14 @@ First publish: open a github PR for this workspace. **Creator-only.** Calls gith
 
 If `github_error` occurs at PR creation, **nothing is persisted** (the workspace `pr_number` is not set).
 
-### `POST /api/workspaces/{uuid}/reopen-pr`
+### `POST /api/v1/workspaces/{uuid}/reopen-pr/`
 Thin pass-through that calls github `PATCH /pulls/{n} { state: "open" }` on the workspace's `pr_number`. **Creator-only.**
 
 **Response 200:** the github PR object.
 
 **Errors:** `403`; `github_error` with passthrough status (e.g., 422 if the PR is merged or otherwise unreopenable).
 
-If github refuses to reopen (typically because the PR was merged), the Client may then `POST /api/workspaces/{uuid}/open-pr` again with the same workspace — that creates a fresh github PR and **overwrites** `pr_number` on the workspace. The old PR number is no longer referenced.
+If github refuses to reopen (typically because the PR was merged), the Client may then `POST /api/v1/workspaces/{uuid}/open-pr/` again with the same workspace — that creates a fresh github PR and **overwrites** `pr_number` on the workspace. The old PR number is no longer referenced.
 
 ---
 
@@ -426,21 +426,21 @@ If github refuses to reopen (typically because the PR was merged), the Client ma
 
 These endpoints take `(owner, repo, number)` directly. They proxy or write-through to github with the backend's admin PAT. They are usable whether or not a Stage workspace exists for the PR.
 
-### `GET /api/repos/{owner}/{repo}/pulls/{number}`
+### `GET /api/v1/repos/{owner}/{repo}/pulls/{number}/`
 Github PR object. Returned as-is from github.
 
-### `GET /api/repos/{owner}/{repo}/pulls/{number}/files`
+### `GET /api/v1/repos/{owner}/{repo}/pulls/{number}/files/`
 Github PR file list (each file's status, +/-, patch summary).
 
-### `GET /api/repos/{owner}/{repo}/pulls/{number}/files/{path}/diff`
+### `GET /api/v1/repos/{owner}/{repo}/pulls/{number}/files/{path}/diff/`
 The diff patch for one file. (Backend filters github's `/pulls/{n}/files` response to that path.)
 
 `path` is the file path, URL-encoded by the client.
 
-### `GET /api/repos/{owner}/{repo}/pulls/{number}/files/{path}/comments`
+### `GET /api/v1/repos/{owner}/{repo}/pulls/{number}/files/{path}/comments/`
 Github review comments anchored to that file path.
 
-### `GET /api/repos/{owner}/{repo}/pulls/{number}/comments`
+### `GET /api/v1/repos/{owner}/{repo}/pulls/{number}/comments/`
 Combined response: github review comments (line-anchored) + github issue comments (PR-level).
 
 ```json
@@ -450,10 +450,10 @@ Combined response: github review comments (line-anchored) + github issue comment
 }
 ```
 
-### `GET /api/repos/{owner}/{repo}/pulls/{number}/reviews`
+### `GET /api/v1/repos/{owner}/{repo}/pulls/{number}/reviews/`
 List github review objects on the PR.
 
-### `GET /api/repos/{owner}/{repo}/pulls/{number}/checks`
+### `GET /api/v1/repos/{owner}/{repo}/pulls/{number}/checks/`
 Combined check runs + workflow runs for the PR's head SHA.
 
 ```json
@@ -463,7 +463,7 @@ Combined check runs + workflow runs for the PR's head SHA.
 }
 ```
 
-### `POST /api/repos/{owner}/{repo}/pulls/{number}/comments`
+### `POST /api/v1/repos/{owner}/{repo}/pulls/{number}/comments/create/`
 Write-through: post a comment to github. Two kinds:
 
 **Issue comment (PR-level):**
@@ -488,7 +488,7 @@ The backend looks up the PR's current head SHA and uses it. For replies to exist
 
 **Errors:** `github_error` passthrough (e.g., 422 if the file path / line no longer exists).
 
-### `POST /api/repos/{owner}/{repo}/pulls/{number}/review`
+### `POST /api/v1/repos/{owner}/{repo}/pulls/{number}/review/create/`
 Write-through: submit a github Review with a batch of line comments and an event.
 
 **Request:**
@@ -507,18 +507,18 @@ Write-through: submit a github Review with a batch of line comments and an event
 
 **Response 200:** the github review object.
 
-### `POST /api/repos/{owner}/{repo}/pulls/{number}/actions/close`
+### `POST /api/v1/repos/{owner}/{repo}/pulls/{number}/actions/close/`
 `PATCH /pulls/{n} { state: "closed" }`. Returns the updated github PR.
 
-### `POST /api/repos/{owner}/{repo}/pulls/{number}/actions/reopen`
+### `POST /api/v1/repos/{owner}/{repo}/pulls/{number}/actions/reopen/`
 `PATCH /pulls/{n} { state: "open" }`. Returns the updated github PR.
 
-(For workspaces, prefer `POST /api/workspaces/{uuid}/reopen-pr` so the action is logged against the workspace.)
+(For workspaces, prefer `POST /api/v1/workspaces/{uuid}/reopen-pr/` so the action is logged against the workspace.)
 
-### `POST /api/repos/{owner}/{repo}/pulls/{number}/actions/toggle-draft`
+### `POST /api/v1/repos/{owner}/{repo}/pulls/{number}/actions/toggle-draft/`
 Flips the github PR's `draft` flag. Backend reads current state then PATCHes the opposite.
 
-### `POST /api/repos/{owner}/{repo}/pulls/{number}/actions/merge`
+### `POST /api/v1/repos/{owner}/{repo}/pulls/{number}/actions/merge/`
 **Request:**
 ```json
 { "method": "squash" }
@@ -534,7 +534,7 @@ Flips the github PR's `draft` flag. Backend reads current state then PATCHes the
 
 # Github search
 
-### `GET /api/github/prs?role=author|reviewer`
+### `GET /api/v1/github/prs/?role=author|reviewer`
 List the calling user's open github PRs for which **no Stage workspace exists**. Used by the Client to populate the "Open PRs not in Stage" buckets.
 
 **Response 200:**
@@ -552,7 +552,8 @@ List the calling user's open github PRs for which **no Stage workspace exists**.
       "author_login": "octocat",
       "updated_at": "2026-05-23T07:00:00Z"
     }
-  ]
+  ],
+  "count": 1
 }
 ```
 
@@ -566,12 +567,12 @@ The Client renders the workspaces screen by combining:
 
 | Backend call | Used for |
 |---|---|
-| `GET /api/workspaces` | "Local review" + "Public review" buckets |
-| `GET /api/github/prs?role=author` | "Open PRs (authored by you, not in Stage)" bucket |
-| `GET /api/github/prs?role=reviewer` | "Open PRs (awaiting your review, not in Stage)" bucket |
+| `GET /api/v1/workspaces/` | "Local review" + "Public review" buckets |
+| `GET /api/v1/github/prs/?role=author` | "Open PRs (authored by you, not in Stage)" bucket |
+| `GET /api/v1/github/prs/?role=reviewer` | "Open PRs (awaiting your review, not in Stage)" bucket |
 | local git (no backend call) | "Branches without a workspace" bucket |
 
-For each workspace row, the Client also calls `GET /api/repos/.../pulls/{n}` (if `pr_number` is set) to compute `published / requested / approved / merged / closed`. Cache this client-side for the duration of the screen render.
+For each workspace row, the Client also calls `GET /api/v1/repos/.../pulls/{n}/` (if `pr_number` is set) to compute `published / requested / approved / merged / closed`. Cache this client-side for the duration of the screen render.
 
 ---
 
