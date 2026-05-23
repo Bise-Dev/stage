@@ -26,7 +26,6 @@ INSTALLED_APPS = [
     "apps.core.apps.CoreConfig",
     "apps.users.apps.UsersConfig",
     "apps.admin.apps.CustomAdminConfig",
-    "apps.items.apps.ItemsConfig",
 ]
 
 MIDDLEWARE = [

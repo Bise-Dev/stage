@@ -16,6 +16,8 @@ dependencies = [
     "structlog>=25.5.0",
     "django-extensions>=4.1",
     "pydot>=4.0.1",
+    "pygithub>=2.5",
+    "httpx>=0.28",
 ]
 
 [dependency-groups]
@@ -28,6 +30,7 @@ dev = [
     "django-stubs>=5.1",
     "djangorestframework-stubs>=3.15",
     "pre-commit>=4.0",
+    "respx>=0.22",
 ]
 
 [tool.ruff]

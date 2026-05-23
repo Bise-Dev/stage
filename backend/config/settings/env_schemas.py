@@ -14,5 +14,11 @@ class Env(BaseSettings):
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
 
+    GITHUB_ADMIN_PAT: str = "ghp_REPLACE_ME"
+    GITHUB_OAUTH_CLIENT_ID: str = "Iv1.REPLACE_ME"
+    GITHUB_OAUTH_CLIENT_SECRET: str = "REPLACE_ME"
+    GITHUB_API_BASE: str = "https://api.github.com"
+    SESSION_TOKEN_TTL_DAYS: int = 30
+
 
 env = Env()
