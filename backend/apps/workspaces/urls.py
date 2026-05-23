@@ -6,6 +6,8 @@ from apps.workspaces.apis import (
     IntroCommentDetailApi,
     IntroCommentResolveApi,
     IntroCommentUnresolveApi,
+    OpenPrApi,
+    ReopenPrApi,
     StorylineDetailApi,
     StorylineFileDetailApi,
     WorkspaceDetailApi,
@@ -26,4 +28,6 @@ urlpatterns = [
     path("intro-comments/<uuid:comment_id>/delete/", IntroCommentDeleteApi.as_view(), name="intro-comment-delete"),
     path("intro-comments/<uuid:comment_id>/resolve/", IntroCommentResolveApi.as_view(), name="intro-comment-resolve"),
     path("intro-comments/<uuid:comment_id>/unresolve/", IntroCommentUnresolveApi.as_view(), name="intro-comment-unresolve"),
+    path("workspaces/<uuid:workspace_id>/open-pr/", OpenPrApi.as_view(), name="open-pr"),
+    path("workspaces/<uuid:workspace_id>/reopen-pr/", ReopenPrApi.as_view(), name="reopen-pr"),
 ]

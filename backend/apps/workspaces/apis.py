@@ -14,6 +14,8 @@ from apps.workspaces.selectors import intro_comment_thread, storyline_read, work
 from apps.workspaces.serializers.intro_comment_create_input import IntroCommentCreateInputSerializer
 from apps.workspaces.serializers.intro_comment_output import IntroCommentOutputSerializer
 from apps.workspaces.serializers.intro_comment_update_input import IntroCommentUpdateInputSerializer
+from apps.workspaces.serializers.open_pr_input import OpenPrInputSerializer
+from apps.workspaces.serializers.open_pr_output import OpenPrOutputSerializer
 from apps.workspaces.serializers.storyline_update_input import StorylineUpdateInputSerializer
 from apps.workspaces.serializers.workspace_create_input import WorkspaceCreateInputSerializer
 from apps.workspaces.serializers.workspace_lookup_output import WorkspaceLookupOutputSerializer
@@ -25,6 +27,8 @@ from apps.workspaces.services import (
     intro_comment_soft_delete,
     intro_comment_unresolve,
     intro_comment_update,
+    pull_request_open,
+    pull_request_reopen,
     storyline_replace,
     workspace_create,
     workspace_update_local_phase,
@@ -233,3 +237,32 @@ class IntroCommentUnresolveApi(APIView):
         comment = _get_intro_comment(comment_id)
         unresolved = intro_comment_unresolve(comment=comment, creator=cast(User, request.user))
         return Response(IntroCommentOutputSerializer(_comment_to_dict(unresolved)).data)
+
+
+class OpenPrApi(APIView):
+    def post(self, request: Request, workspace_id: uuid.UUID) -> Response:
+        try:
+            ws = workspace_get(workspace_id=workspace_id)
+        except Workspace.DoesNotExist:
+            raise ApplicationError("Not found", status=404)
+        serializer = OpenPrInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with _gateway() as g:
+            result = pull_request_open(
+                workspace=ws,
+                creator=cast(User, request.user),
+                gateway=g,
+                **serializer.validated_data,
+            )
+        return Response(OpenPrOutputSerializer(result).data, status=status.HTTP_201_CREATED)
+
+
+class ReopenPrApi(APIView):
+    def post(self, request: Request, workspace_id: uuid.UUID) -> Response:
+        try:
+            ws = workspace_get(workspace_id=workspace_id)
+        except Workspace.DoesNotExist:
+            raise ApplicationError("Not found", status=404)
+        with _gateway() as g:
+            pr = pull_request_reopen(workspace=ws, creator=cast(User, request.user), gateway=g)
+        return Response(pr)

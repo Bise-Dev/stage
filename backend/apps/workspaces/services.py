@@ -6,6 +6,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.core.exceptions import ApplicationError
+from apps.github_proxy.exceptions import GithubError
 from apps.users.models import User
 from apps.workspaces.models import IntroComment, Storyline, StorylineFile, Workspace
 
@@ -172,6 +173,66 @@ def intro_comment_unresolve(*, comment: IntroComment, creator: User) -> IntroCom
     comment.resolved_by = None
     comment.save(update_fields=["resolved_at", "resolved_by", "updated_at"])
     return comment
+
+
+@transaction.atomic
+def pull_request_open(
+    *,
+    workspace: Workspace,
+    creator: User,
+    title: str,
+    body: str,
+    reviewers: list[str],
+    labels: list[str],
+    draft: bool,
+    gateway,
+) -> dict:
+    if creator.pk != workspace.created_by_id:
+        raise ApplicationError("creator_only", status=403)
+
+    if workspace.pr_number is not None:
+        pr = gateway.get_pr(workspace.repo_owner, workspace.repo_name, workspace.pr_number)
+        if pr.get("state") == "open":
+            raise ApplicationError("pr_already_open", status=409)
+
+    pr = gateway.create_pull(
+        workspace.repo_owner,
+        workspace.repo_name,
+        title=title,
+        body=body,
+        base=workspace.base_ref,
+        head=workspace.head_ref,
+        draft=draft,
+    )
+    workspace.pr_number = pr["number"]
+    workspace.pr_opened_at = timezone.now()
+    workspace.save(update_fields=["pr_number", "pr_opened_at", "updated_at"])
+
+    warnings: list[str] = []
+    o, r, n = workspace.repo_owner, workspace.repo_name, workspace.pr_number
+    if reviewers:
+        try:
+            gateway.request_reviewers(o, r, n, reviewers=reviewers)
+        except GithubError as e:
+            warnings.append(f"reviewers_failed: {e}")
+    if labels:
+        try:
+            gateway.add_labels(o, r, n, labels=labels)
+        except GithubError as e:
+            warnings.append(f"labels_failed: {e}")
+
+    return {"workspace": workspace, "pr": pr, "warnings": warnings}
+
+
+@transaction.atomic
+def pull_request_reopen(*, workspace: Workspace, creator: User, gateway) -> dict:
+    if creator.pk != workspace.created_by_id:
+        raise ApplicationError("creator_only", status=403)
+    if workspace.pr_number is None:
+        raise ApplicationError("no_pr_to_reopen", status=409)
+    return gateway.patch_pr(
+        workspace.repo_owner, workspace.repo_name, workspace.pr_number, state="open"
+    )
 
 
 @transaction.atomic
