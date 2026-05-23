@@ -66,3 +66,8 @@ pub fn git_current_branch(state: State<'_, AppState>) -> Result<String, AppError
         .ok_or(AppError::NoActiveRepo)?;
     git::current_branch(&path)
 }
+
+#[tauri::command]
+pub fn repo_summary(path: PathBuf) -> Result<git::RepoSummary, AppError> {
+    git::summary(&path)
+}

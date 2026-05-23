@@ -25,6 +25,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -45,6 +46,7 @@ pub fn run() {
             commands::list_recent_repos,
             commands::forget_recent_repo,
             commands::git_current_branch,
+            commands::repo_summary,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

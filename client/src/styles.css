@@ -1,26 +1,70 @@
+@import "tailwindcss";
+
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color-scheme: light dark;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue",
+    system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, "JetBrains Mono", monospace;
+
+  --gray-50: #fafaf9;
+  --gray-75: #f5f5f3;
+  --gray-100: #efeeec;
+  --gray-150: #e7e6e3;
+  --gray-200: #dcdad6;
+  --gray-300: #c8c6c1;
+  --gray-400: #a8a59f;
+  --gray-500: #7f7c76;
+  --gray-600: #5a5854;
+  --gray-700: #3d3b38;
+  --gray-800: #2a2926;
+  --gray-900: #1a1917;
+
+  --blue: #007aff;
+  --blue-press: #0062cc;
+  --blue-tint: rgba(0, 122, 255, 0.1);
+  --blue-tint-2: rgba(0, 122, 255, 0.18);
+  --green: #34c759;
+  --green-d: #1f8a3e;
+  --red: #ff3b30;
+  --red-d: #c8201a;
+  --orange: #ff9500;
+  --purple: #af52de;
+  --teal: #5ac8fa;
+
+  --hairline: rgba(0, 0, 0, 0.08);
+  --hairline-2: rgba(0, 0, 0, 0.05);
+  --divider: rgba(0, 0, 0, 0.12);
+
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
+  --sh-2: 0 4px 12px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --sh-pop: 0 16px 40px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.1), 0 0 0 1px
+    rgba(0, 0, 0, 0.06);
+
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+  --r-xl: 14px;
 }
 
+html,
 body {
   margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--gray-75);
+  color: var(--gray-800);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
 }
 
-.app {
-  padding: 1.5rem;
-  max-width: 720px;
-  margin: 0 auto;
+#root {
+  height: 100%;
 }
 
-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.error {
-  color: #b00020;
-}
-
-button {
-  margin-right: 0.5rem;
+.mono {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
 }
