@@ -2,7 +2,43 @@ import uuid
 
 from django.db.models import QuerySet
 
-from apps.workspaces.models import Workspace
+from apps.workspaces.models import IntroComment, StorylineFile, Workspace
+
+
+def intro_comment_thread(
+    *, storyline_file: StorylineFile, include_resolved: bool = False,
+) -> list[dict]:
+    qs = IntroComment.objects.select_related("user", "resolved_by").filter(
+        storyline_file=storyline_file, deleted_at__isnull=True,
+    )
+    if not include_resolved:
+        qs = qs.filter(resolved_at__isnull=True)
+    qs = qs.order_by("created_at")
+    by_id: dict = {}
+    roots: list[dict] = []
+    for c in qs:
+        item = {
+            "id": c.pk,
+            "user": {"id": c.user_id, "github_login": c.user.github_login},
+            "body": c.body,
+            "parent_id": c.parent_id,
+            "created_at": c.created_at,
+            "resolved_at": c.resolved_at,
+            "resolved_by": (
+                {"id": c.resolved_by_id, "github_login": c.resolved_by.github_login}  # pyrefly: ignore[missing-attribute]
+                if c.resolved_by_id
+                else None
+            ),
+            "replies": [],
+        }
+        by_id[c.pk] = item
+        if c.parent_id is None:
+            roots.append(item)
+        else:
+            parent = by_id.get(c.parent_id)
+            if parent:
+                parent["replies"].append(item)
+    return roots
 
 
 def workspace_is_frozen(*, workspace: Workspace, gateway) -> bool:

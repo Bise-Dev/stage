@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from apps.core.exceptions import ApplicationError
 from apps.users.models import User
-from apps.workspaces.models import Storyline, StorylineFile, Workspace
+from apps.workspaces.models import IntroComment, Storyline, StorylineFile, Workspace
 
 
 def _new_etag() -> str:
@@ -104,6 +104,74 @@ def workspace_create(
         ) from exc
     storyline_create(workspace=ws, author=creator)
     return ws
+
+
+def _assert_not_frozen(workspace: Workspace, gateway) -> None:
+    if workspace.pr_number is not None:
+        pr = gateway.get_pr(workspace.repo_owner, workspace.repo_name, workspace.pr_number)
+        if pr.get("state") == "closed":
+            raise ApplicationError("workspace_frozen", status=409)
+
+
+@transaction.atomic
+def intro_comment_create(
+    *,
+    storyline_file: StorylineFile,
+    user: User,
+    body: str,
+    parent: IntroComment | None = None,
+    gateway,
+) -> IntroComment:
+    workspace = storyline_file.storyline.workspace
+    _assert_not_frozen(workspace, gateway)
+    if parent is not None and parent.parent_id is not None:
+        raise ApplicationError("depth_exceeded", status=400)
+    return IntroComment.objects.create(
+        storyline_file=storyline_file, user=user, body=body, parent=parent,
+    )
+
+
+@transaction.atomic
+def intro_comment_update(*, comment: IntroComment, user: User, body: str) -> IntroComment:
+    if comment.user_id != user.pk:
+        raise ApplicationError("not_owner", status=403)
+    if comment.deleted_at is not None:
+        raise ApplicationError("comment_deleted", status=409)
+    comment.body = body
+    comment.save(update_fields=["body", "updated_at"])
+    return comment
+
+
+@transaction.atomic
+def intro_comment_soft_delete(*, comment: IntroComment, user: User) -> None:
+    if comment.user_id != user.pk:
+        raise ApplicationError("not_owner", status=403)
+    comment.deleted_at = timezone.now()
+    comment.save(update_fields=["deleted_at", "updated_at"])
+
+
+@transaction.atomic
+def intro_comment_resolve(*, comment: IntroComment, creator: User) -> IntroComment:
+    workspace = comment.storyline_file.storyline.workspace
+    if creator.pk != workspace.created_by_id:
+        raise ApplicationError("not_creator", status=403)
+    if comment.parent_id is not None:
+        raise ApplicationError("only_roots_can_be_resolved", status=400)
+    comment.resolved_at = timezone.now()
+    comment.resolved_by = creator
+    comment.save(update_fields=["resolved_at", "resolved_by", "updated_at"])
+    return comment
+
+
+@transaction.atomic
+def intro_comment_unresolve(*, comment: IntroComment, creator: User) -> IntroComment:
+    workspace = comment.storyline_file.storyline.workspace
+    if creator.pk != workspace.created_by_id:
+        raise ApplicationError("not_creator", status=403)
+    comment.resolved_at = None
+    comment.resolved_by = None
+    comment.save(update_fields=["resolved_at", "resolved_by", "updated_at"])
+    return comment
 
 
 @transaction.atomic
