@@ -63,3 +63,16 @@ def test_storyline_replace_swaps_files_and_returns_new_etag(author_ws) -> None:
     ws.refresh_from_db()
     assert ws.storyline.files.count() == 1
     assert ws.storyline.files.first().diff_file_path == "new.py"
+
+
+def test_storyline_replace_bumps_last_active(author_ws) -> None:
+    ws, user = author_ws
+    before = ws.last_active_at
+    gateway = MagicMock()
+    storyline_replace(
+        workspace=ws, user=user,
+        files=[{"diff_file_path": "a.py", "order_index": 0, "title": "", "intro_text": "x"}],
+        if_match=ws.storyline.etag, gateway=gateway,
+    )
+    ws.refresh_from_db()
+    assert ws.last_active_at > before
