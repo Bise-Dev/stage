@@ -17,14 +17,6 @@ from apps.workspaces.serializers.workspace_update_input import WorkspaceUpdateIn
 from apps.workspaces.services import workspace_create, workspace_update_local_phase
 
 
-class WorkspaceCreateApi(APIView):
-    def post(self, request: Request) -> Response:
-        serializer = WorkspaceCreateInputSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        ws = workspace_create(creator=cast(User, request.user), **serializer.validated_data)
-        return Response(WorkspaceOutputSerializer(ws).data, status=status.HTTP_201_CREATED)
-
-
 class WorkspaceListApi(APIView):
     def get(self, request: Request) -> Response:
         qs = workspace_list()
@@ -72,18 +64,6 @@ class WorkspaceDetailApi(APIView):
 
     def patch(self, request: Request, workspace_id: uuid.UUID) -> Response:
         ws = self._get_workspace(workspace_id)
-        serializer = WorkspaceUpdateInputSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        updated = workspace_update_local_phase(workspace=ws, **serializer.validated_data)
-        return Response(WorkspaceOutputSerializer(updated).data)
-
-
-class WorkspaceUpdateApi(APIView):
-    def patch(self, request: Request, workspace_id: uuid.UUID) -> Response:
-        try:
-            ws = workspace_get(workspace_id=workspace_id)
-        except Workspace.DoesNotExist:
-            raise ApplicationError("Not found", status=404)
         serializer = WorkspaceUpdateInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         updated = workspace_update_local_phase(workspace=ws, **serializer.validated_data)
