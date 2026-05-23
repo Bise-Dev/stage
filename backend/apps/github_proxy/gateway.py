@@ -72,6 +72,10 @@ class GithubGateway:
     def list_workflow_runs(self, o: str, r: str, head_sha: str) -> dict:
         return self._request("GET", f"/repos/{o}/{r}/actions/runs", params={"head_sha": head_sha}).json()
 
+    def list_open_pulls(self, repo_owner: str, repo_name: str, *, head: str) -> list[dict]:
+        params = {"state": "open", "head": f"{repo_owner}:{head}"}
+        return self._request("GET", f"/repos/{repo_owner}/{repo_name}/pulls", params=params).json()
+
     def search_issues(self, query: str) -> dict:
         return self._request("GET", "/search/issues", params={"q": query}).json()
 

@@ -17,6 +17,7 @@ def _make_gateway(pr_state: str = "open", pr_number: int = 99) -> MagicMock:
     gw.get_pr.return_value = {"number": pr_number, "state": pr_state}
     gw.create_pull.return_value = {"number": pr_number, "state": "open", "html_url": "https://github.com/o/r/pull/99"}
     gw.patch_pr.return_value = {"number": pr_number, "state": "open"}
+    gw.list_open_pulls.return_value = []
     return gw
 
 

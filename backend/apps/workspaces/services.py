@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
@@ -174,6 +175,21 @@ def intro_comment_unresolve(*, comment: IntroComment, creator: User) -> IntroCom
     return comment
 
 
+def _apply_pr_warnings(gateway, o: str, r: str, n: int, reviewers: list[str], labels: list[str]) -> list[str]:
+    warnings: list[str] = []
+    if reviewers:
+        try:
+            gateway.request_reviewers(o, r, n, reviewers=reviewers)
+        except GithubError as e:
+            warnings.append(f"reviewers_failed: {e}")
+    if labels:
+        try:
+            gateway.add_labels(o, r, n, labels=labels)
+        except GithubError as e:
+            warnings.append(f"labels_failed: {e}")
+    return warnings
+
+
 @transaction.atomic
 def pull_request_open(
     *,
@@ -189,14 +205,25 @@ def pull_request_open(
     if creator.pk != workspace.created_by_id:
         raise ApplicationError("creator_only", status=403)
 
-    if workspace.pr_number is not None:
-        pr = gateway.get_pr(workspace.repo_owner, workspace.repo_name, workspace.pr_number)
+    o, r = workspace.repo_owner, workspace.repo_name
+
+    if workspace.pr_number is None:
+        existing = gateway.list_open_pulls(o, r, head=workspace.head_ref)
+        if existing:
+            pr = existing[0]
+            workspace.pr_number = pr["number"]
+            workspace.pr_opened_at = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
+            workspace.save(update_fields=["pr_number", "pr_opened_at", "updated_at"])
+            warnings = _apply_pr_warnings(gateway, o, r, workspace.pr_number, reviewers, labels)
+            return {"workspace": workspace, "pr": pr, "warnings": warnings}
+    else:
+        pr = gateway.get_pr(o, r, workspace.pr_number)
         if pr.get("state") == "open":
             raise ApplicationError("pr_already_open", status=409)
 
     pr = gateway.create_pull(
-        workspace.repo_owner,
-        workspace.repo_name,
+        o,
+        r,
         title=title,
         body=body,
         base=workspace.base_ref,
@@ -206,20 +233,7 @@ def pull_request_open(
     workspace.pr_number = pr["number"]
     workspace.pr_opened_at = timezone.now()
     workspace.save(update_fields=["pr_number", "pr_opened_at", "updated_at"])
-
-    warnings: list[str] = []
-    o, r, n = workspace.repo_owner, workspace.repo_name, workspace.pr_number
-    if reviewers:
-        try:
-            gateway.request_reviewers(o, r, n, reviewers=reviewers)
-        except GithubError as e:
-            warnings.append(f"reviewers_failed: {e}")
-    if labels:
-        try:
-            gateway.add_labels(o, r, n, labels=labels)
-        except GithubError as e:
-            warnings.append(f"labels_failed: {e}")
-
+    warnings = _apply_pr_warnings(gateway, o, r, workspace.pr_number, reviewers, labels)
     return {"workspace": workspace, "pr": pr, "warnings": warnings}
 
 
