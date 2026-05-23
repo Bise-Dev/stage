@@ -26,6 +26,9 @@ INSTALLED_APPS = [
     "apps.core.apps.CoreConfig",
     "apps.users.apps.UsersConfig",
     "apps.admin.apps.CustomAdminConfig",
+    "apps.identity.apps.IdentityConfig",
+    "apps.workspaces.apps.WorkspacesConfig",
+    "apps.github_proxy.apps.GithubProxyConfig",
 ]
 
 MIDDLEWARE = [
