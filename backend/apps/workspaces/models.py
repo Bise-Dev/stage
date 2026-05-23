@@ -52,3 +52,26 @@ class StorylineFile(BaseModel):
         constraints = [
             models.UniqueConstraint(fields=["storyline", "diff_file_path"], name="uniq_storyline_file_path"),
         ]
+
+
+class IntroComment(BaseModel):
+    storyline_file = models.ForeignKey(StorylineFile, on_delete=models.CASCADE, related_name="intro_comments")
+    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="intro_comments")
+    body = models.TextField()
+    parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True, blank=True, related_name="replies")
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(User, on_delete=models.PROTECT, null=True, blank=True, related_name="intro_comments_resolved")
+
+    class Meta:  # pyrefly: ignore[bad-override]
+        db_table = "intro_comment"
+        ordering = ["created_at"]
+        constraints = [
+            models.CheckConstraint(
+                name="intro_comment_replies_have_no_resolution",
+                condition=(
+                    models.Q(parent__isnull=True)
+                    | (models.Q(resolved_at__isnull=True) & models.Q(resolved_by__isnull=True))
+                ),
+            ),
+        ]
