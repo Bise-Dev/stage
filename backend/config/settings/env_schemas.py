@@ -18,7 +18,6 @@ class Env(BaseSettings):
     GITHUB_OAUTH_CLIENT_ID: str = "Iv1.REPLACE_ME"
     GITHUB_OAUTH_CLIENT_SECRET: str = "REPLACE_ME"
     GITHUB_API_BASE: str = "https://api.github.com"
-    SESSION_TOKEN_TTL_DAYS: int = 30
 
 
 env = Env()
