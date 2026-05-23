@@ -14,8 +14,13 @@
       {
         "label": "main",
         "title": "Stage",
-        "width": 1100,
-        "height": 720
+        "width": 1280,
+        "height": 820,
+        "minWidth": 980,
+        "minHeight": 680,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 14, "y": 18 }
       }
     ],
     "security": {
