@@ -1,2 +1,95 @@
 default:
-    @echo "Backend not yet scaffolded. See backend/TODO.md for open design questions."
+    @just --list
+
+alias b := bootstrap
+alias d := dev
+alias m := migrate
+alias mm := makemigrations
+alias su := createsuperuser
+alias sh := shell
+alias t := test
+alias l := lint
+alias f := format
+alias tc := typecheck
+alias v := verify
+
+bootstrap:
+    uv sync
+    uv run pre-commit install
+    cp -n .env.example .env || true
+    docker compose up -d postgres
+    uv run python manage.py migrate
+    @echo "Bootstrap complete. Run 'just createsuperuser' to create an admin user, then 'just dev'."
+
+dev: _require-db _require-migrations-current
+    uv run python manage.py runserver
+
+_require-db:
+    @docker compose ps --status=running --services | grep -qx postgres || { echo "postgres is not running. Run 'just up' first."; exit 1; }
+
+_require-migrations-current: _require-db
+    @uv run python manage.py migrate --check >/dev/null 2>&1 || { echo "migrations are not applied. Run 'just migrate' first."; exit 1; }
+
+migrate: _require-db
+    uv run python manage.py migrate
+
+makemigrations *ARGS:
+    uv run python manage.py makemigrations {{ARGS}}
+
+createsuperuser: _require-db
+    uv run python manage.py createsuperuser
+
+shell: _require-db
+    uv run python manage.py shell
+
+# run the full local verify pipeline (matches pre-commit + typecheck + tests)
+verify:
+    uv run pre-commit run --all-files
+    uv run pyrefly check
+    uv run pytest
+
+# wipe the postgres volume and re-bootstrap from scratch
+reset-db:
+    docker compose down -v
+    docker compose up -d postgres
+    @echo "Waiting for postgres to become healthy..."
+    @until docker compose exec -T postgres pg_isready -U stage >/dev/null 2>&1; do sleep 1; done
+    uv run python manage.py migrate
+
+test *ARGS:
+    uv run pytest {{ARGS}}
+
+lint:
+    uv run ruff check .
+    uv run ruff format --check .
+
+format:
+    uv run ruff check --fix .
+    uv run ruff format .
+
+typecheck:
+    uv run pyrefly check
+
+up:
+    docker compose up -d
+
+down:
+    docker compose down
+
+logs:
+    docker compose logs -f
+
+GENERATED := "generated"
+
+# generate the OpenAPI schema into generated/
+generate-schema:
+    uv run python manage.py spectacular --color --file {{GENERATED}}/openapi-schema.yml
+
+# generate an ER diagram of the data model into generated/ (requires graphviz: brew install graphviz)
+generate-data-model:
+    uv run python manage.py graph_models -a -g \
+        -X BaseModel,AbstractBaseSession,LogEntry,Group,Permission,ContentType,Session \
+        -o {{GENERATED}}/data-model.png
+
+# generate everything
+generate: generate-schema generate-data-model
