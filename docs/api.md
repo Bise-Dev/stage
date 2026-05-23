@@ -243,7 +243,9 @@ Get the storyline (list shape, for the sidebar).
 
 `stale` is true when the path no longer matches any file in the current PR head's diff (e.g., file removed/renamed). `stale_reason` is one of: `"file_removed"`, `"file_renamed_to:<new_path>"`, or `"unknown"`.
 
-`head_sha` is the current PR head SHA (or the latest commit on `head_ref` if no PR open). Useful for the Client to know when to refetch.
+**Pre-publish (`pr_number IS NULL`):** `stale` is always `false` and `stale_reason` is always `null` for every file. Backend cannot verify the diff without a github-side PR — the client owns local-phase staleness detection via libgit2 against its working tree.
+
+`head_sha` is the current PR head SHA when a PR is open. **Pre-publish: `head_sha` is `null`** — there is no published commit yet, and Stage backend never reads local git.
 
 ### `PUT /api/v1/workspaces/{uuid}/storyline/`
 Replace the storyline. **Creator-only.** Requires `If-Match`.

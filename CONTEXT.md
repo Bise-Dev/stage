@@ -33,7 +33,7 @@ The author's chosen narrative for how a reviewer should walk through the change 
 _Avoid_: Tour, walkthrough, guide.
 
 **Self-Review**:
-An iterative, author-only stage in which the author inspects their own evolving diff to gain an improved overview of their current changes and guide further implementation work (with or without an agent). It lives as long as the author keeps editing the branch and ends when they are happy with the change. Distinct from the Storyline: a Self-Review is a working aid for the author; a Storyline is the artifact handed to reviewers.
+An iterative, author-only stage in which the author inspects their own evolving diff to gain an improved overview of their current changes and guide further implementation work (with or without an agent). It lives as long as the author keeps editing the branch and ends when they are happy with the change. Distinct from the Storyline: a Self-Review is a working aid for the author; a Storyline is the artifact handed to reviewers. **Does not require Stage authentication** — the client can operate fully local-only during Self-Review; the device-flow login is triggered the first time the author hits "Ready to share".
 _Avoid_: Local review, pre-flight, draft review.
 
 **Ready to share** (state, gesture):
@@ -45,8 +45,8 @@ The condition that gates the "Open PR" / "Push update" action: the Storyline has
 _Avoid_: "complete", "done".
 
 **Publish** (verb):
-The action that pushes the workspace to github. First publish creates the github PR (sets `pr_number` on the Workspace). Subsequent publishes push new review activity (storyline edits and any pending comments) against the same PR. Repeating publish is the normal lifecycle — the workspace is reusable across publish cycles.
-_Avoid_: "submit" (used inside publish for the github Review event), "send".
+The action that opens or updates the github PR for this workspace. **Publish means PR creation, not branch push** — the branch must already exist on github before the Workspace was created (precondition for Ready-to-share). First publish creates the github PR (sets `pr_number` on the Workspace). Subsequent publishes push new review activity (storyline edits and any pending comments) against the same PR. Repeating publish is the normal lifecycle — the workspace is reusable across publish cycles.
+_Avoid_: "submit" (used inside publish for the github Review event), "send", "push" (overloaded with branch push, which is a separate, pre-Workspace action).
 
 **Workspace lifetime**:
 A Workspace outlives the github PR it points to. PR close / merge does not delete the Workspace — reads stay available and the author can resume Self-Review on the same branch, edit the Storyline, and re-publish (re-opening a PR if needed). There is **no archive concept**: mutability follows the github PR state strictly (closed PR → frozen workspace; reopened PR → thawed). See `docs/design.md` § 8.

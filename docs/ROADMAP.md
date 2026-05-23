@@ -7,10 +7,21 @@ Forward-looking goals that we are deliberately *not* building yet, but are aimin
 **Today (POC):** The Stage Backend exists as a Django 5.2 + DRF service (see `docs/design.md`). It holds GitHub credentials (single admin PAT for v1), brokers GitHub API calls, and persists Workspace + Storyline + IntroComment state in Postgres. The client integration is not wired yet on the Rust side; the contract is published in `docs/api.md` + `docs/data-model.md`.
 
 **Next hardening goals (phase 2):**
-- Per-user GitHub OAuth (replace the shared admin PAT — see ADR-0003 and `docs/design.md` § tech debt). Reuse the device-flow scaffold that already exists for session login.
+- **2a — GitHub App installation token** (small, ~80 lines + one-time github app setup). Replace the admin PAT with a token minted from a GitHub App's private key. Actions appear as `stage-bot[bot]` on github (clean machine attribution); same security posture, same code paths. Env vars switch from `GITHUB_ADMIN_PAT` to `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` + `GITHUB_APP_INSTALLATION_ID`. `GithubGateway` constructor refactors `token=...` → `token_getter=...` w/ a JWT-mint + installation-token-exchange + 5-min-pre-expiry refresh cache. This is **not** the same as the existing OAuth App (which is for user device-flow identity and stays as-is).
+- **2b — Per-user GitHub OAuth on-behalf-of** (larger, multi-week). Each action attributed to the actual Stage user on github. Extends the existing OAuth-App device-flow scaffold: scope upgrade (`read:user` → `read:user` + `repo`), encrypted token storage, refresh handling. ADR-required when undertaken.
 - Realtime push (SSE per workspace) to surface storyline edits / new IntroComments / github changes without client polling.
 - GitHub webhook ingress (smee.io for dev; public URL for prod) so PR-side state changes propagate without a client refresh.
 - Per-route conditional ETag cache on github read endpoints to reduce rate-limit pressure.
+
+## Transactional outbox for github-coupled writes
+
+**Today (POC):** `pull_request_open` will land an **idempotent open** patch (look up by `head_ref` before creating, adopt an existing PR if found) — this closes the only currently-known stuck-state where a github write succeeds but the DB write fails afterward. See `docs/design.md` § 6 + § 14.
+
+**Goal:** Move to a proper **two-phase / outbox** pattern for any operation that combines a github side-effect with Stage DB state. Pattern: write the *intent* to a Stage-owned outbox row inside the DB transaction, then attempt the github call from a worker; on success mark the outbox row done and apply downstream state; on failure retry with backoff. This eliminates the "github committed, DB rolled back" hazard for every coupled write, not just `open_pr`.
+
+**Why we're not doing it now:** The idempotent-open patch covers the only real stuck-state today. Other write-through paths (intro comments, reviews, PR actions) are caller-retry-safe because github itself is the source of truth for those — a failed write just means the user retries the action. Building an outbox + worker is a multi-week effort that earns its keep only once we have more coupled writes or move to local-first review actions (see below).
+
+**Implication for today's design:** Keep `pull_request_open` the only place doing multi-step github + DB orchestration. New features that combine a github write with a Stage DB mutation should be flagged in design review as "this needs the outbox before it ships."
 
 ## Local-first review actions with eventual sync to GitHub
 

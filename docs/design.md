@@ -61,6 +61,11 @@ What Stage **does not** persist (and why):
 - A `Comment` entity for PR-line comments — same.
 - Workspace state enum — phases (ready-to-share / ready-to-publish / published / closed / merged) are *computed* on read from the Workspace row + the live github PR state. No stored enum.
 
+**Branch-vs-PR precondition (often confused):**
+- The Workspace's `head_ref` branch **must exist on github** before the Workspace is created (Ready-to-share gesture). Without it, Stage cannot point at github-side diffs or open a PR later. The branch push happens between Self-Review and Ready-to-share; the client owns that step.
+- **"Publish" means PR creation, not branch push.** First Publish creates the github PR and sets `pr_number`. Subsequent Publishes push storyline edits + comments against the same PR. The branch already lives on github; publish does not push it.
+- Backend does **not** verify branch existence at workspace_create time (POC trust-the-client; verification adds one github call per create). Misconfiguration surfaces at first Publish, where `create_pull` returns 422 "no commits between head and base" or similar.
+
 ## 5 · API surface
 
 Two parallel surfaces, distinguished by URL anchor:
@@ -118,6 +123,8 @@ Device-flow login + opaque Bearer session tokens. Implementation in `apps.identi
 
 `GET /api/v1/auth/me/` returns the authed user's payload.
 
+**Client pre-auth posture**: the client makes **zero** backend HTTP calls before the user has a session token — no `/health` ping, no speculative reachability probe. Self-Review is fully local-only (libgit2 + local diff). Backend reachability is first verified by the `POST /auth/device/start/` call triggered by the "Ready to share" gesture; any network failure surfaces at that moment, not earlier.
+
 **v1 tech debt** (see § 12): the backend uses a single admin PAT for *all* github API calls (the user's own github token is only used during the device-flow exchange and then discarded). This is fine for the POC but means rate-limit and audit footprint are shared. Per-user OAuth is on the roadmap.
 
 ## 8 · Computed states + frozen workspaces
@@ -155,27 +162,33 @@ One github `GET /pulls/{n}` per workspace write is accepted POC cost. A per-rout
 
 ## 9 · Authorization
 
-The authz matrix is creator-centric. The Workspace's `created_by_id` is the only privileged identity Stage tracks. The matrix is intentionally lean for v1; per-repo permission caching is on the roadmap.
+The authz matrix is creator-centric. The Workspace's `created_by_id` is the only privileged identity Stage tracks. The matrix is **phase-qualified**: pre-publish (no github PR yet) is strictly creator-only — work-in-progress drafts must not leak to other Stage users. Once the workspace is published as a github PR, reads become permissive (any authed Stage user can view) until per-repo gating lands.
 
-| Action | Allowed identity |
-|---|---|
-| Create Workspace | any authed user |
-| Edit Storyline (`PUT /workspaces/<uuid>/storyline/`) | Workspace creator only |
-| Read Storyline | any authed user |
-| Post IntroComment | any authed user (frozen-gate applies) |
-| Edit IntroComment | the comment author only |
-| Delete IntroComment (soft) | the comment author only |
-| Resolve / unresolve IntroComment thread | Workspace creator only |
-| Open PR / Reopen PR | Workspace creator only |
-| PR-anchored writes (comments, reviews, PR actions) | any authed user |
+| Action | Local phase (no PR yet) | Published (PR open) | Frozen (PR closed / merged) |
+|---|---|---|---|
+| Create Workspace | any authed user | n/a | n/a |
+| List Workspaces (`GET /workspaces/`) | own drafts only | own + any published | own + any closed/merged |
+| Read Workspace (`GET /workspaces/<uuid>/`) | creator only — **404 to others** | any authed user | any authed user |
+| PATCH Workspace metadata (`PATCH /workspaces/<uuid>/`) | creator only | rejected (head_ref/base_ref frozen once PR open) | rejected (workspace frozen) |
+| Read Storyline (`GET /workspaces/<uuid>/storyline/`) | creator only — **404 to others** | any authed user | any authed user |
+| Edit Storyline (`PUT .../storyline/`) | creator only | creator only | nobody (409 workspace_frozen) |
+| Post / reply IntroComment | creator only (author's prep notes alongside the storyline they're composing) | any authed user | nobody |
+| Edit IntroComment | comment author only | comment author only | nobody |
+| Delete IntroComment (soft) | comment author only | comment author only | nobody |
+| Resolve / unresolve IntroComment thread | Workspace creator only | Workspace creator only | nobody |
+| Open PR (`POST /workspaces/<uuid>/open-pr/`) | creator only | n/a (PR already open) | creator only (re-publish path) |
+| Reopen PR (`POST /workspaces/<uuid>/reopen-pr/`) | n/a | n/a | creator only |
+| PR-anchored writes (passthrough github comments, reviews, PR actions) | n/a | any authed user | nobody |
 
-The "any authed user" lines are deliberately permissive for v1. Real per-repo gating (e.g. "must have github write access to comment") requires consulting github's per-repo permission API; this is parked on the roadmap.
+**Why 404 (not 403) on pre-publish reads by non-creator**: a workspace in local phase is private state that the creator may not even have published yet; returning 403 would leak existence and let a stranger enumerate Stage users' draft work by guessing UUIDs. 404 is indistinguishable from "no such workspace."
+
+**Permissive published reads** are a POC simplification. The intended end-state is "is creator OR is github reviewer/collaborator of the PR," which requires consulting github's per-repo permission API. Parked on the roadmap (see § 14).
 
 ## 10 · Storyline + stale-step detection
 
 The Storyline is the central Stage-owned entity. Its on-disk shape is:
 
-- `Storyline` (1:1 with Workspace) — holds `etag` (UUID, refreshed on every write), `raw_json` (full payload backup), `updated_by`.
+- `Storyline` (1:1 with Workspace) — holds `etag` (UUID, refreshed on every write) and `updated_by`. No JSON snapshot — `StorylineFile` rows are the sole source of truth.
 - `StorylineFile` — ordered list of steps. Each row points at one diff file path with an order index, an optional title, and an intro text.
 
 The author edits via `PUT /api/v1/workspaces/<uuid>/storyline/` with an `If-Match: <etag>` header (optimistic concurrency: mismatched etag → `409 etag_mismatch`). The body is the full new list of files — backend deletes and `bulk_create`s rows inside one transaction. A new etag is minted on success.
@@ -226,7 +239,7 @@ just test                            # pytest
 
 | Item | Why it's debt | Upgrade path |
 |---|---|---|
-| Single admin PAT for all github API calls | Actions appear as PAT owner; rate limit shared across all users | Per-user OAuth (github App or OAuth App + on-behalf-of), reusing the existing device-flow scaffold |
+| Single admin PAT for all github API calls | Actions appear as the PAT owner (a human); rate limit shared across all Stage users; design.md and api.md describing "on user's behalf" is misleading until migration | **Staged migration:** (2a) replace PAT with a **GitHub App installation token** — actions appear as `stage-bot[bot]`, same machine-token model but proper bot identity. ~80 lines + one-time github app creation, see `docs/ROADMAP.md`. (2b, larger) full per-user OAuth on-behalf-of — each action attributed to the actual Stage user. The existing OAuth-App device-flow scaffold supports identity today; phase 2b extends it to scope-upgrade + token storage. |
 | No realtime push | Storyline edits, IntroComment posts, github changes invisible until refresh | SSE per workspace (the API shapes are stable; only transport changes) |
 | No github read cache | Latency tax + rate-limit risk on enrichment endpoints | Per-route conditional ETag cache (60s) — decorator on read APIView classes |
 | Permissive authz | Anyone authed can post intro comments / write-through reviews on any open workspace | Consult per-repo permission cache (not built yet — recreate when needed) |

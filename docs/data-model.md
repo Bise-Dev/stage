@@ -86,9 +86,10 @@ A Stage-owned container for one body of changes under review. Identified by a ba
 | `created_at` | timestamp | |
 | `last_active_at` | timestamp | touched on any write to the workspace or its children |
 
-**`head_ref` mutability:**
+**`head_ref` semantics:**
+- Creation-time label + pre-publish lookup index. `(repo_owner, repo_name, head_ref, created_by)` is how a client finds "the workspace for the branch I'm currently on" before it knows the UUID.
 - While `pr_number IS NULL` (local phase): user-supplied at creation, updateable via `PATCH /api/workspaces/{uuid}`.
-- While `pr_number IS NOT NULL` (public phase): synced from `pr.head.ref` on each storyline read (github is the source of truth; the workspace silently follows branch renames).
+- While `pr_number IS NOT NULL` (public phase): **frozen on the backend side.** Github owns the authoritative branch name (`pr.head.ref`); Stage does not sync it back. If github renames the branch, the stored `head_ref` becomes a stale label — this is acceptable because post-publish lookups happen via `(repo, pr_number)`, not via `head_ref`. Clients that need the live branch name read it from the github proxy.
 
 **Uniqueness constraints:**
 - `(repo_owner, repo_name, head_ref)` is UNIQUE.
@@ -106,12 +107,11 @@ The author's chosen narrative for how a reviewer should walk through the change.
 |---|---|---|
 | `id` | UUID PK | `uuid4`, from `BaseModel` |
 | `workspace_fk` | OneToOne FK `Workspace`, unique | one-to-one; deletion cascades |
-| `raw_json` | text | canonical JSON document (the authoritative payload) |
 | `etag` | string (36) | UUID; bumped on every write; required `If-Match` for PUT |
 | `updated_at` | timestamp | |
 | `updated_by_fk` | FK `User` | last writer (always the workspace creator in v1) |
 
-`StorylineFile` rows are a projection of `raw_json` maintained atomically inside the same DB transaction; reads can be served from either, writes touch both.
+`StorylineFile` rows are the **sole source of truth** for the storyline payload — they are read by every API path. No redundant JSON cache.
 
 ---
 
@@ -175,22 +175,14 @@ Workspace lifecycle states are **all computed**, never stored. The Client render
 
 ---
 
-## Authorization model (v1, intentionally permissive)
+## Authorization model
 
 The **only** stored privileged identity is `Workspace.created_by_fk`. Any rule expressed as "creator only" tests `current_user.id == workspace.created_by_fk`. Github's PR author identity is **not** consulted for backend authz; the invariant is that the github PR author equals the workspace creator (by construction, since only the creator can call Open-PR).
 
-| Action | Pre-PR (local) | Open-PR (published) | Frozen (closed / merged) |
-|---|---|---|---|
-| Read workspace + storyline | creator only | any authenticated user | any authenticated user |
-| Edit storyline | creator | creator | nobody |
-| Post / reply IntroComment | n/a (not visible) | any authenticated user | nobody |
-| Resolve IntroComment thread (root only) | n/a | creator | nobody |
-| Post github comment (write-through) | n/a | any authenticated user | nobody |
-| Submit github review (write-through) | n/a | any authenticated user | nobody |
-| `POST /open-pr` | creator | n/a (PR already open) | creator (re-publish path) |
-| `POST /reopen-pr` | n/a | n/a | creator |
+**Canonical authz matrix lives in `docs/design.md` § 9** (phase-qualified, creator-only pre-publish, permissive post-publish). Two invariants worth restating here because they shape the data shape:
 
-"Any authenticated user" = logged in to Stage; no github-repo-permission check in v1. Tightening (e.g., restrict to repo collaborators) is roadmap.
+- Pre-publish workspaces (`pr_number IS NULL`) are **strictly creator-only** to read. Cross-user lookups return **404** (not 403) to prevent enumeration of other users' draft work.
+- "Any authenticated user" on published workspaces is a POC simplification; the intended end-state ("is creator OR github reviewer/collaborator of the PR") requires the per-repo permission cache (see `design.md` § 14 tech debt).
 
 ---
 
