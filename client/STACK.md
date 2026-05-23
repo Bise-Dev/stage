@@ -9,8 +9,8 @@ Implementation choices for the local client. Open to revision; not in CONTEXT.md
 - **React 19** + **Vite** + **TypeScript** — chosen for ecosystem fit with our diff and PR-review needs. macOS-native feel comes from CSS, not from a UI kit.
 
 ## UI primitives & components
-- **shadcn/ui on top of Radix primitives** — copy-paste components we own as source; Radix gives accessibility + unstyled behaviour; the look stays ours. Picked over MUI / Ant / Chakra, which fight us on chrome. Requires Tailwind.
-- **Tailwind CSS** — utility layer that shadcn assumes. Coexists with hand-written CSS for the macOS-native chrome bits.
+- **shadcn/ui on top of Radix primitives** — copy-paste components we own as source; Radix gives accessibility + unstyled behaviour; the look stays ours. Picked over MUI / Ant / Chakra, which fight us on chrome. Requires Tailwind. Pulled in lazily — first onboarding screens did not need any shadcn components yet, so it's not installed.
+- **Tailwind CSS v4** (`@tailwindcss/vite`) — utility layer that shadcn assumes; configured via `@import "tailwindcss"` in `src/styles.css`. Design tokens (palette, radii, shadows) live as plain CSS custom properties on `:root` rather than in the Tailwind theme — easier 1:1 parity with the design prototype, and components reference them via `var(--token)` in inline styles.
 
 ## Pickable libraries (install when first used; documented here so the choice is settled)
 | Need | Library |
@@ -36,6 +36,9 @@ Implementation choices for the local client. Open to revision; not in CONTEXT.md
 
 ## File watching
 - **`notify` + `notify-debouncer-mini`** in the Rust side — fires events when the working tree or refs change so the Self-Review view stays live without manual refresh.
+
+## Persistent client settings
+- **`tauri-plugin-store`** — small key/value store for client-side flags that should survive restarts but don't belong in the backend (e.g. the `onboarded` flag that controls whether the sign-in screen is shown on startup). Recents and the active-repo lock continue to live in their own JSON file under `app_data_dir`, separate from this store.
 
 ## Backend communication
 - All calls to the Stage Backend go **through the Rust side** via Tauri commands; the webview never speaks HTTP to a remote host directly. The Rust side uses `reqwest` (or equivalent) and is the future home of the local-first sync engine described in `docs/ROADMAP.md`.
