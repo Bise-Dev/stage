@@ -260,18 +260,60 @@ When user U requests workspace W (which is bound to PR in repo R), backend deter
 
 ---
 
-## D18 · Local-phase state machine = `reviewing` → `sharing` (stored, one-way) (2026-05-23, grilling)
+## D18 · State model: Self-Review → Ready-to-share → Ready-to-publish, cyclic (2026-05-23, grilling, REVISED)
 
-While in `local` phase, a workspace has a sub-state field `local_state` ∈ {`reviewing`, `sharing`}.
+Original D18 (`local_state = reviewing | sharing` on a workspace that always exists) is **superseded** by this entry following the client developer's `CONTEXT.md` update.
 
-- `reviewing` (default on creation) — author is visualizing their own diff before committing to share.
-- `sharing` — after the explicit "Ready to share" action; author is in the storyline-composition flow leading to Open PR.
+**Self-Review** is an author-only stage with **no workspace in the backend**. The author iterates on a local branch, visualizes their own diff, optionally uses AI assistance — none of this is persisted. Persisting Self-Review state is a non-goal.
 
-**Stored, advanced by explicit user action.** Endpoint: `POST /api/workspaces/{uuid}/mark-sharing`. No backwards transition in v1. Once `phase=public`, `local_state=NULL`.
+**Workspace** is created **eagerly** the moment the author clicks "Ready to share" (or equivalent). That endpoint also initializes an empty `Storyline`:
 
-The "Open PR" CTA enables when **`storyline_complete`** is true — a computed signal: `≥1 StorylineFile AND every intro_text non-empty`. Not stored.
+```
+POST /api/workspaces  { repo_owner, repo_name, head_ref, base_ref }
+  → creates workspace UUID + empty Storyline, returns uuid
+```
 
-`pr-pending` is **not** a domain state — the github create-PR network call is a transient HTTP request. UI shows progress; failure keeps workspace in `sharing` for retry.
+**Ready-to-publish** is a **computed** condition, not a stored state: `≥1 StorylineFile AND every step has non-empty intro_text`. When true, the client enables the "Open PR" (or "Push update") action.
+
+**After publish**, the workspace remains. The author can return to Self-Review (more commits on the branch), come back to the workspace to edit the storyline, and publish again — either re-creating the github PR (if it was closed) or pushing new review activity to the existing one. **Workspace outlives PR close/merge.**
+
+**State summary (none stored as an enum — all computed):**
+
+| Name | Test |
+|---|---|
+| `self-review` | no workspace exists for `(repo, head_ref)` |
+| `ready-to-share` | workspace exists; storyline has 0 files OR ≥1 file has empty intro |
+| `ready-to-publish` | workspace exists; ≥1 file AND all intros non-empty; PR not yet open |
+| `published` | workspace exists; `pr_number` set; PR open |
+| `closed` / `merged` | workspace exists; PR closed/merged on github |
+
+**Rejected alternative:** storing `state` as an enum on Workspace. Drift between stored value and computed condition (e.g. "all intros written but flag still says draft") is the prior failure mode that motivated computed-state in the first place.
+
+---
+
+## D19 · Write-through review/comment model (POC) (2026-05-23, grilling)
+
+Stage backend **does not store** `DraftReview`, `DraftComment`, or any `Comment` entity in the POC. Comment authoring is a **client-side** concern (the client holds the pre-publish queue). When the user submits, the client calls a Stage backend endpoint that **immediately** writes through to github as native github review activity.
+
+**Why:** matches client-dev's `CONTEXT.md` design criteria — "GitHub-compatible, no duplication" and "Review state synced through to GitHub so a non-Stage reviewer can use the PR normally". Avoids the v2 spec's `DraftComment.category` problem (the category never reached github).
+
+**What the backend exposes:**
+
+```
+POST /api/workspaces/{uuid}/comments
+  body: { kind: 'issue'|'review', path?, line?, side?, body }
+  → calls github immediately, returns github response, persists nothing
+
+POST /api/workspaces/{uuid}/review
+  body: { event: 'COMMENT'|'APPROVE'|'REQUEST_CHANGES', body?, comments: [...] }
+  → creates a github review with the batched comments + event, returns gh response, persists nothing
+```
+
+**Local-first sync model** (drafts persisted backend-side, with an offline queue) is a roadmap goal (`docs/ROADMAP.md`), **not** the POC.
+
+**Supersedes:** `DraftReview` / `DraftComment` tables in v2 spec §5.6, and v2 plan tasks T19, T20, T22, T23.
+
+**IntroComment is NOT affected.** IntroComment is tool-native (no github equivalent); remains a backend table.
 
 ---
 

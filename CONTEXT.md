@@ -1,114 +1,58 @@
-# Stage — Local PR Review
+# Stage
 
-Backend + UI that augments github pull-request review with an author-defined **Storyline** (ordered files with intent comments) and a structured review flow. Backend is a Django REST service. The **Client** is a separate, non-browser application built by another developer (form factor TBD: desktop / TUI / IDE plugin). Github is the source of truth for github-domain data; the backend stores only tool-native augmentation. The Client owns its own ephemeral state (e.g., which file the user is currently viewing) — the backend does not persist anything that is purely UI navigation state.
+A local-first tool for human-tailored pull request review. Authors craft a guided walkthrough ("storyline") over their own branch; reviewers follow that walkthrough and leave comments. GitHub remains the backend of record; Stage only stores what git and GitHub cannot.
+
+## Design criteria
+
+1. **Human-tailored review** — humans always have the last word. Stage assists; it does not auto-decide.
+2. **Local-first** — the user works against local state (local git, locally cached backend data); network is for sync, not for the core flow.
+3. **GitHub-compatible, no duplication** — Stage stores only what GitHub and git cannot already represent (storyline, per-step intros). Review state (comments, approvals, request-changes) is synced through to GitHub so a non-Stage reviewer can use the PR normally.
+
+## Topology
+
+Three entities, with a strict communication shape:
+
+```
+Local Client  ⇄  Stage Backend  ⇄  GitHub
+```
+
+- The Local Client never talks to GitHub directly. Its only network peer is the Stage Backend.
+- The Local Client has **no GitHub credentials**. GitHub OAuth tokens are held exclusively by the Stage Backend; the client authenticates only to the Stage Backend (with a Stage session token).
+- All non-git data the client needs comes from one of two sources: local git operations, or the Stage Backend API (which aggregates Stage-owned data with GitHub data brokered on the user's behalf).
+- The Stage Backend owns the storyline and any other Stage-native data; it brokers everything else from GitHub.
+- Review actions (comments, approve, request changes) are **write-through** today: the client posts to the backend, which writes them as native GitHub review activity in the same request cycle. GitHub is the source of truth for review state, and Stage does not own a Comment entity. Moving to a local-first sync model is a roadmap goal (see `docs/ROADMAP.md`), not part of the POC.
 
 ## Language
 
-### Workspace + lifecycle
-
 **Workspace**:
-The backend container for one body of changes under review. Identified by a `uuid4`. Holds storyline, intros, AI-doc, and per-user drafts. Exists in two phases (see **Phase**).
-_Avoid_: "session", "review" (overloaded), "draft workspace" (the same Workspace in `local` phase IS the draft).
-
-**Phase**:
-A workspace is in `local` phase while `pr_number IS NULL` (author still composing) or `public` phase once a github PR is opened against it (`pr_number` set).
-_Avoid_: "draft" (collides with PR draft state and DraftReview), "mode" (we use "mode" for author/reviewer perspective).
-
-**Mode**:
-A workspace presents in `author` mode to the user who created it (or who is the PR author once `public`) and in `reviewer` mode to everyone else. Computed per request, not stored.
-_Avoid_: "role" (we don't have a role system).
-
-**Local state**:
-Sub-state of a workspace while in `local` phase. Stored, advanced by explicit user action.
-- `reviewing` — author is visualizing the diff; not yet committed to sharing. UI label: "Draft".
-- `sharing` — author clicked "Ready to share"; now in the storyline-composition flow leading to Open PR. UI label: "Ready to share".
-
-Transitions are one-way in v1 (`reviewing` → `sharing`, never back). Once the workspace becomes `public`, `local_state` is `NULL` and irrelevant.
-
-**Storyline complete** (computed):
-Within `sharing`, the boolean signal that gates the "Open PR" CTA. True iff the workspace has ≥1 StorylineFile AND every StorylineFile has a non-empty intro. Never stored.
-_Avoid_: "storyline ready", "ready to open" (overloaded).
-
-**Open PR**:
-The state transition that calls github to create the PR and sets `pr_number` on the existing workspace row. Author-only action. UI label: "Open PR on GitHub".
-_Avoid_: "create PR" (collides with the github-side creation; we open ours, github creates theirs as a side effect).
-
-### Storyline
+A Stage-owned object that sits on top of a local branch and holds the information about that branch's review that does not belong in git or GitHub — primarily the storyline. Identified by a Stage-generated UUID; `(repo, branch)` is a unique but mutable lookup index. Created eagerly the moment the author decides to make their in-progress review shareable (a Self-Review on its own does not need a Workspace). Optionally linked to a GitHub PR via a `pr_number` field; the Workspace's identity does **not** shift to the PR, and it outlives the PR being merged or closed.
+_Avoid_: Review session, branch context, PR draft.
 
 **Storyline**:
-The author-defined ordered list of files reviewers should walk through, with per-file intent comments. One per Workspace.
-_Avoid_: "outline" (UI button label for the dropdown is "Outline" but the noun is "Storyline").
+The author's chosen narrative for how a reviewer should walk through the change — an ordered sequence of steps, each pointing at part of the diff and optionally carrying an introductory note from the author.
+_Avoid_: Tour, walkthrough, guide.
 
-**Step** / **StorylineFile**:
-One entry in the Storyline: a file path + an order index + an optional **title** + an optional **intro**. "Step" is the user-facing word; `StorylineFile` is the DB table.
-_Avoid_: "item", "row" (mixed with UI rows).
+**Self-Review**:
+An iterative, author-only stage in which the author inspects their own evolving diff to gain an improved overview of their current changes and guide further implementation work (with or without an agent). It lives as long as the author keeps editing the branch and ends when they are happy with the change. Distinct from the Storyline: a Self-Review is a working aid for the author; a Storyline is the artifact handed to reviewers.
+_Avoid_: Local review, pre-flight, draft review.
 
-**Intro**:
-The author's intent comment for one storyline step — what the reviewer should look for or understand about this file. Markdown. Stored per StorylineFile.
-_Avoid_: "note" (UI says "Your note:" but that's the rendered preview of an Intro), "description", "comment" (collides with the comment family).
+**Ready to share** (state, gesture):
+The author's explicit "I'm done iterating, now let me prepare what reviewers will see" decision. **Creates the Workspace in the backend** — Self-Review has no Workspace; this gesture is what makes one. After this, the author is in storyline composition.
+_Avoid_: "share" (overloaded), "publish" (that's the next step).
 
-**IntroComment**:
-A threaded, tool-native discussion attached to one Intro. Reviewer reacts to or questions an Intro without it becoming a github comment. The PR author can resolve threads.
-_Avoid_: "intro reply" (replies are themselves IntroComments via parent_fk).
+**Ready to publish** (state, computed):
+The condition that gates the "Open PR" / "Push update" action: the Storyline has ≥1 step and every step has a non-empty intro. **Computed**, never stored — the moment the last intro is written, the workspace is ready-to-publish.
+_Avoid_: "complete", "done".
 
-### Comments
+**Publish** (verb):
+The action that pushes the workspace to github. First publish creates the github PR (sets `pr_number` on the Workspace). Subsequent publishes push new review activity (storyline edits and any pending comments) against the same PR. Repeating publish is the normal lifecycle — the workspace is reusable across publish cycles.
+_Avoid_: "submit" (used inside publish for the github Review event), "send".
 
-**Draft comment** / **DraftComment**:
-A comment composed in the UI before it is published to github. Lives in the backend, owned by one user, deleted after publish. Has a **category** (`comment | blocking | suggestion | nit`) that is **not** sent to github.
-_Avoid_: "pending comment" (sounds like a status), "queued comment".
+**Workspace lifetime**:
+A Workspace outlives the github PR it points to. PR close / merge does **not** archive the Workspace — the author can resume Self-Review on the same branch, edit the Storyline, and publish again (re-opening a PR if needed). Archival is an explicit, separate action.
 
-**DraftReview**:
-The wrapper around a user's set of DraftComments + an optional review body + an event (`COMMENT | APPROVE | REQUEST_CHANGES`). One per `(workspace, user)`. Submitted as a github Review on publish-all.
+**Comment** (POC stance — no backend entity):
+For the POC, Stage backend does **not** store a Comment entity. Pre-publish drafts are a Local Client concern; the client posts to the backend, which writes through to github in the same request cycle. The local-first offline-drafts sync model is a roadmap goal, not POC scope.
 
-**Github comment**:
-Any comment that lives on github. We never mirror them — they are read via proxy. Comes in two github-native kinds: issue comments (PR-level) and review-line comments (anchored to a diff line).
-_Avoid_: "published comment" (true but redundant — if it's on github it's published).
-
-**IntroComment** vs **DraftComment** vs **Github comment** are three distinct things and must not be conflated:
-- IntroComment ↔ a storyline step's intent (tool-native, never on github)
-- DraftComment ↔ pre-publish staging of a future github comment (transient backend)
-- Github comment ↔ what reviewers see on github (never in our DB)
-
-### Review
-
-**Local review (phase)**:
-The UI flow the author goes through to visualize their own diff and compose the storyline before opening the PR. The corresponding workspace phase is `local`.
-_Avoid_: "local-only review" (sounds like a feature that bypasses github — it isn't).
-
-**Storyline review**:
-The UI flow a reviewer goes through, walking the storyline step-by-step.
-_Avoid_: "reading flow".
-
-**Publish review** (verb) / **submit review**:
-The action of pushing the user's DraftReview + DraftComments to github as a single github Review object.
-_Avoid_: "send", "post" (post is for individual comments).
-
-**Review** (the noun):
-Ambiguous on its own — always qualify: "github Review object", "draft review", "storyline review (flow)".
-
-## Relationships
-
-- A **Workspace** has one **Storyline** (created lazily on first storyline write or via Open PR).
-- A **Storyline** has many **StorylineFile**s (= **Step**s).
-- A **StorylineFile** has many **IntroComment**s, threaded by parent_fk.
-- A **Workspace** has at most one **DraftReview** per user, and many **DraftComment**s per user.
-- A **Workspace** progresses `local` → `public` exactly once (Open PR). It never goes back.
-- A **Workspace** in `public` phase points to exactly one **github PR** (`pr_number`).
-
-## Example dialogue
-
-> **Dev:** "When I start a new **Workspace**, does the **Storyline** exist immediately?"
-> **Domain expert:** "The Workspace is created in `local` phase. The Storyline is created the first time you save one (or implicitly when you Open PR with a non-empty payload)."
->
-> **Dev:** "If a reviewer adds an **IntroComment** during the `local` phase, can the **PR author** see it before Open PR?"
-> **Domain expert:** "During `local`, only the **creator** can see the workspace. There are no reviewers yet. Once it goes `public`, reviewers can attach IntroComments to the Intros they care about."
->
-> **Dev:** "What's the difference between a **DraftComment** with category `blocking` and a github review with event `REQUEST_CHANGES`?"
-> **Domain expert:** "A DraftComment is one anchored comment, pre-publish. `blocking` is a tool-local UI tag that lives in our DB only — it never reaches github. The github Review's `REQUEST_CHANGES` event is the entire submitted review's verdict and is what actually blocks the PR on github."
-
-## Flagged ambiguities (resolved)
-
-- **"workspace"** was used to mean both "the backend row" and "the UI's local-review composition area". Resolved: same thing, different phases (`local` vs `public`).
-- **"review"** was used for 6 distinct concepts. Resolved by qualifying every use: github Review, DraftReview, local review (phase / UI flow), storyline review (UI flow), publish review (action).
-- **"comment"** was used for IntroComments, DraftComments, and github comments. Resolved: three distinct entities, kept separate by name.
-- **"draft"** appears in `DraftReview`, `DraftComment`, github's PR `draft: bool`, and the UI's "Save draft" CTA. Each usage is now qualified by its noun.
+**IntroComment** (still backend-native):
+Discussions on Storyline intros remain a backend entity — github has no equivalent surface.
