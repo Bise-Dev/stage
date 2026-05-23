@@ -10,7 +10,13 @@ from apps.core.exceptions import ApplicationError
 from apps.github_proxy.gateway import GithubGateway
 from apps.users.models import User
 from apps.workspaces.models import IntroComment, StorylineFile, Workspace
-from apps.workspaces.selectors import intro_comment_thread, storyline_read, workspace_get, workspace_list, workspace_lookup
+from apps.workspaces.selectors import (
+    intro_comment_thread,
+    storyline_read,
+    workspace_get,
+    workspace_list,
+    workspace_lookup,
+)
 from apps.workspaces.serializers.intro_comment_create_input import IntroCommentCreateInputSerializer
 from apps.workspaces.serializers.intro_comment_output import IntroCommentOutputSerializer
 from apps.workspaces.serializers.intro_comment_update_input import IntroCommentUpdateInputSerializer
@@ -42,7 +48,7 @@ def _gateway() -> GithubGateway:
 
 class WorkspaceListApi(APIView):
     def get(self, request: Request) -> Response:
-        qs = workspace_list()
+        qs = workspace_list(user=cast(User, request.user))
         return Response(WorkspaceOutputSerializer(qs, many=True).data)
 
     def post(self, request: Request) -> Response:
@@ -67,10 +73,15 @@ class WorkspaceLookupApi(APIView):
         if ws is None:
             raise ApplicationError("Not found", status=404)
         return Response(
-            WorkspaceLookupOutputSerializer({
-                "workspace_id": ws.id,
-                "created_by": {"id": ws.created_by_id, "github_login": ws.created_by.github_login},
-            }).data,
+            WorkspaceLookupOutputSerializer(
+                {
+                    "workspace_id": ws.id,
+                    "created_by": {
+                        "id": ws.created_by_id,
+                        "github_login": ws.created_by.github_login,
+                    },
+                }
+            ).data,
         )
 
 
@@ -83,19 +94,25 @@ class WorkspaceDetailApi(APIView):
 
     def get(self, request: Request, workspace_id: uuid.UUID) -> Response:
         ws = self._get_workspace(workspace_id)
+        if ws.pr_number is None and request.user.pk != ws.created_by_id:
+            raise ApplicationError("Not found", status=404)
         return Response(WorkspaceOutputSerializer(ws).data)
 
     def patch(self, request: Request, workspace_id: uuid.UUID) -> Response:
         ws = self._get_workspace(workspace_id)
         serializer = WorkspaceUpdateInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        updated = workspace_update_local_phase(workspace=ws, **serializer.validated_data)
+        updated = workspace_update_local_phase(
+            workspace=ws, user=cast(User, request.user), **serializer.validated_data
+        )
         return Response(WorkspaceOutputSerializer(updated).data)
 
 
 class StorylineDetailApi(APIView):
     def get(self, request: Request, workspace_id: uuid.UUID) -> Response:
         ws = workspace_get(workspace_id=workspace_id)
+        if ws.pr_number is None and request.user.pk != ws.created_by_id:
+            raise ApplicationError("Not found", status=404)
         with _gateway() as g:
             data, etag = storyline_read(workspace=ws, gateway=g)
         response = Response(data)
@@ -139,9 +156,9 @@ class StorylineFileDetailApi(APIView):
 
 def _get_storyline_file(workspace_id: uuid.UUID, file_id: uuid.UUID) -> StorylineFile:
     try:
-        return StorylineFile.objects.select_related(
-            "storyline__workspace"
-        ).get(pk=file_id, storyline__workspace_id=workspace_id)
+        return StorylineFile.objects.select_related("storyline__workspace").get(
+            pk=file_id, storyline__workspace_id=workspace_id
+        )
     except StorylineFile.DoesNotExist:
         raise ApplicationError("not_found", status=404)
 
@@ -177,7 +194,11 @@ def _comment_to_dict(comment: IntroComment) -> dict:
 class IntroCommentCollectionApi(APIView):
     def get(self, request: Request, workspace_id: uuid.UUID, file_id: uuid.UUID) -> Response:
         sf = _get_storyline_file(workspace_id, file_id)
-        include_resolved = request.query_params.get("include_resolved", "").lower() in ("true", "1", "yes")
+        include_resolved = request.query_params.get("include_resolved", "").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
         thread = intro_comment_thread(storyline_file=sf, include_resolved=include_resolved)
         return Response(IntroCommentOutputSerializer(thread, many=True).data)
 
@@ -202,7 +223,10 @@ class IntroCommentCollectionApi(APIView):
             )
         comment.refresh_from_db()
         comment.user  # ensure user is loaded  # noqa: B018
-        return Response(IntroCommentOutputSerializer(_comment_to_dict(comment)).data, status=status.HTTP_201_CREATED)
+        return Response(
+            IntroCommentOutputSerializer(_comment_to_dict(comment)).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class IntroCommentDetailApi(APIView):

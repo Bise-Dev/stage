@@ -10,10 +10,14 @@ from apps.workspaces.selectors import workspace_get, workspace_list, workspace_l
 
 
 @pytest.mark.django_db
-def test_workspace_list_returns_all() -> None:
-    WorkspaceFactory()
-    WorkspaceFactory()
-    assert workspace_list().count() == 2
+def test_workspace_list_returns_own_drafts_and_published() -> None:
+    user = cast(User, UserFactory())
+    WorkspaceFactory(created_by=user)
+    WorkspaceFactory(created_by=user, pr_number=1)
+    other = cast(User, UserFactory())
+    WorkspaceFactory(created_by=other)
+    # user sees own draft + own published; not other's draft
+    assert workspace_list(user=user).count() == 2
 
 
 @pytest.mark.django_db

@@ -236,9 +236,12 @@ def pull_request_reopen(*, workspace: Workspace, creator: User, gateway) -> dict
 def workspace_update_local_phase(
     *,
     workspace: Workspace,
+    user: User,
     head_ref: str | None = None,
     base_ref: str | None = None,
 ) -> Workspace:
+    if user.pk != workspace.created_by_id:
+        raise ApplicationError("creator_only", status=403)
     if workspace.pr_number is not None:
         raise ApplicationError(
             "head_ref / base_ref not editable once a PR is open",

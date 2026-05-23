@@ -33,17 +33,28 @@ def test_workspace_create_rejects_duplicate() -> None:
 
 @pytest.mark.django_db
 def test_workspace_update_local_phase_changes_head_ref() -> None:
-    ws = cast(Workspace, WorkspaceFactory(head_ref="feat/x"))
-    updated = workspace_update_local_phase(workspace=ws, head_ref="feat/y")
+    creator = cast(User, UserFactory())
+    ws = cast(Workspace, WorkspaceFactory(head_ref="feat/x", created_by=creator))
+    updated = workspace_update_local_phase(workspace=ws, user=creator, head_ref="feat/y")
     assert updated.head_ref == "feat/y"
 
 
 @pytest.mark.django_db
 def test_workspace_update_local_phase_rejects_when_pr_open() -> None:
-    ws = cast(Workspace, WorkspaceFactory(pr_number=42))
+    creator = cast(User, UserFactory())
+    ws = cast(Workspace, WorkspaceFactory(pr_number=42, created_by=creator))
     with pytest.raises(ApplicationError) as exc:
-        workspace_update_local_phase(workspace=ws, head_ref="other")
+        workspace_update_local_phase(workspace=ws, user=creator, head_ref="other")
     assert exc.value.status == 409
+
+
+@pytest.mark.django_db
+def test_workspace_update_local_phase_rejects_non_creator() -> None:
+    ws = cast(Workspace, WorkspaceFactory())
+    other = cast(User, UserFactory())
+    with pytest.raises(ApplicationError) as exc:
+        workspace_update_local_phase(workspace=ws, user=other, head_ref="feat/y")
+    assert exc.value.status == 403
 
 
 @pytest.mark.django_db

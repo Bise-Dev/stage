@@ -1,5 +1,4 @@
 from typing import cast
-from unittest.mock import MagicMock, patch
 
 import pytest
 from rest_framework.test import APIClient
@@ -26,7 +25,9 @@ def authed_ws(db) -> tuple[APIClient, User, Workspace]:
 @pytest.mark.django_db
 def test_storyline_get_returns_etag(authed_ws) -> None:
     client, _, ws = authed_ws
-    StorylineFile.objects.create(storyline=ws.storyline, diff_file_path="a.py", order_index=0, intro_text="hi")
+    StorylineFile.objects.create(
+        storyline=ws.storyline, diff_file_path="a.py", order_index=0, intro_text="hi"
+    )
     resp = client.get(f"/api/v1/workspaces/{ws.id}/storyline/")
     assert resp.status_code == 200
     assert resp["ETag"] == ws.storyline.etag
@@ -57,7 +58,11 @@ def test_storyline_put_writes_files(authed_ws) -> None:
     client, _, ws = authed_ws
     resp = client.put(
         f"/api/v1/workspaces/{ws.id}/storyline/",
-        {"files": [{"diff_file_path": "a.py", "order_index": 0, "title": "Hi", "intro_text": "intro"}]},
+        {
+            "files": [
+                {"diff_file_path": "a.py", "order_index": 0, "title": "Hi", "intro_text": "intro"}
+            ]
+        },
         format="json",
         HTTP_IF_MATCH=ws.storyline.etag,
     )
@@ -88,3 +93,22 @@ def test_storyline_get_single_file(authed_ws) -> None:
     resp = client.get(f"/api/v1/workspaces/{ws.id}/storyline/files/{f.pk}/")
     assert resp.status_code == 200
     assert resp.json()["diff_file_path"] == "a.py"
+
+
+@pytest.mark.django_db
+def test_storyline_pre_publish_404_for_non_creator(authed_ws, db) -> None:
+    from apps.identity.services import session_issue
+    from apps.users.factories import UserFactory
+
+    _, user_a, ws = authed_ws
+    user_b = cast(User, UserFactory())
+    raw_b, _ = session_issue(user=user_b)
+    client_b = APIClient()
+    client_b.credentials(HTTP_AUTHORIZATION=f"Bearer {raw_b}")
+
+    # pre-publish: non-creator gets 404 (enumeration guard)
+    resp = client_b.get(f"/api/v1/workspaces/{ws.id}/storyline/")
+    assert resp.status_code == 404
+    # post-publish happy path (any authed user 200) is covered by the
+    # existing storyline-read tests; verifying it here would require
+    # mocking the github gateway, which is out of scope for this gate.

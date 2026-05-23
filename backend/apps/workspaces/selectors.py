@@ -1,7 +1,8 @@
 import uuid
 
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 
+from apps.users.models import User
 from apps.workspaces.models import IntroComment, StorylineFile, Workspace
 
 
@@ -82,10 +83,10 @@ def storyline_read(*, workspace: Workspace, gateway) -> tuple[dict, str]:
     return payload, s.etag
 
 
-def workspace_list() -> QuerySet[Workspace]:
+def workspace_list(*, user: User) -> QuerySet[Workspace]:
     return (
         Workspace.objects.select_related("created_by")
-        .all()
+        .filter(Q(created_by=user) | Q(pr_number__isnull=False))
         .order_by("-last_active_at")
     )
 
