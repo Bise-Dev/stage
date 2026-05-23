@@ -1,4 +1,4 @@
-# ADR-0004 · Comments are write-through to github in the POC
+# ADR-0003 · Comments are write-through to github in the POC
 
 **Status:** accepted
 **Date:** 2026-05-23

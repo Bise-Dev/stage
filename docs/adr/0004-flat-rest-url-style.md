@@ -1,4 +1,4 @@
-# ADR-0005 · Flat REST URL style for the Stage backend
+# ADR-0004 · Flat REST URL style for the Stage backend
 
 **Status:** accepted
 **Date:** 2026-05-23

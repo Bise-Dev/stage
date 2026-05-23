@@ -1,4 +1,4 @@
-# ADR-0003 · Workspace identity is a UUID; lifecycle phases are computed
+# ADR-0002 · Workspace identity is a UUID; lifecycle phases are computed
 
 **Status:** accepted
 **Date:** 2026-05-23

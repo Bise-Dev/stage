@@ -40,7 +40,7 @@ Three tiers, with strict communication shape. The full rationale is in **ADR-000
 - The **Local Client never talks to github directly.** It has no github credentials. Its only network peer is the Stage Backend.
 - All non-git data the client needs comes from one of two sources: local git operations, or the Stage Backend API (which aggregates Stage-owned data with github data brokered on the user's behalf).
 - The Stage Backend owns Stage-native data (Workspace, Storyline, IntroComment); it brokers everything else from github.
-- Review actions (comments, approve, request-changes) are **write-through** today (see **ADR-0004**): the client posts to the backend, which writes them as native github review activity in the same request cycle.
+- Review actions (comments, approve, request-changes) are **write-through** today (see **ADR-0003**): the client posts to the backend, which writes them as native github review activity in the same request cycle.
 
 ## 4 · Domain model summary
 
@@ -50,14 +50,14 @@ The Stage backend persists **six tables**. The canonical field-by-field contract
 |---|---|---|
 | `User` | github identity (login, user_id, display name, avatar) | Extends `AbstractUser`; password unused (device-flow auth only) |
 | `Session` | Bearer token hashes for active client sessions | Token-hashed at rest; raw value returned once at issue time |
-| `Workspace` | One row per body of changes (UUID id) | See **ADR-0003** for identity rationale + lifecycle |
+| `Workspace` | One row per body of changes (UUID id) | See **ADR-0002** for identity rationale + lifecycle |
 | `Storyline` | 1:1 to Workspace; the author's narrative metadata + etag | Created at workspace creation; etag enables optimistic concurrency on edit |
 | `StorylineFile` | Ordered steps within a Storyline (one file per step) | `(storyline_id, diff_file_path)` is unique |
 | `IntroComment` | Threaded discussion on a StorylineFile's intro | DB-enforced depth-1 invariant (a reply cannot have replies); soft-delete + resolve fields |
 
 What Stage **does not** persist (and why):
 - PR data, file diffs, github review comments, github issue comments, github reviews, CI checks, branches, repositories — owned by github, fetched on demand.
-- `DraftReview` / `DraftComment` tables — see **ADR-0004** (write-through).
+- `DraftReview` / `DraftComment` tables — see **ADR-0003** (write-through).
 - A `Comment` entity for PR-line comments — same.
 - Workspace state enum — phases (ready-to-share / ready-to-publish / published / closed / merged) are *computed* on read from the Workspace row + the live github PR state. No stored enum.
 
@@ -70,7 +70,7 @@ Two parallel surfaces, distinguished by URL anchor:
 
 A reviewer whose PR's author never used Stage uses only the PR-anchored surface — Stage degrades to a thin review wrapper rather than refusing service.
 
-URL style is flat REST: collections expose `GET`+`POST` on the same path; resources expose `GET`+`PATCH` on the same path; distinct write semantics get distinct action sub-paths (`/open-pr/`, `/resolve/`, `/actions/<action>/`). See **ADR-0005** for the full rationale.
+URL style is flat REST: collections expose `GET`+`POST` on the same path; resources expose `GET`+`PATCH` on the same path; distinct write semantics get distinct action sub-paths (`/open-pr/`, `/resolve/`, `/actions/<action>/`). See **ADR-0004** for the full rationale.
 
 The exhaustive endpoint listing — request shapes, error codes, response examples — is `docs/api.md`. Every error response uses the envelope:
 
@@ -95,7 +95,7 @@ Inside each Stage app, the boilerplate's HackSoft-style split is followed strict
 
 - `services.py` — writes / state changes. Functions are kw-only typed, named `<entity>_<action>`, wrapped with `@transaction.atomic` when multi-step. Raise `ApplicationError(message, extra={}, status=N)` for domain rule violations.
 - `selectors.py` — reads. Same naming + signature conventions. Returns QuerySets or computed values; never writes.
-- `apis.py` — DRF `APIView` subclasses, one class per resource (collection + resource methods share a class). Thin: validate input, call a service or selector, serialize output. No business logic. URL style is flat REST (**ADR-0005**).
+- `apis.py` — DRF `APIView` subclasses, one class per resource (collection + resource methods share a class). Thin: validate input, call a service or selector, serialize output. No business logic. URL style is flat REST (**ADR-0004**).
 - `serializers/<name>.py` — one DRF `Serializer` subclass per file.
 - `factories.py` — `factory-boy DjangoModelFactory` subclasses for test data.
 
@@ -240,7 +240,7 @@ just test                            # pytest
 
 These were proposed during brainstorming and *intentionally* not built. Each is documented because the absence is informative — a future contributor should know we considered and rejected the idea.
 
-- **Comment / DraftReview / DraftComment backend tables** — see ADR-0004. The POC is write-through.
+- **Comment / DraftReview / DraftComment backend tables** — see ADR-0003. The POC is write-through.
 - **Workspace import** — there is no "import this PR into Stage" action. A Workspace is created by the author via "Ready to share". A reviewer arriving at a PR with no Workspace reviews through PR-anchored endpoints; they do not create one on the author's behalf.
 - **Archive concept** — no manual archive. Mutability follows the github PR state strictly. PR-close → frozen workspace; PR-reopen → thawed. No separate "archived" state.
 - **Repo / branch listing endpoints** — the backend offers exactly one github-search endpoint (`/api/v1/github/prs/?role=author|reviewer`). All other repo/branch enumeration goes directly to github through the client's local git or is fetched as needed via PR-anchored read endpoints.
@@ -252,11 +252,11 @@ These were proposed during brainstorming and *intentionally* not built. Each is 
 - `docs/api.md` — REST contract (canonical, machine-followable).
 - `docs/data-model.md` — persistence contract (field-by-field).
 - `docs/ROADMAP.md` — phase-2 hardening goals.
-- `docs/adr/` — five accepted ADRs:
+- `docs/adr/` — four accepted ADRs:
   - **ADR-0001** Three-tier topology
-  - **ADR-0003** Workspace identity + computed phases
-  - **ADR-0004** Write-through comments (POC stance)
-  - **ADR-0005** Flat-REST URL style
+  - **ADR-0002** Workspace identity + computed phases
+  - **ADR-0003** Write-through comments (POC stance)
+  - **ADR-0004** Flat-REST URL style
 - `CONTEXT.md` — glossary + design criteria.
 - `backend/CONTEXT.md` + `backend/CLAUDE.md` — backend coding conventions.
 - `backend/docs/adr/0001-architecture-and-styleguide-baseline.md` — boilerplate styleguide.

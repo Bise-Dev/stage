@@ -7,7 +7,7 @@ Forward-looking goals that we are deliberately *not* building yet, but are aimin
 **Today (POC):** The Stage Backend exists as a Django 5.2 + DRF service (see `docs/design.md`). It holds GitHub credentials (single admin PAT for v1), brokers GitHub API calls, and persists Workspace + Storyline + IntroComment state in Postgres. The client integration is not wired yet on the Rust side; the contract is published in `docs/api.md` + `docs/data-model.md`.
 
 **Next hardening goals (phase 2):**
-- Per-user GitHub OAuth (replace the shared admin PAT — see ADR-0004 and `docs/design.md` § tech debt). Reuse the device-flow scaffold that already exists for session login.
+- Per-user GitHub OAuth (replace the shared admin PAT — see ADR-0003 and `docs/design.md` § tech debt). Reuse the device-flow scaffold that already exists for session login.
 - Realtime push (SSE per workspace) to surface storyline edits / new IntroComments / github changes without client polling.
 - GitHub webhook ingress (smee.io for dev; public URL for prod) so PR-side state changes propagate without a client refresh.
 - Per-route conditional ETag cache on github read endpoints to reduce rate-limit pressure.

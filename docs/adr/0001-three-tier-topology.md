@@ -25,7 +25,7 @@ Local Client  ⇄  Stage Backend  ⇄  GitHub
 - The Local Client has **no github credentials**. github OAuth tokens are held exclusively by the Stage Backend; the client authenticates only to the Stage Backend (with a Stage Bearer session token from the device flow).
 - All non-git data the client needs comes from one of two sources: local git operations, or the Stage Backend API (which aggregates Stage-owned data with github data brokered on the user's behalf).
 - The Stage Backend owns the Storyline, IntroComment, and any other Stage-native data.
-- Review actions (comments, approve, request-changes) are **write-through** today (see ADR-0004): the client posts to the Stage Backend, which writes them as native github review activity in the same request cycle. Moving to a local-first sync model is a roadmap goal, not a POC concern.
+- Review actions (comments, approve, request-changes) are **write-through** today (see ADR-0003): the client posts to the Stage Backend, which writes them as native github review activity in the same request cycle. Moving to a local-first sync model is a roadmap goal, not a POC concern.
 
 ## Considered alternatives
 

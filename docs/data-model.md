@@ -94,7 +94,7 @@ A Stage-owned container for one body of changes under review. Identified by a ba
 - `(repo_owner, repo_name, head_ref)` is UNIQUE.
 - `(repo_owner, repo_name, pr_number)` is UNIQUE when `pr_number IS NOT NULL` (partial unique index).
 
-**No `archived_at` field, no soft-delete.** Workspaces persist; their mutability is purely a function of github PR state (see `docs/adr/0004` and decisions D23 / D32).
+**No `archived_at` field, no soft-delete.** Workspaces persist; their mutability is purely a function of github PR state (see `docs/adr/0002-workspace-identity-and-phases.md` § Consequences).
 
 ---
 
@@ -197,7 +197,7 @@ The **only** stored privileged identity is `Workspace.created_by_fk`. Any rule e
 ## What is intentionally NOT in the model
 
 - **No `Repository` / `Branch` / `Commit` entities** — github knows these. Repo and branch selection is client-side via local git (per `client/STACK.md`).
-- **No `Comment` / `DraftComment` / `Review` / `DraftReview` tables** — review actions are write-through (POC); see `docs/adr/0004`. The Client holds pre-publish drafts in its own state.
+- **No `Comment` / `DraftComment` / `Review` / `DraftReview` tables** — review actions are write-through (POC); see `docs/adr/0003-write-through-comments-poc.md`. The Client holds pre-publish drafts in its own state.
 - **No `AIAnalysisDoc`** — AI assistance is a client-side concern; its output flows into `StorylineFile.intro_text` via the normal storyline PUT.
 - **No `UserRepoPermission`** — permissive authz in v1; not consulted.
 - **No `archived_at` / soft-archive flag** — workspaces persist; mutability follows github PR state strictly.
