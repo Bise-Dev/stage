@@ -48,7 +48,9 @@ pub enum BackendError {
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct BackendClient {
-    base_url: String, // validated + trailing-slash-trimmed in `new`
+    #[allow(dead_code)]
+    base_url: String, // validated + trailing-slash-trimmed via `reqwest::Url::parse`
+    #[allow(dead_code)]
     http: reqwest::Client,
 }
 
@@ -66,9 +68,9 @@ impl BackendClient {
     ) -> Result<Self, BackendError> {
         let raw = base_url.as_ref();
         // Validate by parsing through reqwest's URL type.
-        reqwest::Url::parse(raw)
+        let parsed = reqwest::Url::parse(raw)
             .map_err(|e| BackendError::InvalidBaseUrl(e.to_string()))?;
-        let trimmed = raw.trim_end_matches('/').to_string();
+        let trimmed = parsed.as_str().trim_end_matches('/').to_string();
         let http = reqwest::Client::builder()
             .timeout(timeout)
             .user_agent(concat!("stage-client/", env!("CARGO_PKG_VERSION")))
