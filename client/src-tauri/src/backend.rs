@@ -13,7 +13,6 @@ use std::time::Duration;
 
 /// Errors returned by `BackendClient` methods.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
 pub enum BackendError {
     #[error("invalid base url: {0}")]
     InvalidBaseUrl(String),
@@ -44,7 +43,6 @@ pub enum BackendError {
 /// Returned by `device_start`. Carries the device code, the user-facing code,
 /// the URL where the user types it, and the polling/expiry hints (seconds).
 #[derive(Debug, Clone, serde::Deserialize)]
-#[allow(dead_code)]
 pub struct DeviceCode {
     pub device_code: String,
     pub user_code: String,
@@ -55,7 +53,6 @@ pub struct DeviceCode {
 
 /// Stage user identity returned by `device_poll` (on success) and `auth_me`.
 #[derive(Debug, Clone, serde::Deserialize)]
-#[allow(dead_code)]
 pub struct User {
     pub id: i64,
     pub github_login: String,
@@ -70,7 +67,6 @@ pub struct User {
 /// `SessionData` deliberately does NOT derive `Debug` to block `{:?}` formatting.
 /// Per `docs/design.md` § 7 the token is long-lived until user-initiated logout.
 #[derive(Clone, serde::Deserialize)]
-#[allow(dead_code)]
 pub struct SessionData {
     pub session_token: String,
     pub user: User,
@@ -79,7 +75,6 @@ pub struct SessionData {
 /// Caller-facing outcome of one `device_poll` call. The caller's loop picks
 /// the next action based on which variant matches.
 #[derive(Clone)]
-#[allow(dead_code)]
 pub enum DevicePollOutcome {
     /// GitHub returned `authorization_pending` — keep polling at the same cadence.
     Pending,
@@ -120,13 +115,11 @@ enum DevicePollSuccess {
 
 /// SDK handle for the Stage backend. Cheap to clone.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct BackendClient {
     base_url: String, // validated + trailing-slash-trimmed via `reqwest::Url::parse`
     http: reqwest::Client,
 }
 
-#[allow(dead_code)]
 impl BackendClient {
     /// Construct with default 30s HTTP timeout.
     pub fn new(base_url: impl AsRef<str>) -> Result<Self, BackendError> {

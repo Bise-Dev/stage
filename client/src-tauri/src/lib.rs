@@ -1,4 +1,4 @@
-mod backend;
+pub mod backend;
 mod commands;
 mod errors;
 mod git;
