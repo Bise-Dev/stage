@@ -34,6 +34,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err("client deadline exceeded".into());
         }
         tokio::time::sleep(interval).await;
+        if Instant::now() > deadline {
+            return Err("client deadline exceeded".into());
+        }
         match client.device_poll(&device.device_code).await? {
             DevicePollOutcome::Pending => {
                 print!(".");
@@ -42,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             DevicePollOutcome::SlowDown => {
                 println!("(slow_down — bumping interval)");
                 interval += Duration::from_secs(5);
+                continue;
             }
             DevicePollOutcome::Authorized(s) => break s,
             DevicePollOutcome::Expired => return Err("device_code expired".into()),
