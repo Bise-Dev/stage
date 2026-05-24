@@ -127,7 +127,6 @@ enum DevicePollSuccess {
 #[allow(dead_code)]
 pub struct BackendClient {
     base_url: String, // validated + trailing-slash-trimmed via `reqwest::Url::parse`
-    #[allow(dead_code)]
     http: reqwest::Client,
 }
 
@@ -158,11 +157,49 @@ impl BackendClient {
             http,
         })
     }
+
+    async fn map_error(resp: reqwest::Response) -> BackendError {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        // Try parse `{"message": "...", "extra": {...}}`.
+        let parsed: Option<(String, serde_json::Value)> = serde_json::from_str::<
+            serde_json::Value,
+        >(&body)
+        .ok()
+        .and_then(|v| {
+            let m = v.get("message")?.as_str()?.to_string();
+            let e = v.get("extra").cloned().unwrap_or(serde_json::Value::Null);
+            Some((m, e))
+        });
+        let (message, extra) = parsed.unwrap_or((String::new(), serde_json::Value::Null));
+        match (status, message.as_str()) {
+            (401, _) => BackendError::Unauthenticated,
+            (400, "validation_error") => BackendError::Validation { extra },
+            (_, "github_error") => BackendError::Github { status, extra },
+            _ => BackendError::Unexpected {
+                status,
+                message,
+                extra,
+            },
+        }
+    }
+
+    /// `POST /api/v1/auth/device/start/` — kicks off the device flow.
+    pub async fn device_start(&self) -> Result<DeviceCode, BackendError> {
+        let url = format!("{}/api/v1/auth/device/start/", self.base_url);
+        let resp = self.http.post(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        resp.json::<DeviceCode>().await.map_err(BackendError::from)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn new_rejects_malformed_url() {
@@ -281,5 +318,57 @@ mod tests {
             }
             _ => panic!("expected Ok variant"),
         }
+    }
+
+    #[tokio::test]
+    async fn device_start_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/device/start/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "device_code": "abc",
+                "user_code": "ABCD-1234",
+                "verification_uri": "https://github.com/login/device",
+                "interval": 5,
+                "expires_in": 900,
+            })))
+            .mount(&server)
+            .await;
+
+        let client = BackendClient::new(server.uri()).unwrap();
+        let dc = client.device_start().await.unwrap();
+        assert_eq!(dc.user_code, "ABCD-1234");
+        assert_eq!(dc.expires_in, 900);
+    }
+
+    #[tokio::test]
+    async fn device_start_500_maps_to_unexpected() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/device/start/"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal err"))
+            .mount(&server)
+            .await;
+
+        let client = BackendClient::new(server.uri()).unwrap();
+        let err = client.device_start().await.unwrap_err();
+        assert!(
+            matches!(&err, BackendError::Unexpected { status: 500, .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn device_start_transport_error_when_server_down() {
+        // Bind a port and immediately drop it — the backend client will get
+        // connection refused.
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let url = format!("http://127.0.0.1:{port}");
+        let client = BackendClient::with_timeout(&url, Duration::from_millis(500)).unwrap();
+        let err = client.device_start().await.unwrap_err();
+        assert!(matches!(err, BackendError::Transport(_)), "got {err:?}");
     }
 }
