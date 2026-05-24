@@ -675,4 +675,30 @@ mod tests {
         let err = client.logout("stg_bad").await.unwrap_err();
         assert!(matches!(err, BackendError::Unauthenticated));
     }
+
+    #[tokio::test]
+    async fn logout_bearer_header_value_exact() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/logout/"))
+            .and(header("authorization", "Bearer stg_abc123"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        client.logout("stg_abc123").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn logout_401_bare_no_envelope() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/logout/"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        let err = client.logout("stg_bad").await.unwrap_err();
+        assert!(matches!(err, BackendError::Unauthenticated), "got {err:?}");
+    }
 }
