@@ -157,6 +157,18 @@ impl BackendClient {
         })
     }
 
+    fn json_err(status: u16, e: reqwest::Error) -> BackendError {
+        if e.is_decode() {
+            BackendError::Unexpected {
+                status,
+                message: format!("body decode failed: {e}"),
+                extra: serde_json::Value::Null,
+            }
+        } else {
+            BackendError::Transport(e)
+        }
+    }
+
     async fn map_error(resp: reqwest::Response) -> BackendError {
         let status = resp.status().as_u16();
         let body = resp.text().await.unwrap_or_default();
@@ -192,17 +204,7 @@ impl BackendClient {
             return Err(Self::map_error(resp).await);
         }
         let status_code = status.as_u16();
-        resp.json::<DeviceCode>().await.map_err(|e| {
-            if e.is_decode() {
-                BackendError::Unexpected {
-                    status: status_code,
-                    message: format!("body decode failed: {e}"),
-                    extra: serde_json::Value::Null,
-                }
-            } else {
-                BackendError::Transport(e)
-            }
-        })
+        resp.json::<DeviceCode>().await.map_err(|e| Self::json_err(status_code, e))
     }
 
 
@@ -224,17 +226,7 @@ impl BackendClient {
         let status = resp.status();
         if status.is_success() {
             let status_code = status.as_u16();
-            let parsed: DevicePollSuccess = resp.json().await.map_err(|e| {
-                if e.is_decode() {
-                    BackendError::Unexpected {
-                        status: status_code,
-                        message: format!("body decode failed: {e}"),
-                        extra: serde_json::Value::Null,
-                    }
-                } else {
-                    BackendError::Transport(e)
-                }
-            })?;
+            let parsed: DevicePollSuccess = resp.json().await.map_err(|e| Self::json_err(status_code, e))?;
             return Ok(match parsed {
                 DevicePollSuccess::Pending => DevicePollOutcome::Pending,
                 DevicePollSuccess::Ok {
@@ -263,12 +255,24 @@ impl BackendClient {
         }
         Err(err)
     }
+
+    /// `GET /api/v1/auth/me/` — returns the user currently bound to `token`.
+    pub async fn auth_me(&self, token: &str) -> Result<User, BackendError> {
+        let url = format!("{}/api/v1/auth/me/", self.base_url);
+        let resp = self.http.get(&url).bearer_auth(token).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        let status_code = status.as_u16();
+        resp.json::<User>().await.map_err(|e| Self::json_err(status_code, e))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{header, header_exists, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -561,5 +565,60 @@ mod tests {
             matches!(err, BackendError::Github { .. }),
             "expected Github error, got {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn auth_me_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/me/"))
+            .and(header_exists("authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 42,
+                "github_login": "octocat",
+                "github_user_id": 583231,
+                "display_name": "Octo",
+                "avatar_url": null
+            })))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        let u = client.auth_me("stg_abc").await.unwrap();
+        assert_eq!(u.github_login, "octocat");
+    }
+
+    #[tokio::test]
+    async fn auth_me_401_unauthenticated() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/me/"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "message": "unauthenticated",
+                "extra": {}
+            })))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        let err = client.auth_me("stg_bad").await.unwrap_err();
+        assert!(matches!(err, BackendError::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn auth_me_bearer_header_value_exact() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/me/"))
+            .and(header("authorization", "Bearer stg_abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 1,
+                "github_login": "u",
+                "github_user_id": 1,
+                "display_name": null,
+                "avatar_url": null
+            })))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        client.auth_me("stg_abc123").await.unwrap();
     }
 }
