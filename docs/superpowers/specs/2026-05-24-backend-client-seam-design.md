@@ -342,7 +342,7 @@ Slice is done when **all** hold:
 5. `cargo build` produces no new warnings.
 6. Manual smoke recipe documented in `client/src-tauri/examples/auth_smoke.rs`: assumes `backend/` running on `http://localhost:8000`, runs the full device-flow loop end-to-end. Invoked via `cargo run --example auth_smoke`. Not in CI.
 7. No TODO / FIXME left in merged code.
-8. `lib.rs` does **not** import the module yet — it's compile-checked but unwired (no Tauri commands per scope).
+8. `lib.rs` declares the module as `pub mod backend;` (one-character change from the original `mod backend;`) so the `examples/auth_smoke.rs` binary can reach it via `stage_client_lib::backend::*`. No Tauri commands wired — that scope criterion holds. (Resolved during T11: the example binary needs cross-crate visibility; `pub(crate)` doesn't reach `examples/`.)
 
 ---
 
