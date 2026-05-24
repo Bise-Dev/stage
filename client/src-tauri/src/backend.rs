@@ -264,6 +264,21 @@ impl BackendClient {
         let status_code = status.as_u16();
         resp.json::<User>().await.map_err(|e| Self::json_err(status_code, e))
     }
+
+    /// `POST /api/v1/auth/logout/` — revokes the session server-side.
+    ///
+    /// **Caller responsibility:** clear the local copy of `token` (memory,
+    /// keychain) after this returns `Ok(())`. The SDK is stateless and has
+    /// no local copy to clear; the server sets `revoked_at` on the session
+    /// but the raw token string still lives in caller memory.
+    pub async fn logout(&self, token: &str) -> Result<(), BackendError> {
+        let url = format!("{}/api/v1/auth/logout/", self.base_url);
+        let resp = self.http.post(&url).bearer_auth(token).send().await?;
+        if !resp.status().is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -630,5 +645,34 @@ mod tests {
         let client = BackendClient::new(server.uri()).unwrap();
         let err = client.auth_me("stg_bad").await.unwrap_err();
         assert!(matches!(err, BackendError::Unauthenticated), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn logout_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/logout/"))
+            .and(header_exists("authorization"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        client.logout("stg_abc").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn logout_401_unauthenticated() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/logout/"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "message": "unauthenticated",
+                "extra": {}
+            })))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        let err = client.logout("stg_bad").await.unwrap_err();
+        assert!(matches!(err, BackendError::Unauthenticated));
     }
 }
