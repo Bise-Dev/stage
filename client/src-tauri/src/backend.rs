@@ -79,6 +79,49 @@ pub struct SessionData {
     pub user: User,
 }
 
+/// Caller-facing outcome of one `device_poll` call. The caller's loop picks
+/// the next action based on which variant matches.
+#[derive(Clone)]
+#[allow(dead_code)]
+pub enum DevicePollOutcome {
+    /// GitHub returned `authorization_pending` — keep polling at the same cadence.
+    Pending,
+    /// GitHub returned `slow_down` — caller should add ~5s to its polling interval.
+    SlowDown,
+    /// User completed the device-flow — caller persists the session_token.
+    Authorized(SessionData),
+    /// `device_code` expired (>15 min since `device_start`).
+    Expired,
+    /// User clicked deny on the GitHub authorize page.
+    Denied,
+}
+
+// Manual Debug: redact the Authorized payload so session_token never appears in logs.
+impl std::fmt::Debug for DevicePollOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending => write!(f, "Pending"),
+            Self::SlowDown => write!(f, "SlowDown"),
+            Self::Authorized(_) => write!(f, "Authorized(<redacted>)"),
+            Self::Expired => write!(f, "Expired"),
+            Self::Denied => write!(f, "Denied"),
+        }
+    }
+}
+
+// Internal wire shape: backend returns `{"status": "pending"}` or
+// `{"status": "ok", "session_token": ..., "user": ...}` on 200.
+#[derive(serde::Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+#[allow(dead_code)]
+enum DevicePollSuccess {
+    Pending,
+    Ok {
+        session_token: String,
+        user: User,
+    },
+}
+
 /// SDK handle for the Stage backend. Cheap to clone.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -210,5 +253,32 @@ mod tests {
         assert_eq!(s.session_token, "stg_eyJhbG_opaque");
         assert_eq!(s.user.github_login, "octocat");
         assert_eq!(s.user.id, 42);
+    }
+
+    #[test]
+    fn devicepollsuccess_pending() {
+        let json = serde_json::json!({"status": "pending"});
+        let s: DevicePollSuccess = serde_json::from_value(json).unwrap();
+        assert!(matches!(s, DevicePollSuccess::Pending));
+    }
+
+    #[test]
+    fn devicepollsuccess_ok() {
+        let json = serde_json::json!({
+            "status": "ok",
+            "session_token": "stg_abc",
+            "user": {
+                "id": 1, "github_login": "u", "github_user_id": 1,
+                "display_name": null, "avatar_url": null
+            }
+        });
+        let s: DevicePollSuccess = serde_json::from_value(json).unwrap();
+        match s {
+            DevicePollSuccess::Ok { session_token, user } => {
+                assert_eq!(session_token, "stg_abc");
+                assert_eq!(user.id, 1);
+            }
+            _ => panic!("expected Ok variant"),
+        }
     }
 }
