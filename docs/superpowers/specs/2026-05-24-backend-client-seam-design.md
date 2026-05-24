@@ -36,7 +36,7 @@ Out (deferred to later slices):
 
 ```toml
 [dependencies]
-reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls"] }
 tokio    = { version = "1.52.3", features = ["macros", "rt", "rt-multi-thread", "time"] }
 thiserror = "2.0.18"   # bumped from "1" — minor breaking, affects existing errors.rs
 # unchanged: serde, serde_json, tracing, tracing-subscriber, parking_lot
@@ -47,7 +47,7 @@ wiremock = "0.6.5"
 
 Rationale:
 
-- `reqwest` with `rustls-tls` + no default features avoids OpenSSL pain across macOS / CI.
+- `reqwest` with `rustls` + no default features avoids OpenSSL pain across macOS / CI. (Feature name is `rustls` in reqwest 0.13+; was `rustls-tls` in 0.11/0.12.)
 - `tokio` features narrowed to what's actually used; Tauri pulls in tokio with broader features and Cargo will unify.
 - `thiserror` 2 is mostly compatible with the basic `#[derive]` + `#[error("...")]` usage in `errors.rs`. Verified at implementation time.
 - `wiremock` is dev-only.

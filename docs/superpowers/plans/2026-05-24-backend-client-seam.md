@@ -94,7 +94,7 @@ thiserror = "2.0.18"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 parking_lot = "0.12"
-reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls"] }
 tokio = { version = "1.52.3", features = ["macros", "rt", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
