@@ -709,17 +709,15 @@ mod tests {
             .and(path("/api/v1/auth/device/start/"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({
-                        "device_code": "x", "user_code": "x",
-                        "verification_uri": "x", "interval": 5, "expires_in": 900
-                    }))
-                    .set_delay(Duration::from_millis(500)),
+                    .set_delay(Duration::from_millis(2_000)),
             )
             .mount(&server)
             .await;
 
         let client =
             BackendClient::with_timeout(server.uri(), Duration::from_millis(50)).unwrap();
+        // Timeout fires before any response byte arrives; reqwest propagates it
+        // via `?` → `BackendError::Transport`. Neither map_error nor json_err runs.
         let err = client.device_start().await.unwrap_err();
         assert!(matches!(err, BackendError::Transport(_)), "got {err:?}");
     }
