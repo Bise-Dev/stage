@@ -94,8 +94,10 @@ mod tests {
 
     #[test]
     fn new_accepts_str_and_string() {
-        BackendClient::new("http://localhost:8000").unwrap();
-        BackendClient::new(String::from("http://localhost:8000")).unwrap();
+        let from_str = BackendClient::new("http://localhost:8000").unwrap();
+        let from_string = BackendClient::new(String::from("http://localhost:8000")).unwrap();
+        assert_eq!(from_str.base_url, "http://localhost:8000");
+        assert_eq!(from_string.base_url, from_str.base_url);
     }
 
     #[test]
