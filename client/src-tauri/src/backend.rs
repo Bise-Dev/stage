@@ -113,7 +113,6 @@ impl std::fmt::Debug for DevicePollOutcome {
 // `{"status": "ok", "session_token": ..., "user": ...}` on 200.
 #[derive(serde::Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
-#[allow(dead_code)]
 enum DevicePollSuccess {
     Pending,
     Ok {
@@ -204,6 +203,65 @@ impl BackendClient {
                 BackendError::Transport(e)
             }
         })
+    }
+
+
+    /// `POST /api/v1/auth/device/poll/` — one poll attempt.
+    ///
+    /// The caller drives the loop. Returns a `DevicePollOutcome` describing
+    /// the terminal-or-non-terminal state of the device flow.
+    pub async fn device_poll(
+        &self,
+        device_code: &str,
+    ) -> Result<DevicePollOutcome, BackendError> {
+        let url = format!("{}/api/v1/auth/device/poll/", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .json(&serde_json::json!({ "device_code": device_code }))
+            .send()
+            .await?;
+        let status = resp.status();
+        if status.is_success() {
+            let status_code = status.as_u16();
+            let parsed: DevicePollSuccess = resp.json().await.map_err(|e| {
+                if e.is_decode() {
+                    BackendError::Unexpected {
+                        status: status_code,
+                        message: format!("body decode failed: {e}"),
+                        extra: serde_json::Value::Null,
+                    }
+                } else {
+                    BackendError::Transport(e)
+                }
+            })?;
+            return Ok(match parsed {
+                DevicePollSuccess::Pending => DevicePollOutcome::Pending,
+                DevicePollSuccess::Ok {
+                    session_token,
+                    user,
+                } => DevicePollOutcome::Authorized(SessionData {
+                    session_token,
+                    user,
+                }),
+            });
+        }
+        // Non-2xx. Interpret the envelope. github_error with a known device-flow
+        // slug maps to its DevicePollOutcome variant; otherwise propagate as
+        // BackendError.
+        let err = Self::map_error(resp).await;
+        if let BackendError::Github { ref extra, .. } = err {
+            if let Some(slug) = extra.get("error").and_then(|v| v.as_str()) {
+                match slug {
+                    "authorization_pending" => return Ok(DevicePollOutcome::Pending),
+                    "slow_down" => return Ok(DevicePollOutcome::SlowDown),
+                    "access_denied" => return Ok(DevicePollOutcome::Denied),
+                    "expired_token" => return Ok(DevicePollOutcome::Expired),
+                    _ => {}
+                }
+            }
+        }
+        Err(err)
     }
 }
 
@@ -400,5 +458,96 @@ mod tests {
         let client = BackendClient::with_timeout(&url, Duration::from_millis(500)).unwrap();
         let err = client.device_start().await.unwrap_err();
         assert!(matches!(err, BackendError::Transport(_)), "got {err:?}");
+    }
+
+    async fn arrange_poll_pending(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/device/poll/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "pending"
+            })))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn device_poll_pending() {
+        let server = MockServer::start().await;
+        arrange_poll_pending(&server).await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        let out = client.device_poll("dc").await.unwrap();
+        assert!(matches!(out, DevicePollOutcome::Pending));
+    }
+
+    #[tokio::test]
+    async fn device_poll_authorized() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/device/poll/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "session_token": "stg_abc",
+                "user": {
+                    "id": 42,
+                    "github_login": "octocat",
+                    "github_user_id": 583231,
+                    "display_name": null,
+                    "avatar_url": null
+                }
+            })))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        let out = client.device_poll("dc").await.unwrap();
+        match out {
+            DevicePollOutcome::Authorized(s) => {
+                assert_eq!(s.session_token, "stg_abc");
+                assert_eq!(s.user.github_login, "octocat");
+            }
+            other => panic!("expected Authorized, got {other:?}"),
+        }
+    }
+
+    async fn arrange_poll_github_error(server: &MockServer, slug: &str) {
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/device/poll/"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "message": "github_error",
+                "extra": {"error": slug}
+            })))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn device_poll_authorization_pending_maps_to_pending() {
+        let server = MockServer::start().await;
+        arrange_poll_github_error(&server, "authorization_pending").await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::Pending));
+    }
+
+    #[tokio::test]
+    async fn device_poll_slow_down() {
+        let server = MockServer::start().await;
+        arrange_poll_github_error(&server, "slow_down").await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::SlowDown));
+    }
+
+    #[tokio::test]
+    async fn device_poll_expired() {
+        let server = MockServer::start().await;
+        arrange_poll_github_error(&server, "expired_token").await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::Expired));
+    }
+
+    #[tokio::test]
+    async fn device_poll_denied() {
+        let server = MockServer::start().await;
+        arrange_poll_github_error(&server, "access_denied").await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::Denied));
     }
 }
