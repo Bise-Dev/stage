@@ -21,9 +21,6 @@ pub enum BackendError {
     #[error("transport failure: {0}")]
     Transport(#[from] reqwest::Error),
 
-    #[error("response decode failed: {0}")]
-    Decode(serde_json::Error),
-
     #[error("unauthenticated (401)")]
     Unauthenticated,
 
@@ -620,5 +617,18 @@ mod tests {
             .await;
         let client = BackendClient::new(server.uri()).unwrap();
         client.auth_me("stg_abc123").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_me_401_bare_no_envelope() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/me/"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        let err = client.auth_me("stg_bad").await.unwrap_err();
+        assert!(matches!(err, BackendError::Unauthenticated), "got {err:?}");
     }
 }
