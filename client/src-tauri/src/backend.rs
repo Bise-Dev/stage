@@ -48,7 +48,6 @@ pub enum BackendError {
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct BackendClient {
-    #[allow(dead_code)]
     base_url: String, // validated + trailing-slash-trimmed via `reqwest::Url::parse`
     #[allow(dead_code)]
     http: reqwest::Client,
@@ -91,5 +90,25 @@ mod tests {
     fn new_rejects_malformed_url() {
         let err = BackendClient::new("not a url").unwrap_err();
         assert!(matches!(err, BackendError::InvalidBaseUrl(_)));
+    }
+
+    #[test]
+    fn new_accepts_str_and_string() {
+        BackendClient::new("http://localhost:8000").unwrap();
+        BackendClient::new(String::from("http://localhost:8000")).unwrap();
+    }
+
+    #[test]
+    fn new_trims_trailing_slash() {
+        let c1 = BackendClient::new("http://localhost:8000").unwrap();
+        let c2 = BackendClient::new("http://localhost:8000/").unwrap();
+        assert_eq!(c1.base_url, c2.base_url);
+        assert_eq!(c1.base_url, "http://localhost:8000");
+    }
+
+    #[test]
+    fn with_timeout_constructs() {
+        let _ = BackendClient::with_timeout("http://localhost:8000", Duration::from_millis(500))
+            .unwrap();
     }
 }
