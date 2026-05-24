@@ -550,4 +550,16 @@ mod tests {
         let client = BackendClient::new(server.uri()).unwrap();
         assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::Denied));
     }
+
+    #[tokio::test]
+    async fn device_poll_unknown_slug_propagates_as_backend_error() {
+        let server = MockServer::start().await;
+        arrange_poll_github_error(&server, "nonsense_error").await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        let err = client.device_poll("dc").await.unwrap_err();
+        assert!(
+            matches!(err, BackendError::Github { .. }),
+            "expected Github error, got {err:?}"
+        );
+    }
 }
