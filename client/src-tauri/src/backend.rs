@@ -159,7 +159,9 @@ mod tests {
             "expires_in": 900
         });
         let dc: DeviceCode = serde_json::from_value(json).unwrap();
+        assert_eq!(dc.device_code, "abc123");
         assert_eq!(dc.user_code, "ABCD-1234");
+        assert_eq!(dc.verification_uri, "https://github.com/login/device");
         assert_eq!(dc.interval, 5);
         assert_eq!(dc.expires_in, 900);
     }
@@ -207,5 +209,6 @@ mod tests {
         let s: SessionData = serde_json::from_value(json).unwrap();
         assert_eq!(s.session_token, "stg_eyJhbG_opaque");
         assert_eq!(s.user.github_login, "octocat");
+        assert_eq!(s.user.id, 42);
     }
 }
