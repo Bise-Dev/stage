@@ -86,7 +86,7 @@ pub struct SessionData {
 pub enum DevicePollOutcome {
     /// GitHub returned `authorization_pending` — keep polling at the same cadence.
     Pending,
-    /// GitHub returned `slow_down` — caller should add ~5s to its polling interval.
+    /// GitHub returned `slow_down` — caller must add 5 s to its polling interval (RFC 8628 § 3.5).
     SlowDown,
     /// User completed the device-flow — caller persists the session_token.
     Authorized(SessionData),
@@ -277,6 +277,7 @@ mod tests {
             DevicePollSuccess::Ok { session_token, user } => {
                 assert_eq!(session_token, "stg_abc");
                 assert_eq!(user.id, 1);
+                assert_eq!(user.github_login, "u");
             }
             _ => panic!("expected Ok variant"),
         }
