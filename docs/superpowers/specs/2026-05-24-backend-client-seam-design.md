@@ -218,9 +218,6 @@ pub enum BackendError {
     #[error("transport failure: {0}")]
     Transport(#[from] reqwest::Error),
 
-    #[error("response decode failed: {0}")]
-    Decode(serde_json::Error),
-
     #[error("unauthenticated (401)")]
     Unauthenticated,
 
@@ -248,7 +245,7 @@ Every non-2xx response goes through one matcher reading the `{"message": "<slug>
 | 4xx/5xx | any other slug | `Unexpected { status, message, extra }` |
 | 4xx/5xx | envelope missing or unparseable | `Unexpected { status, message: "", extra: Null }` |
 
-`Transport(reqwest::Error)` catches: DNS failure, connect refused, TLS handshake fail, body read timeout, etc. `Decode(serde_json::Error)` catches: response body not valid JSON or not matching the expected struct shape on a 2xx response.
+`Transport(reqwest::Error)` catches: DNS failure, connect refused, TLS handshake fail, body read timeout, etc. JSON decode failures on a 2xx response surface as `Unexpected { status: 200, message: "body decode failed: ...", extra: Null }` — reqwest doesn't expose its inner `serde_json::Error` directly, so we route through `Unexpected` rather than introduce a separate `Decode` variant we can't populate cleanly. (Earlier draft had a `Decode(serde_json::Error)` variant; dropped during T8 review when the implementation reality became clear.)
 
 ### Deliberately NOT split
 
