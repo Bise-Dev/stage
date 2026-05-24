@@ -47,7 +47,7 @@ wiremock = "0.6.5"
 
 Rationale:
 
-- `reqwest` with `rustls` + no default features avoids OpenSSL pain across macOS / CI. (Feature name is `rustls` in reqwest 0.13+; was `rustls-tls` in 0.11/0.12.)
+- `reqwest` with `rustls` + no default features avoids OpenSSL pain across macOS / CI. (Feature name is `rustls` in reqwest 0.13+; was `rustls-tls` in 0.11/0.12.) **Caveat:** reqwest 0.13 + `rustls` selects rustls 0.23, whose default crypto provider is `aws-lc-rs`. `aws-lc-sys` ships pre-built binaries for macOS (arm64 + x86_64) so no native-toolchain step is needed there, but other targets (Linux musl, BSD) may require `cmake` + a C compiler at build time. Accepted trade-off — we get out-of-the-box rustls without OpenSSL on the desktop client's primary target (macOS), at the cost of a `cmake` requirement on tier-2 CI runners. Switching to the `ring` provider requires `features = ["json", "rustls-no-provider"]` + a manual `rustls::crypto::ring::default_provider().install_default()` call at startup — heavier; not worth it for the slice scope.
 - `tokio` features narrowed to what's actually used; Tauri pulls in tokio with broader features and Cargo will unify.
 - `thiserror` 2 is mostly compatible with the basic `#[derive]` + `#[error("...")]` usage in `errors.rs`. Verified at implementation time.
 - `wiremock` is dev-only.
