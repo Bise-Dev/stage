@@ -171,7 +171,7 @@ impl BackendClient {
             let e = v.get("extra").cloned().unwrap_or(serde_json::Value::Null);
             Some((m, e))
         });
-        let (message, extra) = parsed.unwrap_or((String::new(), serde_json::Value::Null));
+        let (message, extra) = parsed.unwrap_or_else(|| (body.clone(), serde_json::Value::Null));
         match (status, message.as_str()) {
             (401, _) => BackendError::Unauthenticated,
             (400, "validation_error") => BackendError::Validation { extra },
@@ -188,10 +188,22 @@ impl BackendClient {
     pub async fn device_start(&self) -> Result<DeviceCode, BackendError> {
         let url = format!("{}/api/v1/auth/device/start/", self.base_url);
         let resp = self.http.post(&url).send().await?;
-        if !resp.status().is_success() {
+        let status = resp.status();
+        if !status.is_success() {
             return Err(Self::map_error(resp).await);
         }
-        resp.json::<DeviceCode>().await.map_err(BackendError::from)
+        let status_code = status.as_u16();
+        resp.json::<DeviceCode>().await.map_err(|e| {
+            if e.is_decode() {
+                BackendError::Unexpected {
+                    status: status_code,
+                    message: format!("body decode failed: {e}"),
+                    extra: serde_json::Value::Null,
+                }
+            } else {
+                BackendError::Transport(e)
+            }
+        })
     }
 }
 
@@ -352,8 +364,26 @@ mod tests {
 
         let client = BackendClient::new(server.uri()).unwrap();
         let err = client.device_start().await.unwrap_err();
+        match &err {
+            BackendError::Unexpected { status: 500, message, .. } => {
+                assert_eq!(message, "internal err");
+            }
+            _ => panic!("got {err:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn device_start_200_with_bad_body_maps_to_unexpected() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/device/start/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json at all"))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        let err = client.device_start().await.unwrap_err();
         assert!(
-            matches!(&err, BackendError::Unexpected { status: 500, .. }),
+            matches!(&err, BackendError::Unexpected { status: 200, .. }),
             "got {err:?}"
         );
     }
