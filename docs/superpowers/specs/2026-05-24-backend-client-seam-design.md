@@ -405,3 +405,4 @@ Same list as § 1 "Out", restated for emphasis. Each is its own slice on the MVP
 - `client/STACK.md` — client stack choices (single Cargo crate, no workspace).
 - `docs/ROADMAP.md` — phase 2a/2b OAuth migration path (later slices).
 - `docs/adr/0005-local-client-sdk-hand-rolls-device-flow.md` — captures the survey + topology rationale for not importing `oauth2-rs` (or any OAuth crate). Created during the grill-with-docs session that produced this spec.
+- `docs/adr/0006-local-client-sdk-stateless-caller-owned-loop.md` — canonicalises the stateless-token + caller-owned-poll-loop choices that this spec describes inline in § 2 / § 3. Created during the post-implementation grill 2026-05-25.
