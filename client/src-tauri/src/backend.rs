@@ -65,8 +65,11 @@ pub struct User {
 ///
 /// `session_token` is the raw `stg_…` opaque Bearer string. **Do not log it.**
 /// `SessionData` deliberately does NOT derive `Debug` to block `{:?}` formatting.
+/// `SessionData` is intentionally move-only (no `Clone`): callers destructure once
+/// into `session_token: String` + `user: User` and own each piece — one heap copy
+/// of the token at a time.
 /// Per `docs/design.md` § 7 the token is long-lived until user-initiated logout.
-#[derive(Clone, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 pub struct SessionData {
     pub session_token: String,
     pub user: User,
@@ -74,7 +77,6 @@ pub struct SessionData {
 
 /// Caller-facing outcome of one `device_poll` call. The caller's loop picks
 /// the next action based on which variant matches.
-#[derive(Clone)]
 pub enum DevicePollOutcome {
     /// GitHub returned `authorization_pending` — keep polling at the same cadence.
     Pending,

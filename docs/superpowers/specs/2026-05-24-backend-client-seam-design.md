@@ -121,6 +121,8 @@ The internal `reqwest::Client` is built with:
 
 `SessionData` deliberately does **not** derive `Debug` — the raw token must not leak into logs. The `session_token: String` field carries a doc-comment forbidding logging; no `secrecy` wrapper at this slice (see § 9 open-question 4 for the resolution + future revisit trigger).
 
+`SessionData` and `DevicePollOutcome` are also intentionally move-only — **no `Clone` derive** on either. Calling `.clone()` on a token-carrying value would duplicate the heap-allocated `session_token` into a second buffer, and the no-`Debug` discipline only protects the original variable name, not its copies. Callers destructure `Authorized(SessionData { session_token, user })` once at the matchsite and own each piece separately — one heap copy of the token at a time. `User` and `DeviceCode` keep `Clone` because they carry no secret. Resolved post-impl grill 2026-05-25.
+
 `logout(token)` returns `Ok(())` on success. **Caller is responsible for clearing its own local copy of the token after `logout` returns** — the SDK is stateless, so it has no copy to clear; the server-side `revoked_at` flag is set, but the raw string still lives in caller memory / keychain until the caller zeros / removes it. Doc-comment on `logout` makes this explicit.
 
 ### Stateless token handling
