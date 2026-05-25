@@ -484,3 +484,22 @@ These stay local to `.env`; never commit them.
 ## Open items at design close
 
 None. All architectural axes resolved during brainstorm. Implementation plan can proceed.
+
+## Verification (executed 2026-05-25)
+
+End-to-end manual walkthrough against the Stage backend (localhost:8000) + real github OAuth App + admin PAT. Logged-in github user: `datYori`.
+
+| Step | Result | Notes |
+|---|---|---|
+| 1 — SignIn renders | PASS | |
+| 2 — Click → user code shown | PASS | First attempt produced an `incorrect_device_code` on github's side; second attempt clean. |
+| 3 — Browser auto-opens | PASS | `tauri-plugin-opener` works as expected. |
+| 4 — github.com authorize succeeds | PASS | |
+| 5 — Transition to OpenRepository | PASS | After 7 pending polls (~35 s at default 5 s interval). |
+| 6 — Open local repo | PASS | |
+| 7 — PR list populates | PASS | `GET /api/v1/github/prs/?role=author` returned 4322 bytes. `useEffect` double-fired (React 19 dev StrictMode); `cancelled` flag prevents the late update from corrupting state. |
+| 8 — PR click opens browser | PASS | |
+| 9 — Logout → SignIn | PASS | `POST /api/v1/auth/logout/` returned 204. |
+| 10 — Restart starts at SignIn | PASS | Memory-only token confirmed. |
+
+End-to-end demo target reached.
