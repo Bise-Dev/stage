@@ -116,7 +116,7 @@ enum DevicePollSuccess {
 }
 
 /// SDK handle for the Stage backend. Cheap to clone.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct BackendClient {
     base_url: String, // validated + trailing-slash-trimmed via `reqwest::Url::parse`
     http: reqwest::Client,
@@ -309,7 +309,9 @@ mod tests {
 
     #[test]
     fn new_rejects_malformed_url() {
-        let err = BackendClient::new("not a url").unwrap_err();
+        let Err(err) = BackendClient::new("not a url") else {
+            panic!("expected Err but got Ok");
+        };
         assert!(matches!(err, BackendError::InvalidBaseUrl(_)));
     }
 
