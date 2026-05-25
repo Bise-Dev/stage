@@ -7,6 +7,8 @@ pub enum Error {
     #[error("transport failure: {0}")]
     Transport(#[from] reqwest::Error),
 
+    /// 401 from backend. Any envelope payload (message, extra) is intentionally
+    /// discarded — re-auth is the only valid caller response.
     #[error("unauthenticated (401)")]
     Unauthenticated,
 
@@ -15,13 +17,13 @@ pub enum Error {
 
     #[error("github error (status {status}): {extra}")]
     Github {
-        status: u16,
+        status: reqwest::StatusCode,
         extra: serde_json::Value,
     },
 
     #[error("unexpected response (status {status}): {message}")]
     Unexpected {
-        status: u16,
+        status: reqwest::StatusCode,
         message: String,
         extra: serde_json::Value,
     },

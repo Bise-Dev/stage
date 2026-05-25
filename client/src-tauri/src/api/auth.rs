@@ -5,17 +5,16 @@ use super::types::{DeviceCode, DevicePollOutcome, DevicePollSuccess, SessionData
 impl Client {
     /// `POST /api/v1/auth/device/start/` — kicks off the device flow.
     pub async fn device_start(&self) -> Result<DeviceCode, Error> {
-        let url = format!("{}/api/v1/auth/device/start/", self.base_url);
+        let url = self.base_url.join("api/v1/auth/device/start/").unwrap();
         tracing::debug!(url = %url, "POST device/start");
-        let resp = self.http.post(&url).send().await?;
+        let resp = self.http.post(url).send().await?;
         let status = resp.status();
         if !status.is_success() {
             let err = Self::map_error(resp).await;
             tracing::warn!(err = %err, "device_start non-2xx");
             return Err(err);
         }
-        let status_code = status.as_u16();
-        resp.json::<DeviceCode>().await.map_err(|e| Self::json_err(status_code, e))
+        resp.json::<DeviceCode>().await.map_err(|e| Self::json_err(status, e))
     }
 
     /// `POST /api/v1/auth/device/poll/` — one poll attempt.
@@ -26,18 +25,17 @@ impl Client {
         &self,
         device_code: &str,
     ) -> Result<DevicePollOutcome, Error> {
-        let url = format!("{}/api/v1/auth/device/poll/", self.base_url);
+        let url = self.base_url.join("api/v1/auth/device/poll/").unwrap();
         tracing::debug!(url = %url, "POST device/poll");
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             .json(&serde_json::json!({ "device_code": device_code }))
             .send()
             .await?;
         let status = resp.status();
         if status.is_success() {
-            let status_code = status.as_u16();
-            let parsed: DevicePollSuccess = resp.json().await.map_err(|e| Self::json_err(status_code, e))?;
+            let parsed: DevicePollSuccess = resp.json().await.map_err(|e| Self::json_err(status, e))?;
             let outcome = match parsed {
                 DevicePollSuccess::Pending => DevicePollOutcome::Pending,
                 DevicePollSuccess::Ok {
@@ -80,17 +78,16 @@ impl Client {
 
     /// `GET /api/v1/auth/me/` — returns the user currently bound to `token`.
     pub async fn auth_me(&self, token: &str) -> Result<User, Error> {
-        let url = format!("{}/api/v1/auth/me/", self.base_url);
+        let url = self.base_url.join("api/v1/auth/me/").unwrap();
         tracing::debug!(url = %url, "GET auth/me");
-        let resp = self.http.get(&url).bearer_auth(token).send().await?;
+        let resp = self.http.get(url).bearer_auth(token).send().await?;
         let status = resp.status();
         if !status.is_success() {
             let err = Self::map_error(resp).await;
             tracing::warn!(err = %err, "auth_me non-2xx");
             return Err(err);
         }
-        let status_code = status.as_u16();
-        resp.json::<User>().await.map_err(|e| Self::json_err(status_code, e))
+        resp.json::<User>().await.map_err(|e| Self::json_err(status, e))
     }
 
     /// `POST /api/v1/auth/logout/` — revokes the session server-side.
@@ -100,9 +97,9 @@ impl Client {
     /// no local copy to clear; the server sets `revoked_at` on the session
     /// but the raw token string still lives in caller memory.
     pub async fn logout(&self, token: &str) -> Result<(), Error> {
-        let url = format!("{}/api/v1/auth/logout/", self.base_url);
+        let url = self.base_url.join("api/v1/auth/logout/").unwrap();
         tracing::debug!(url = %url, "POST auth/logout");
-        let resp = self.http.post(&url).bearer_auth(token).send().await?;
+        let resp = self.http.post(url).bearer_auth(token).send().await?;
         if !resp.status().is_success() {
             let err = Self::map_error(resp).await;
             tracing::warn!(err = %err, "logout non-2xx");
@@ -177,7 +174,7 @@ mod tests {
         let client = Client::new(server.uri()).unwrap();
         let err = client.device_start().await.unwrap_err();
         match &err {
-            Error::Unexpected { status: 500, message, .. } => {
+            Error::Unexpected { status, message, .. } if status.as_u16() == 500 => {
                 assert_eq!(message, "internal err");
             }
             _ => panic!("got {err:?}"),
@@ -195,7 +192,7 @@ mod tests {
         let client = Client::new(server.uri()).unwrap();
         let err = client.device_start().await.unwrap_err();
         assert!(
-            matches!(&err, Error::Unexpected { status: 200, .. }),
+            matches!(&err, Error::Unexpected { status, .. } if status.as_u16() == 200),
             "got {err:?}"
         );
     }
@@ -307,7 +304,7 @@ mod tests {
         let client = Client::new(server.uri()).unwrap();
         let err = client.device_poll("dc").await.unwrap_err();
         assert!(
-            matches!(&err, Error::Unexpected { status: 200, .. }),
+            matches!(&err, Error::Unexpected { status, .. } if status.as_u16() == 200),
             "got {err:?}"
         );
     }
@@ -391,7 +388,7 @@ mod tests {
         let client = Client::new(server.uri()).unwrap();
         let err = client.auth_me("stg_abc").await.unwrap_err();
         assert!(
-            matches!(&err, Error::Unexpected { status: 200, .. }),
+            matches!(&err, Error::Unexpected { status, .. } if status.as_u16() == 200),
             "got {err:?}"
         );
     }
@@ -449,6 +446,102 @@ mod tests {
         let client = Client::new(server.uri()).unwrap();
         let err = client.logout("stg_bad").await.unwrap_err();
         assert!(matches!(err, Error::Unauthenticated), "got {err:?}");
+    }
+
+    // #7 — Validation branch in map_error
+    #[tokio::test]
+    async fn auth_me_400_validation_error_maps_to_validation() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/me/"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "message": "validation_error",
+                "extra": {"field": "x"}
+            })))
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let err = client.auth_me("stg_tok").await.unwrap_err();
+        match err {
+            Error::Validation { extra } => {
+                assert_eq!(extra.get("field").and_then(|v| v.as_str()), Some("x"));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    // #8 — valid JSON with no `message` key falls back to raw body
+    #[tokio::test]
+    async fn device_start_400_no_message_key_falls_back_to_raw_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/device/start/"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "foo": "bar"
+            })))
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let err = client.device_start().await.unwrap_err();
+        match &err {
+            Error::Unexpected { message, extra, .. } => {
+                assert!(message.contains("foo"), "expected raw body, got {message:?}");
+                assert!(extra.is_null());
+            }
+            other => panic!("expected Unexpected, got {other:?}"),
+        }
+    }
+
+    // #9a — github_error envelope with missing `error` key
+    #[tokio::test]
+    async fn device_poll_github_error_missing_error_key_propagates() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/device/poll/"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "message": "github_error",
+                "extra": {}
+            })))
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let err = client.device_poll("dc").await.unwrap_err();
+        match err {
+            Error::Github { extra, .. } => {
+                assert!(extra.is_object());
+                assert!(extra.as_object().unwrap().is_empty());
+            }
+            other => panic!("expected Github, got {other:?}"),
+        }
+    }
+
+    // #9b — github_error envelope where `error` is non-string (e.g. integer)
+    #[tokio::test]
+    async fn device_poll_github_error_non_string_slug_propagates() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/device/poll/"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "message": "github_error",
+                "extra": {"error": 42}
+            })))
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let err = client.device_poll("dc").await.unwrap_err();
+        assert!(matches!(err, Error::Github { .. }), "expected Github, got {err:?}");
+    }
+
+    // #10 — device_poll issues exactly one HTTP request per call (ADR-0006 pin)
+    #[tokio::test]
+    async fn device_poll_slow_down_issues_exactly_one_request() {
+        let server = MockServer::start().await;
+        arrange_poll_github_error(&server, "slow_down").await;
+        let client = Client::new(server.uri()).unwrap();
+        let out = client.device_poll("dc").await.unwrap();
+        assert!(matches!(out, DevicePollOutcome::SlowDown));
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1, "expected exactly 1 request, got {}", received.len());
     }
 
     #[tokio::test]

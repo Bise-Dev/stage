@@ -26,7 +26,7 @@ pub struct User {
 /// `SessionData` is intentionally move-only (no `Clone`): callers destructure once
 /// into `session_token: String` + `user: User` and own each piece — one heap copy
 /// of the token at a time.
-/// Per `docs/design.md` § 7 the token is long-lived until user-initiated logout.
+/// Per `docs/design.md` (see "Authentication" section) the token is long-lived until user-initiated logout.
 #[derive(serde::Deserialize)]
 pub struct SessionData {
     pub session_token: String,
@@ -35,6 +35,7 @@ pub struct SessionData {
 
 /// Caller-facing outcome of one `device_poll` call. The caller's loop picks
 /// the next action based on which variant matches.
+#[non_exhaustive]
 pub enum DevicePollOutcome {
     /// GitHub returned `authorization_pending` — keep polling at the same cadence.
     Pending,
@@ -42,7 +43,7 @@ pub enum DevicePollOutcome {
     SlowDown,
     /// User completed the device-flow — caller persists the session_token.
     Authorized(SessionData),
-    /// `device_code` expired (>15 min since `device_start`).
+    /// `device_code` expired — the deadline set by `device_start`'s `expires_in` has passed.
     Expired,
     /// User clicked deny on the GitHub authorize page.
     Denied,
