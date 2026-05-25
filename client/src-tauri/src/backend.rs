@@ -600,6 +600,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn device_poll_200_with_bad_body_maps_to_unexpected() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/device/poll/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json at all"))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        let err = client.device_poll("dc").await.unwrap_err();
+        assert!(
+            matches!(&err, BackendError::Unexpected { status: 200, .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn auth_me_ok() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -665,6 +681,22 @@ mod tests {
         let client = BackendClient::new(server.uri()).unwrap();
         let err = client.auth_me("stg_bad").await.unwrap_err();
         assert!(matches!(err, BackendError::Unauthenticated), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn auth_me_200_with_bad_body_maps_to_unexpected() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/me/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json at all"))
+            .mount(&server)
+            .await;
+        let client = BackendClient::new(server.uri()).unwrap();
+        let err = client.auth_me("stg_abc").await.unwrap_err();
+        assert!(
+            matches!(&err, BackendError::Unexpected { status: 200, .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]

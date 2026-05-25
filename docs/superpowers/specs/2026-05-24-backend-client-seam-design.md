@@ -265,7 +265,7 @@ No variant for `pr_already_open`, `workspace_frozen`, `etag_mismatch`, `forbidde
 
 **Layer B — HTTP integration tests.** `wiremock` spins up an in-process HTTP server on a random port. Each test arranges a mock response, instantiates `BackendClient` pointed at the mock server's URL, calls one method, asserts on the typed result and on the wire headers.
 
-### Test matrix (as implemented — 30 cases total)
+### Test matrix (as implemented — 32 cases total)
 
 | Group | Cases (count) |
 |---|---|
@@ -273,8 +273,8 @@ No variant for `pr_already_open`, `workspace_frozen`, `etag_mismatch`, `forbidde
 | `BackendClient::new` | accepts `&str` + `String` (asserts `base_url` post-trim); rejects malformed URL → `InvalidBaseUrl`; trailing slash tolerated (`http://x:8000` ≡ `http://x:8000/`) — **3 cases** |
 | `BackendClient::with_timeout` | constructs OK; custom timeout (50 ms vs 2 s server delay) honored → `Transport` — **2 cases** |
 | `device_start` | 200 happy path; 500 with bare body → `Unexpected { status: 500, message: "internal err" }`; 200 with malformed body → `Unexpected { status: 200, … }` (distinguishes decode from transport); transport error when server down → `Transport` — **4 cases** |
-| `device_poll` | 200 pending → `Pending`; 200 ok → `Authorized(_)`; 4xx `expired_token` → `Expired`; 4xx `slow_down` → `SlowDown`; 4xx `access_denied` → `Denied`; 4xx `authorization_pending` → `Pending`; 4xx unknown slug → `BackendError::Github` (anchor for fall-through) — **7 cases** |
-| `auth_me` | 200 → populated `User`; 401 with envelope → `Unauthenticated`; 401 bare body (no envelope) → `Unauthenticated`; `Authorization: Bearer <token>` header asserted exact on wire — **4 cases** |
+| `device_poll` | 200 pending → `Pending`; 200 ok → `Authorized(_)`; 4xx `expired_token` → `Expired`; 4xx `slow_down` → `SlowDown`; 4xx `access_denied` → `Denied`; 4xx `authorization_pending` → `Pending`; 4xx unknown slug → `BackendError::Github` (anchor for fall-through); 200 with malformed body → `Unexpected { status: 200, … }` — **8 cases** |
+| `auth_me` | 200 → populated `User`; 401 with envelope → `Unauthenticated`; 401 bare body (no envelope) → `Unauthenticated`; `Authorization: Bearer <token>` header asserted exact on wire; 200 with malformed body → `Unexpected { status: 200, … }` — **5 cases** |
 | `logout` | 204 → `Ok(())`; 401 with envelope → `Unauthenticated`; 401 bare body → `Unauthenticated`; Bearer header asserted exact — **4 cases** |
 
 Authenticated calls (`auth_me`, `logout`) **assert that the Bearer header was actually sent** — protects against silent-failure where auth is forgotten.
@@ -343,7 +343,7 @@ Slice is done when **all** hold:
 1. `client/src-tauri/src/backend.rs` contains `BackendClient`, `DeviceCode`, `User`, `SessionData`, `DevicePollOutcome`, `BackendError` — exported public.
 2. `cargo check` passes from `client/src-tauri/`.
 3. `cargo clippy --all-targets -- -D warnings` passes.
-4. `cargo test --lib backend::` passes with the test cases from § 5 (30 cases as implemented).
+4. `cargo test --lib backend::` passes with the test cases from § 5 (32 cases as implemented).
 5. `cargo build` produces no new warnings.
 6. Manual smoke recipe documented in `client/src-tauri/examples/auth_smoke.rs`: assumes `backend/` running on `http://localhost:8000`, runs the full device-flow loop end-to-end. Invoked via `cargo run --example auth_smoke`. Not in CI.
 7. No TODO / FIXME left in merged code.
