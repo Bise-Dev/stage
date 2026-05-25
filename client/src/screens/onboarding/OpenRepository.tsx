@@ -27,10 +27,9 @@ function slugFromRemote(url: string | null): string | null {
 
 interface Props {
   onOpened: () => void;
-  onBack?: () => void;
 }
 
-export function OpenRepository({ onOpened, onBack }: Props) {
+export function OpenRepository({ onOpened }: Props) {
   const [recents, setRecents] = useState<RecentRepo[]>([]);
   const [summaries, setSummaries] = useState<Record<string, SummaryState>>({});
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -287,27 +286,6 @@ export function OpenRepository({ onOpened, onBack }: Props) {
           }}
         >
           <div className="flex-1" />
-          {onBack && (
-            <button
-              type="button"
-              onClick={onBack}
-              className="cursor-default"
-              style={{
-                height: 24,
-                padding: '0 10px',
-                borderRadius: 'var(--r-sm)',
-                background: '#fff',
-                border: '1px solid rgba(0,0,0,0.12)',
-                boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
-                color: 'var(--gray-800)',
-                fontSize: 12.5,
-                fontWeight: 500,
-                fontFamily: 'inherit',
-              }}
-            >
-              Back
-            </button>
-          )}
           <button
             type="button"
             onClick={onConfirm}
