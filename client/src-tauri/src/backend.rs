@@ -188,10 +188,13 @@ impl BackendClient {
     /// `POST /api/v1/auth/device/start/` — kicks off the device flow.
     pub async fn device_start(&self) -> Result<DeviceCode, BackendError> {
         let url = format!("{}/api/v1/auth/device/start/", self.base_url);
+        tracing::debug!(url = %url, "POST device/start");
         let resp = self.http.post(&url).send().await?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(Self::map_error(resp).await);
+            let err = Self::map_error(resp).await;
+            tracing::warn!(err = %err, "device_start non-2xx");
+            return Err(err);
         }
         let status_code = status.as_u16();
         resp.json::<DeviceCode>().await.map_err(|e| Self::json_err(status_code, e))
@@ -207,6 +210,7 @@ impl BackendClient {
         device_code: &str,
     ) -> Result<DevicePollOutcome, BackendError> {
         let url = format!("{}/api/v1/auth/device/poll/", self.base_url);
+        tracing::debug!(url = %url, "POST device/poll");
         let resp = self
             .http
             .post(&url)
@@ -217,16 +221,20 @@ impl BackendClient {
         if status.is_success() {
             let status_code = status.as_u16();
             let parsed: DevicePollSuccess = resp.json().await.map_err(|e| Self::json_err(status_code, e))?;
-            return Ok(match parsed {
+            let outcome = match parsed {
                 DevicePollSuccess::Pending => DevicePollOutcome::Pending,
                 DevicePollSuccess::Ok {
                     session_token,
                     user,
-                } => DevicePollOutcome::Authorized(SessionData {
-                    session_token,
-                    user,
-                }),
-            });
+                } => {
+                    tracing::info!(github_login = %user.github_login, "device-flow authorized");
+                    DevicePollOutcome::Authorized(SessionData {
+                        session_token,
+                        user,
+                    })
+                }
+            };
+            return Ok(outcome);
         }
         // Non-2xx. Interpret the envelope. github_error with a known device-flow
         // slug maps to its DevicePollOutcome variant; otherwise propagate as
@@ -237,22 +245,32 @@ impl BackendClient {
                 match slug {
                     "authorization_pending" => return Ok(DevicePollOutcome::Pending),
                     "slow_down" => return Ok(DevicePollOutcome::SlowDown),
-                    "access_denied" => return Ok(DevicePollOutcome::Denied),
-                    "expired_token" => return Ok(DevicePollOutcome::Expired),
+                    "access_denied" => {
+                        tracing::info!("device-flow denied");
+                        return Ok(DevicePollOutcome::Denied);
+                    }
+                    "expired_token" => {
+                        tracing::info!("device-flow expired");
+                        return Ok(DevicePollOutcome::Expired);
+                    }
                     _ => {}
                 }
             }
         }
+        tracing::warn!(err = %err, "device_poll non-2xx (no known slug)");
         Err(err)
     }
 
     /// `GET /api/v1/auth/me/` — returns the user currently bound to `token`.
     pub async fn auth_me(&self, token: &str) -> Result<User, BackendError> {
         let url = format!("{}/api/v1/auth/me/", self.base_url);
+        tracing::debug!(url = %url, "GET auth/me");
         let resp = self.http.get(&url).bearer_auth(token).send().await?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(Self::map_error(resp).await);
+            let err = Self::map_error(resp).await;
+            tracing::warn!(err = %err, "auth_me non-2xx");
+            return Err(err);
         }
         let status_code = status.as_u16();
         resp.json::<User>().await.map_err(|e| Self::json_err(status_code, e))
@@ -266,9 +284,12 @@ impl BackendClient {
     /// but the raw token string still lives in caller memory.
     pub async fn logout(&self, token: &str) -> Result<(), BackendError> {
         let url = format!("{}/api/v1/auth/logout/", self.base_url);
+        tracing::debug!(url = %url, "POST auth/logout");
         let resp = self.http.post(&url).bearer_auth(token).send().await?;
         if !resp.status().is_success() {
-            return Err(Self::map_error(resp).await);
+            let err = Self::map_error(resp).await;
+            tracing::warn!(err = %err, "logout non-2xx");
+            return Err(err);
         }
         Ok(())
     }
