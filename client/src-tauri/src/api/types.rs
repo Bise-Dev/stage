@@ -68,10 +68,27 @@ impl std::fmt::Debug for DevicePollOutcome {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub(super) enum DevicePollSuccess {
     Pending,
-    Ok {
-        session_token: String,
-        user: User,
-    },
+    Ok { session_token: String, user: User },
+}
+
+/// Raw github search-issues item, forwarded unchanged by the backend's
+/// thin github proxy at `GET /api/v1/github/prs/`. Only the fields the
+/// client renders are deserialized; unknown keys are tolerated.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct GithubPrSearchItem {
+    pub number: i64,
+    pub title: String,
+    pub html_url: String,
+    pub repository_url: String,
+    pub updated_at: String,
+    pub user: GithubUserRef,
+}
+
+/// Nested github user reference (just `login` + optional `avatar_url`).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct GithubUserRef {
+    pub login: String,
+    pub avatar_url: Option<String>,
 }
 
 #[cfg(test)]
@@ -160,12 +177,56 @@ mod tests {
         });
         let s: DevicePollSuccess = serde_json::from_value(json).unwrap();
         match s {
-            DevicePollSuccess::Ok { session_token, user } => {
+            DevicePollSuccess::Ok {
+                session_token,
+                user,
+            } => {
                 assert_eq!(session_token, "stg_abc");
                 assert_eq!(user.id, 1);
                 assert_eq!(user.github_login, "u");
             }
             _ => panic!("expected Ok variant"),
         }
+    }
+
+    #[test]
+    fn github_pr_search_item_deserializes_from_raw_github_shape() {
+        // Mirrors the actual github search-issues response items the backend
+        // forwards unchanged at GET /api/v1/github/prs/.
+        let json = serde_json::json!({
+            "number": 483,
+            "title": "Rewrite README onboarding section",
+            "html_url": "https://github.com/acme/payments/pull/483",
+            "repository_url": "https://api.github.com/repos/acme/payments",
+            "updated_at": "2026-05-23T07:00:00Z",
+            "user": {
+                "login": "octocat",
+                "avatar_url": "https://avatars.example/o"
+            },
+            // Extra github-search keys we don't care about; the deserializer
+            // must ignore them.
+            "state": "open",
+            "labels": []
+        });
+        let item: GithubPrSearchItem = serde_json::from_value(json).unwrap();
+        assert_eq!(item.number, 483);
+        assert_eq!(item.title, "Rewrite README onboarding section");
+        assert_eq!(
+            item.repository_url,
+            "https://api.github.com/repos/acme/payments"
+        );
+        assert_eq!(item.user.login, "octocat");
+        assert_eq!(
+            item.user.avatar_url.as_deref(),
+            Some("https://avatars.example/o")
+        );
+    }
+
+    #[test]
+    fn github_user_ref_deserializes_with_null_avatar() {
+        let json = serde_json::json!({ "login": "ghost", "avatar_url": null });
+        let u: GithubUserRef = serde_json::from_value(json).unwrap();
+        assert_eq!(u.login, "ghost");
+        assert!(u.avatar_url.is_none());
     }
 }

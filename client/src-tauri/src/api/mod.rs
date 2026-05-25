@@ -9,4 +9,6 @@ mod types;
 
 pub use client::Client;
 pub use error::Error;
-pub use types::{DeviceCode, DevicePollOutcome, SessionData, User};
+pub use types::{
+    DeviceCode, DevicePollOutcome, GithubPrSearchItem, GithubUserRef, SessionData, User,
+};
