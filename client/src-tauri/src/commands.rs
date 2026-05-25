@@ -124,9 +124,9 @@ pub async fn auth_me(state: State<'_, AppState>) -> Result<api::User, AppError> 
 #[tauri::command]
 pub async fn auth_logout(state: State<'_, AppState>) -> Result<(), AppError> {
     let token = state.require_token()?;
-    state.api.logout(&token).await?;
+    let result = state.api.logout(&token).await;
     *state.auth.lock() = None;
-    Ok(())
+    result.map_err(Into::into)
 }
 
 #[tauri::command]
