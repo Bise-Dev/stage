@@ -161,6 +161,10 @@ impl BackendClient {
         }
     }
 
+    // Intentionally silent: `device_poll`'s 4xx slug fall-through (authorization_pending,
+    // slow_down, access_denied, expired_token) is the polling hot path; emitting tracing
+    // here would spam the log on every tick. Callers — device_start, device_poll's
+    // unknown-slug branch, auth_me, logout — emit `tracing::warn!` themselves after this returns.
     async fn map_error(resp: reqwest::Response) -> BackendError {
         let status = resp.status().as_u16();
         let body = resp.text().await.unwrap_or_default();
