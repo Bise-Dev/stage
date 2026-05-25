@@ -105,7 +105,7 @@ impl AppState {
 
 ### `lib.rs` — startup wiring
 
-`tauri.conf.json` gains a field for the backend URL at `app.backendUrl` (string). `lib.rs::run` reads it via the `tauri::App::config()` accessor and builds `api::Client` once during `setup`. The key is namespaced under `app` (Tauri's reserved app-level config) so it doesn't collide with `tauri-plugin-*` settings.
+`tauri.conf.json` gains a field for the backend URL at `plugins.stage.backendUrl` (string). Tauri v2 reserves the top-level `app.*` namespace for its own schema; arbitrary user config lives under `plugins.<name>.*` instead (which is a `HashMap<String, JsonValue>` accessible from any `Manager` via `app.config().plugins`). No actual "stage" plugin is registered — we just borrow the namespace and read the raw value. `lib.rs::run` reads `app.config().plugins.0.get("stage")...` once during `setup` and builds `api::Client` from it. If the key is absent, fall back to `http://localhost:8000` so the dev loop works without `.json` edits.
 
 ```rust
 .setup(|app| {
