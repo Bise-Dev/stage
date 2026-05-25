@@ -1,4 +1,4 @@
-//! Manual smoke binary for the BackendClient device-flow.
+//! Manual smoke binary for the api::Client device-flow.
 //!
 //! Run with the Stage backend up locally:
 //!     cd backend && just dev      # in another terminal
@@ -11,7 +11,7 @@
 
 use std::time::{Duration, Instant};
 
-use stage_client_lib::backend::{BackendClient, DevicePollOutcome};
+use stage_client_lib::api::{Client, DevicePollOutcome};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "http://localhost:8000".to_string());
     println!("backend: {url}");
 
-    let client = BackendClient::new(&url)?;
+    let client = Client::new(&url)?;
     let device = client.device_start().await?;
     println!(
         "\nOpen: {}\nEnter code: {}\n(interval={}s, expires_in={}s)\n",

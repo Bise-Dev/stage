@@ -18,7 +18,7 @@ A reasonable reader will ask: "why didn't they just use `oauth2-rs`?" This ADR r
 
 ## Decision
 
-The Local Client SDK (`client/src-tauri/src/backend.rs`) hand-rolls:
+The Local Client SDK (`client/src-tauri/src/api/`) hand-rolls:
 
 - The HTTP layer (using `reqwest`).
 - The device-flow vocabulary as a 5-variant enum (`DevicePollOutcome { Pending, SlowDown, Authorized(SessionData), Expired, Denied }`).

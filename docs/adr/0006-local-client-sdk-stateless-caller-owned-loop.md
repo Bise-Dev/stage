@@ -5,7 +5,7 @@
 
 ## Context
 
-The Local Client SDK (`client/src-tauri/src/backend.rs`) implements the four `/api/v1/auth/*` endpoints (device-flow start + poll, `auth_me`, `logout`). Two ergonomic questions arise when shaping its public surface:
+The Local Client SDK (`client/src-tauri/src/api/`) implements the four `/api/v1/auth/*` endpoints (device-flow start + poll, `auth_me`, `logout`). Two ergonomic questions arise when shaping its public surface:
 
 1. **Who holds the Stage session token between calls?** The SDK could cache it internally (one auth, then implicit on every later call), or stay stateless (caller passes `token: &str` per authed call).
 2. **Who drives the device-flow poll loop?** The SDK could expose a single `await`-able method that loops internally until terminal, or expose one-shot `device_poll(&device_code)` and let the caller drive the cadence.
@@ -16,15 +16,15 @@ ADR-0001 establishes the three-tier topology and the rule that the Local Client 
 
 The SDK is **stateless on the session token** and **does not own the device-flow poll loop**.
 
-- `BackendClient` carries no `token` field. Every authed method (`auth_me`, `logout`) takes `token: &str`. The constructor takes only `base_url`.
-- `device_poll(&self, device_code: &str) -> Result<DevicePollOutcome, BackendError>` performs exactly one HTTP round-trip per call. There is no `device_login_and_loop` convenience.
+- `api::Client` carries no `token` field. Every authed method (`auth_me`, `logout`) takes `token: &str`. The constructor takes only `base_url`.
+- `device_poll(&self, device_code: &str) -> Result<DevicePollOutcome, api::Error>` performs exactly one HTTP round-trip per call. There is no `device_login_and_loop` convenience.
 - The caller (today: `examples/auth_smoke.rs`; tomorrow: a Tauri command behind a UI; later: possibly a CLI) owns:
   - Token persistence (keychain / encrypted store / memory).
   - The poll-loop cadence, the deadline check, the `SlowDown` interval-bump, and cancellation.
 
 ## Considered alternatives
 
-- **Stateful client with internal token.** Rejected. A `BackendClient` that caches the token after `device_poll → Authorized` needs interior mutability (`Arc<Mutex<Option<String>>>`) plus a way for callers to *also* get the token out so they can persist it across process restart. Two sources of truth: the SDK's in-memory copy plus whatever the caller stored in keychain. Drift between them is a future bug we own.
+- **Stateful client with internal token.** Rejected. A `Client` that caches the token after `device_poll → Authorized` needs interior mutability (`Arc<Mutex<Option<String>>>`) plus a way for callers to *also* get the token out so they can persist it across process restart. Two sources of truth: the SDK's in-memory copy plus whatever the caller stored in keychain. Drift between them is a future bug we own.
 
 - **Stateful client with a `Zeroize`-on-drop `Secret<String>` wrapper.** Rejected as ergonomically heavy. The `secrecy` crate adds a wrapper at every header-construction site (`bearer_auth(secret.expose_secret())`) and doesn't actually prevent leaks — the token still leaves the wrapper to enter `reqwest::RequestBuilder::bearer_auth`. The discipline `SessionData` enforces (no `Debug`, no `Clone`) achieves the practical wins without the boilerplate. Open question 4 in the spec records the same call.
 
@@ -37,7 +37,7 @@ The SDK is **stateless on the session token** and **does not own the device-flow
 - The SDK is honest about ownership: the token belongs to whoever called `device_poll → Authorized`, full stop. Future Tauri command layer reads from / writes to keychain; future CLI reads from env; nothing reaches into the SDK to "fix" cached state.
 - Cancellation, UX countdown, retry indicators, `SlowDown` interval bump — all live in the caller, where the user-facing UI also lives. The SDK takes no opinions on any of those.
 - Test boundaries are crisp: one mock HTTP exchange per `device_poll` call. The poll-loop logic is unit-testable at the caller layer separately.
-- `BackendClient` stays `Clone + Send + Sync` with no interior mutability — cheap to hand to many Tauri command handlers via `AppState`.
+- `api::Client` stays `Clone + Send + Sync` with no interior mutability — cheap to hand to many Tauri command handlers via `AppState`.
 
 **Negative:**
 
