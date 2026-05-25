@@ -8,6 +8,9 @@ client/src-tauri/gen/
 # Local-dev convenience
 .env.local
 *.local
+
+# Editor-specific (user, not team)
+.zed/
 TODOS.md
 
 
@@ -409,3 +412,6 @@ client/src-tauri/gen/
 # Local-dev convenience
 .env.local
 *.local
+
+# Editor-specific (user, not team)
+.zed/
