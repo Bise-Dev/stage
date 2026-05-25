@@ -10,7 +10,7 @@ repos:
     hooks:
       - id: pyrefly
         name: pyrefly
-        entry: uv run pyrefly check
+        entry: uv run --directory backend pyrefly check
         language: system
         types: [python]
         pass_filenames: false
