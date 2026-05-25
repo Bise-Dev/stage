@@ -34,9 +34,28 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
 
             let recents = RecentsStore::open(&data_dir)?;
+
+            // Read backend URL from tauri.conf.json -> plugins.stage.backendUrl.
+            // PluginConfig wraps a HashMap<String, JsonValue>; access via the
+            // public `.0` field. Fall back to localhost for the dev loop.
+            let backend_url = app
+                .config()
+                .plugins
+                .0
+                .get("stage")
+                .and_then(|v| v.get("backendUrl"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("http://localhost:8000")
+                .to_string();
+            let api = api::Client::new(&backend_url)
+                .map_err(|e| std::io::Error::other(format!("api client: {e}")))?;
+            tracing::info!(backend_url = %backend_url, "api client initialized");
+
             app.manage(AppState {
                 active: Mutex::new(None),
                 recents: Arc::new(recents),
+                api,
+                auth: Mutex::new(None),
             });
             Ok(())
         })

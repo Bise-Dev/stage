@@ -21,6 +21,14 @@ pub struct RecentsStore {
 }
 
 impl RecentsStore {
+    #[cfg(test)]
+    pub fn for_testing() -> Self {
+        Self {
+            file: PathBuf::from("/dev/null"),
+            entries: Mutex::new(Vec::new()),
+        }
+    }
+
     pub fn open(data_dir: &Path) -> Result<Self, AppError> {
         let file = data_dir.join("recents.json");
         let entries = if file.exists() {

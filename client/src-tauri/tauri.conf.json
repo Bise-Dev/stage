@@ -30,5 +30,10 @@
   "bundle": {
     "active": false,
     "targets": "all"
+  },
+  "plugins": {
+    "stage": {
+      "backendUrl": "http://localhost:8000"
+    }
   }
 }
