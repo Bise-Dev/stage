@@ -36,14 +36,16 @@ Out (deferred to later slices):
 
 ```toml
 [dependencies]
-reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls"] }
-tokio    = { version = "1.52.3", features = ["macros", "rt", "rt-multi-thread", "time"] }
-thiserror = "2.0.18"   # bumped from "1" — minor breaking, affects existing errors.rs
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+thiserror = "2"   # bumped from "1" — minor breaking, affects existing errors.rs
 # unchanged: serde, serde_json, tracing, tracing-subscriber, parking_lot
 
 [dev-dependencies]
-wiremock = "0.6.5"
+wiremock = "0.6"
 ```
+
+Caret-implicit version style matches the existing file convention (e.g. `tauri = { version = "2", … }`). Earlier draft pinned to exact semver (`"0.13.3"`, `"1.52.3"`) but Cargo's caret semantics give us forward minor/patch updates with no surprise breakage — consistent with how the rest of the crate's deps are pinned.
 
 Rationale:
 
@@ -245,7 +247,7 @@ Every non-2xx response goes through one matcher reading the `{"message": "<slug>
 | 400 | `validation_error` | `Validation { extra }` |
 | any 4xx/5xx | `github_error` | `Github { status, extra }` |
 | 4xx/5xx | any other slug | `Unexpected { status, message, extra }` |
-| 4xx/5xx | envelope missing or unparseable | `Unexpected { status, message: "", extra: Null }` |
+| 4xx/5xx | envelope missing or unparseable | `Unexpected { status, message: <raw body>, extra: Null }` |
 
 `Transport(reqwest::Error)` catches: DNS failure, connect refused, TLS handshake fail, body read timeout, etc. JSON decode failures on a 2xx response surface as `Unexpected { status: 200, message: "body decode failed: ...", extra: Null }` — reqwest doesn't expose its inner `serde_json::Error` directly, so we route through `Unexpected` rather than introduce a separate `Decode` variant we can't populate cleanly. (Earlier draft had a `Decode(serde_json::Error)` variant; dropped during T8 review when the implementation reality became clear.)
 
@@ -263,20 +265,21 @@ No variant for `pr_already_open`, `workspace_frozen`, `etag_mismatch`, `forbidde
 
 **Layer B — HTTP integration tests.** `wiremock` spins up an in-process HTTP server on a random port. Each test arranges a mock response, instantiates `BackendClient` pointed at the mock server's URL, calls one method, asserts on the typed result and on the wire headers.
 
-### Test matrix
+### Test matrix (as implemented — 30 cases total)
 
-| Method | Cases |
+| Group | Cases (count) |
 |---|---|
-| `BackendClient::new` | accepts `&str`; accepts `String`; rejects malformed URL → `InvalidBaseUrl`; trailing slash tolerated (`http://x:8000` and `http://x:8000/` produce identical wire calls); default timeout = 30s observable via slow-server scenario |
-| `BackendClient::with_timeout` | custom timeout honored: tight timeout (50ms) against slow mock (200ms delay) → `Transport` w/ timeout error |
-| `device_start` | 200 happy path; 500 → `Github`; transport error (server down) → `Transport` |
-| `device_poll` | 200 pending → `Pending`; 200 ok → `Authorized(_)`; 4xx `expired_token` → `Expired`; 4xx `slow_down` → `SlowDown`; 4xx `access_denied` → `Denied`; 4xx `authorization_pending` → `Pending` |
-| `auth_me` | 200 → populated `User`; 401 → `Unauthenticated`; Bearer header asserted on wire |
-| `logout` | 204 → `Ok(())`; 401 → `Unauthenticated`; Bearer header asserted |
+| Type roundtrip | `DeviceCode` from `api.md` shape; `User` with optional fields present + null (2); `SessionData`; `DevicePollSuccess::Pending` + `Ok` wire-tagged enum (2) — **6 cases** |
+| `BackendClient::new` | accepts `&str` + `String` (asserts `base_url` post-trim); rejects malformed URL → `InvalidBaseUrl`; trailing slash tolerated (`http://x:8000` ≡ `http://x:8000/`) — **3 cases** |
+| `BackendClient::with_timeout` | constructs OK; custom timeout (50 ms vs 2 s server delay) honored → `Transport` — **2 cases** |
+| `device_start` | 200 happy path; 500 with bare body → `Unexpected { status: 500, message: "internal err" }`; 200 with malformed body → `Unexpected { status: 200, … }` (distinguishes decode from transport); transport error when server down → `Transport` — **4 cases** |
+| `device_poll` | 200 pending → `Pending`; 200 ok → `Authorized(_)`; 4xx `expired_token` → `Expired`; 4xx `slow_down` → `SlowDown`; 4xx `access_denied` → `Denied`; 4xx `authorization_pending` → `Pending`; 4xx unknown slug → `BackendError::Github` (anchor for fall-through) — **7 cases** |
+| `auth_me` | 200 → populated `User`; 401 with envelope → `Unauthenticated`; 401 bare body (no envelope) → `Unauthenticated`; `Authorization: Bearer <token>` header asserted exact on wire — **4 cases** |
+| `logout` | 204 → `Ok(())`; 401 with envelope → `Unauthenticated`; 401 bare body → `Unauthenticated`; Bearer header asserted exact — **4 cases** |
 
-Authenticated calls (auth_me, logout) **assert that the Bearer header was actually sent** — protects against silent-failure where auth is forgotten.
+Authenticated calls (`auth_me`, `logout`) **assert that the Bearer header was actually sent** — protects against silent-failure where auth is forgotten.
 
-**Coverage gaps acknowledged.** The matrix above is the required baseline. Variants `Decode`, `Validation`, and `Unexpected` are reachable but not exercised in the baseline — flagged for grill review whether worth additional cases. Cheap to add later as regression tests if a real bug surfaces.
+**Coverage gaps acknowledged.** The `Validation` variant is reachable but not exercised in the baseline — no auth endpoint currently emits a `validation_error` envelope. Cheap to add later as a regression test if a real bug surfaces. (`Decode` was dropped during T8 review — see § 4. `Unexpected` is now exercised twice: `device_start_500_maps_to_unexpected` and `device_start_200_with_bad_body_maps_to_unexpected`.)
 
 ### Wiremock example
 
@@ -340,7 +343,7 @@ Slice is done when **all** hold:
 1. `client/src-tauri/src/backend.rs` contains `BackendClient`, `DeviceCode`, `User`, `SessionData`, `DevicePollOutcome`, `BackendError` — exported public.
 2. `cargo check` passes from `client/src-tauri/`.
 3. `cargo clippy --all-targets -- -D warnings` passes.
-4. `cargo test --lib backend::` passes with the test cases from § 5 (~13 cases).
+4. `cargo test --lib backend::` passes with the test cases from § 5 (30 cases as implemented).
 5. `cargo build` produces no new warnings.
 6. Manual smoke recipe documented in `client/src-tauri/examples/auth_smoke.rs`: assumes `backend/` running on `http://localhost:8000`, runs the full device-flow loop end-to-end. Invoked via `cargo run --example auth_smoke`. Not in CI.
 7. No TODO / FIXME left in merged code.
