@@ -10,7 +10,12 @@ _DEVICE_CODE_URL = "https://github.com/login/device/code"
 _TOKEN_URL = "https://github.com/login/oauth/access_token"
 _USER_URL = f"{env.GITHUB_API_BASE}/user"
 
-_TERMINAL_ERRORS = {"expired_token", "access_denied", "incorrect_device_code", "unsupported_grant_type"}
+_TERMINAL_ERRORS = {
+    "expired_token",
+    "access_denied",
+    "incorrect_device_code",
+    "unsupported_grant_type",
+}
 _PENDING_ERRORS = {"authorization_pending", "slow_down"}
 
 
@@ -49,8 +54,8 @@ def device_poll(*, device_code: str) -> dict | None:
         return None
     logger.warning("device_flow_terminal_error", error=err)
     raise ApplicationError(
-        "device flow terminated",
-        extra={"github_error": err or "unknown"},
+        "github_error",
+        extra={"error": err or "unknown"},
         status=400,
     )
 
