@@ -1,6 +1,6 @@
 /// Returned by `device_start`. Carries the device code, the user-facing code,
 /// the URL where the user types it, and the polling/expiry hints (seconds).
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DeviceCode {
     pub device_code: String,
     pub user_code: String,
@@ -10,7 +10,7 @@ pub struct DeviceCode {
 }
 
 /// Stage user identity returned by `device_poll` (on success) and `auth_me`.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct User {
     pub id: i64,
     pub github_login: String,

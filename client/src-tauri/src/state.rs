@@ -11,7 +11,6 @@ use crate::watcher::WatcherHandle;
 pub struct AppState {
     pub active: Mutex<Option<ActiveRepo>>,
     pub recents: Arc<RecentsStore>,
-    #[allow(dead_code)]
     pub api: api::Client,
     pub auth: Mutex<Option<AuthSession>>,
 }
@@ -22,16 +21,15 @@ pub struct ActiveRepo {
     pub watcher: WatcherHandle,
 }
 
-#[allow(dead_code)]
 pub struct AuthSession {
     pub token: String,
+    #[allow(dead_code)]
     pub user: api::User,
 }
 
 impl AppState {
     /// Returns a clone of the current session token, or `NotAuthenticated`
     /// if the user is not signed in. Locks briefly, never across `.await`.
-    #[allow(dead_code)]
     pub fn require_token(&self) -> Result<String, AppError> {
         self.auth
             .lock()

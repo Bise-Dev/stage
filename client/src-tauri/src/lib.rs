@@ -67,6 +67,11 @@ pub fn run() {
             commands::forget_recent_repo,
             commands::git_current_branch,
             commands::repo_summary,
+            commands::auth_device_start,
+            commands::auth_device_poll,
+            commands::auth_me,
+            commands::auth_logout,
+            commands::github_prs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
