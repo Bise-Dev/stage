@@ -2,7 +2,7 @@ pub mod api;
 mod commands;
 mod errors;
 mod git;
-mod oauth;
+pub mod oauth;
 mod recents;
 mod state;
 mod watcher;
