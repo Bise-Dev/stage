@@ -26,6 +26,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 parking_lot = "0.12"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+base64ct = { version = "1", features = ["alloc"] }
+sha2 = "0.10"
+rand = "0.8"
 
 [dev-dependencies]
 wiremock = "0.6"

@@ -30,5 +30,11 @@
   "bundle": {
     "active": false,
     "targets": "all"
+  },
+  "plugins": {
+    "stage": {
+      "backendUrl": "http://localhost:8000",
+      "githubAppClientId": "Iv1.REPLACE_WITH_DEV_APP_CLIENT_ID"
+    }
   }
 }
