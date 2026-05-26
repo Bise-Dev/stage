@@ -3,7 +3,7 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 
@@ -93,69 +93,77 @@ impl LoopbackListener {
     }
 
     pub async fn recv(self, deadline: Duration, expected_state: &str) -> Result<CallbackParams, OauthError> {
-        let (mut socket, _peer) = timeout(deadline, self.listener.accept())
-            .await
-            .map_err(|_| OauthError::Timeout)?
-            .map_err(OauthError::BindFailed)?;
+        let listener = self.listener;
+        let expected_state = expected_state.to_string();
+        let result = timeout(deadline, async move {
+            loop {
+                let (mut socket, _peer) = listener.accept().await.map_err(OauthError::BindFailed)?;
 
-        // Read the request line (e.g., "GET /cb?code=...&state=... HTTP/1.1").
-        let mut reader = BufReader::new(&mut socket);
-        let mut request_line = String::new();
-        reader
-            .read_line(&mut request_line)
-            .await
-            .map_err(OauthError::Io)?;
+                let mut reader = BufReader::new(&mut socket);
+                let mut request_line = String::new();
 
-        // Drain remaining headers (best-effort; we don't care about them).
-        let mut sink = Vec::new();
-        let _ = reader.read_to_end(&mut sink).await;
+                // Empty / broken connection (e.g. Chrome preconnect): ignore and keep listening.
+                if reader.read_line(&mut request_line).await.is_err() || request_line.is_empty() {
+                    drop(socket);
+                    continue;
+                }
 
-        // Parse the path + query: "GET /cb?... HTTP/1.1".
-        let path = request_line
-            .split_whitespace()
-            .nth(1)
-            .ok_or_else(|| OauthError::GithubError("malformed request line".into()))?;
-        let query = path
-            .split_once('?')
-            .map(|(_, q)| q)
-            .unwrap_or("");
+                // Parse "GET /cb?... HTTP/1.1" → query string
+                let path = request_line.split_whitespace().nth(1).unwrap_or("");
+                let query = path.split_once('?').map(|(_, q)| q).unwrap_or("");
 
-        let mut code: Option<String> = None;
-        let mut state: Option<String> = None;
-        let mut err: Option<String> = None;
-        for pair in query.split('&') {
-            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-            let v_decoded = urldecode_safe(v);
-            match k {
-                "code" => code = Some(v_decoded),
-                "state" => state = Some(v_decoded),
-                "error" => err = Some(v_decoded),
-                _ => {}
+                let mut code: Option<String> = None;
+                let mut state: Option<String> = None;
+                let mut err: Option<String> = None;
+                for pair in query.split('&') {
+                    let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+                    let v_decoded = urldecode_safe(v);
+                    match k {
+                        "code" => code = Some(v_decoded),
+                        "state" => state = Some(v_decoded),
+                        "error" => err = Some(v_decoded),
+                        _ => {}
+                    }
+                }
+
+                // Probe with no auth-relevant params: ignore and keep listening.
+                if code.is_none() && state.is_none() && err.is_none() {
+                    drop(socket);
+                    continue;
+                }
+
+                // Send the friendly HTML response, then close write side. We respond
+                // BEFORE returning so the browser tab shows the message even if the
+                // exchange later fails.
+                let body = "<!doctype html><html><body><p>You can close this tab.</p></body></html>";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+
+                if let Some(e) = err {
+                    if e == "access_denied" {
+                        return Err::<CallbackParams, OauthError>(OauthError::UserDenied);
+                    }
+                    return Err(OauthError::GithubError(e));
+                }
+                let code = code.ok_or_else(|| OauthError::GithubError("missing code".into()))?;
+                let state = state.ok_or_else(|| OauthError::GithubError("missing state".into()))?;
+                if state != expected_state {
+                    return Err(OauthError::StateMismatch);
+                }
+                return Ok::<CallbackParams, OauthError>(CallbackParams { code, state });
             }
-        }
+        })
+        .await;
 
-        // Always respond before returning, so the browser shows a friendly message.
-        let body = "<!doctype html><html><body><p>You can close this tab.</p></body></html>";
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        let _ = socket.write_all(response.as_bytes()).await;
-        let _ = socket.shutdown().await;
-
-        if let Some(e) = err {
-            if e == "access_denied" {
-                return Err(OauthError::UserDenied);
-            }
-            return Err(OauthError::GithubError(e));
+        match result {
+            Ok(inner) => inner,
+            Err(_) => Err(OauthError::Timeout),
         }
-        let code = code.ok_or_else(|| OauthError::GithubError("missing code".into()))?;
-        let state = state.ok_or_else(|| OauthError::GithubError("missing state".into()))?;
-        if state != expected_state {
-            return Err(OauthError::StateMismatch);
-        }
-        Ok(CallbackParams { code, state })
     }
 }
 
@@ -292,5 +300,36 @@ mod tests {
             .recv(Duration::from_millis(100), "STATE")
             .await;
         assert!(matches!(result, Err(OauthError::Timeout)));
+    }
+
+    #[tokio::test]
+    async fn listener_ignores_probe_then_accepts_real_callback() {
+        use tokio::net::TcpStream;
+
+        let listener = LoopbackListener::bind().await.expect("bind");
+        let addr = listener
+            .redirect_uri()
+            .trim_start_matches("http://")
+            .trim_end_matches("/cb")
+            .to_string();
+
+        let recv_handle = tokio::spawn(async move {
+            listener.recv(Duration::from_secs(5), "STATE_OK").await
+        });
+
+        // First: a probe — open + close write side immediately, no data.
+        {
+            let mut probe = TcpStream::connect(&*addr).await.expect("probe connect");
+            let _ = probe.shutdown().await;
+        }
+
+        // Second: real callback.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        send_raw_get(&addr, "/cb?code=REAL&state=STATE_OK").await;
+
+        let result = recv_handle.await.expect("join");
+        let params = result.expect("ok");
+        assert_eq!(params.code, "REAL");
+        assert_eq!(params.state, "STATE_OK");
     }
 }
