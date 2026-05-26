@@ -1,6 +1,6 @@
 # ADR-0005 · Local Client SDK hand-rolls the device-flow vocabulary
 
-**Status:** accepted
+**Status:** superseded by [ADR-0007](./0007-github-app-user-to-server-loopback.md) (2026-05-26)
 **Date:** 2026-05-24
 
 ## Context

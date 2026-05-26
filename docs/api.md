@@ -20,7 +20,7 @@ Every endpoint except the auth ones below requires:
 Authorization: Bearer <stage_session_token>
 ```
 
-The token is obtained via the github device flow (see `POST /api/v1/auth/device/*` below) and stored by the Client (recommended: OS keychain). The Client **never** sends a github credential to anyone except the github device-flow endpoints (and even those go through the backend).
+The token is obtained via the web exchange flow (see `POST /api/v1/auth/web/exchange/` below) and stored by the Client (recommended: OS keychain). The Client **never** sends a github credential directly; all token exchange goes through the backend.
 
 ### Error envelope
 Every non-2xx response uses this shape:
@@ -67,53 +67,40 @@ Github-paginated responses (branches, comments, etc.) are returned **as-is** wit
 
 ## Authentication
 
-### `POST /api/v1/auth/device/start/`
-Initiate the github device flow.
+### `POST /api/v1/auth/web/exchange/`
 
-**Request:** empty body.
+Exchanges an OAuth `code` (captured by the client's loopback listener after the user authorized Stage at `https://github.com/login/oauth/authorize`) for a Stage session.
 
-**Response 200:**
+**Request body:**
+
 ```json
 {
-  "device_code": "abc123...",
-  "user_code": "ABCD-1234",
-  "verification_uri": "https://github.com/login/device",
-  "interval": 5,
-  "expires_in": 900
+  "code": "abc123",
+  "code_verifier": "<43-128 char PKCE verifier>",
+  "redirect_uri": "http://127.0.0.1:54321/cb"
 }
 ```
 
-The Client shows `user_code` + `verification_uri` to the user and tells them to enter the code on any browser. Then polls.
+**200 OK response:**
 
-### `POST /api/v1/auth/device/poll/`
-Poll until github confirms the user entered the code.
-
-**Request:**
-```json
-{ "device_code": "abc123..." }
-```
-
-**Response 200 (still pending):**
-```json
-{ "status": "pending" }
-```
-
-**Response 200 (success):**
 ```json
 {
   "status": "ok",
-  "session_token": "stg_eyJhbG...opaque",
+  "session_token": "stg_<43-char base64url>",
   "user": {
-    "id": 42,
-    "github_login": "octocat",
-    "github_user_id": 583231,
-    "display_name": "The Octocat",
-    "avatar_url": "https://avatars.example/o"
+    "id": 12,
+    "github_login": "alice",
+    "display_name": "Alice",
+    "avatar_url": "https://avatars.githubusercontent.com/u/123"
   }
 }
 ```
 
-The Client stores `session_token` securely; backend never re-issues it.
+**400 errors:** `github_code_invalid`, validation (short verifier, missing field).
+**502:** `github_unreachable`.
+**500:** `github_app_misconfigured`.
+
+See [ADR-0007](adr/0007-github-app-user-to-server-loopback.md) for design.
 
 ### `GET /api/v1/auth/me/`
 Returns the current user. 401 if Bearer token is invalid or revoked.

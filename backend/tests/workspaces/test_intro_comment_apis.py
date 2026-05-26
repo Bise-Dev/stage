@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rest_framework.test import APIClient
 
+from apps.identity.factories import GitHubIdentityFactory
 from apps.identity.services import session_issue
 from apps.users.factories import UserFactory
 from apps.users.models import User
@@ -15,6 +16,7 @@ from apps.workspaces.services import intro_comment_create, storyline_create
 @pytest.fixture
 def authed_ws(db) -> tuple[APIClient, User, Workspace, StorylineFile]:
     user = cast(User, UserFactory())
+    GitHubIdentityFactory(user=user)
     raw, _ = session_issue(user=user)
     client = APIClient()
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {raw}")
@@ -46,8 +48,8 @@ def test_intro_comment_collection_get_empty(authed_ws) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_collection_post_creates(authed_ws) -> None:
-    client, user, ws, sf = authed_ws
-    with patch("apps.workspaces.apis._gateway", return_value=_open_gw()):
+    client, _user, ws, sf = authed_ws
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=_open_gw()):
         resp = client.post(
             f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/",
             {"body": "hello"},
@@ -64,7 +66,7 @@ def test_intro_comment_collection_post_reply(authed_ws) -> None:
     client, user, ws, sf = authed_ws
     gw = _open_gw()
     root = intro_comment_create(storyline_file=sf, user=user, body="root", gateway=gw)
-    with patch("apps.workspaces.apis._gateway", return_value=_open_gw()):
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=_open_gw()):
         resp = client.post(
             f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/",
             {"body": "reply", "parent_id": str(root.pk)},
@@ -79,8 +81,10 @@ def test_intro_comment_collection_post_depth_exceeded(authed_ws) -> None:
     client, user, ws, sf = authed_ws
     gw = _open_gw()
     root = intro_comment_create(storyline_file=sf, user=user, body="root", gateway=gw)
-    reply = intro_comment_create(storyline_file=sf, user=user, body="reply", parent=root, gateway=gw)
-    with patch("apps.workspaces.apis._gateway", return_value=_open_gw()):
+    reply = intro_comment_create(
+        storyline_file=sf, user=user, body="reply", parent=root, gateway=gw
+    )
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=_open_gw()):
         resp = client.post(
             f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/",
             {"body": "deep", "parent_id": str(reply.pk)},
@@ -91,7 +95,7 @@ def test_intro_comment_collection_post_depth_exceeded(authed_ws) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_detail_patch_owner(authed_ws) -> None:
-    client, user, ws, sf = authed_ws
+    client, user, _ws, sf = authed_ws
     gw = _open_gw()
     comment = intro_comment_create(storyline_file=sf, user=user, body="orig", gateway=gw)
     resp = client.patch(
@@ -105,7 +109,7 @@ def test_intro_comment_detail_patch_owner(authed_ws) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_detail_patch_not_owner(authed_ws) -> None:
-    client, user, ws, sf = authed_ws
+    _client, user, _ws, sf = authed_ws
     gw = _open_gw()
     comment = intro_comment_create(storyline_file=sf, user=user, body="orig", gateway=gw)
     other = cast(User, UserFactory())
@@ -122,7 +126,7 @@ def test_intro_comment_detail_patch_not_owner(authed_ws) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_delete_owner(authed_ws) -> None:
-    client, user, ws, sf = authed_ws
+    client, user, _ws, sf = authed_ws
     gw = _open_gw()
     comment = intro_comment_create(storyline_file=sf, user=user, body="bye", gateway=gw)
     resp = client.post(f"/api/v1/intro-comments/{comment.pk}/delete/")
@@ -131,7 +135,7 @@ def test_intro_comment_delete_owner(authed_ws) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_delete_not_owner(authed_ws) -> None:
-    client, user, ws, sf = authed_ws
+    _client, user, _ws, sf = authed_ws
     gw = _open_gw()
     comment = intro_comment_create(storyline_file=sf, user=user, body="bye", gateway=gw)
     other = cast(User, UserFactory())
@@ -144,7 +148,7 @@ def test_intro_comment_delete_not_owner(authed_ws) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_resolve_creator(authed_ws) -> None:
-    client, user, ws, sf = authed_ws
+    client, user, _ws, sf = authed_ws
     gw = _open_gw()
     comment = intro_comment_create(storyline_file=sf, user=user, body="root", gateway=gw)
     resp = client.post(f"/api/v1/intro-comments/{comment.pk}/resolve/")
@@ -154,7 +158,7 @@ def test_intro_comment_resolve_creator(authed_ws) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_resolve_not_creator(authed_ws) -> None:
-    client, user, ws, sf = authed_ws
+    _client, user, _ws, sf = authed_ws
     gw = _open_gw()
     other = cast(User, UserFactory())
     other_raw, _ = session_issue(user=other)
@@ -167,7 +171,7 @@ def test_intro_comment_resolve_not_creator(authed_ws) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_unresolve_creator(authed_ws) -> None:
-    client, user, ws, sf = authed_ws
+    client, user, _ws, sf = authed_ws
     gw = _open_gw()
     comment = intro_comment_create(storyline_file=sf, user=user, body="root", gateway=gw)
     client.post(f"/api/v1/intro-comments/{comment.pk}/resolve/")
@@ -183,9 +187,7 @@ def test_intro_comment_get_includes_resolved(authed_ws) -> None:
     comment = intro_comment_create(storyline_file=sf, user=user, body="root", gateway=gw)
     client.post(f"/api/v1/intro-comments/{comment.pk}/resolve/")
 
-    resp_default = client.get(
-        f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/"
-    )
+    resp_default = client.get(f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/")
     assert resp_default.json() == []
 
     resp_with = client.get(
@@ -198,10 +200,11 @@ def test_intro_comment_get_includes_resolved(authed_ws) -> None:
 def test_intro_comment_create_pre_publish_blocked_for_non_creator(authed_ws) -> None:
     _, _, ws, sf = authed_ws
     user_b = cast(User, UserFactory())
+    GitHubIdentityFactory(user=user_b)
     raw_b, _ = session_issue(user=user_b)
     client_b = APIClient()
     client_b.credentials(HTTP_AUTHORIZATION=f"Bearer {raw_b}")
-    with patch("apps.workspaces.apis._gateway", return_value=_open_gw()):
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=_open_gw()):
         resp = client_b.post(
             f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/",
             {"body": "sneaky"},
@@ -214,7 +217,7 @@ def test_intro_comment_create_pre_publish_blocked_for_non_creator(authed_ws) -> 
 @pytest.mark.django_db
 def test_intro_comment_create_pre_publish_allowed_for_creator(authed_ws) -> None:
     client, _, ws, sf = authed_ws
-    with patch("apps.workspaces.apis._gateway", return_value=_open_gw()):
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=_open_gw()):
         resp = client.post(
             f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/",
             {"body": "prep note"},
@@ -226,14 +229,12 @@ def test_intro_comment_create_pre_publish_allowed_for_creator(authed_ws) -> None
 
 @pytest.mark.django_db
 def test_intro_comment_list_pre_publish_404_for_non_creator(authed_ws) -> None:
-    client, user, ws, sf = authed_ws
+    _client, user, ws, sf = authed_ws
     gw = _open_gw()
     intro_comment_create(storyline_file=sf, user=user, body="prep note", gateway=gw)
     user_b = cast(User, UserFactory())
     raw_b, _ = session_issue(user=user_b)
     client_b = APIClient()
     client_b.credentials(HTTP_AUTHORIZATION=f"Bearer {raw_b}")
-    resp = client_b.get(
-        f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/"
-    )
+    resp = client_b.get(f"/api/v1/workspaces/{ws.id}/storyline/files/{sf.id}/intro-comments/")
     assert resp.status_code == 404
