@@ -32,7 +32,9 @@ def test_post_review_comment() -> None:
         return_value=Response(201, json={"id": 20}),
     )
     g = GithubGateway(token="t")
-    result = g.post_review_comment("o", "r", 1, body="note", path="f.py", line=5, side="RIGHT", commit_id="abc")
+    result = g.post_review_comment(
+        "o", "r", 1, body="note", path="f.py", line=5, side="RIGHT", commit_id="abc"
+    )
     assert result["id"] == 20
 
 
@@ -42,7 +44,9 @@ def test_post_review_comment_in_reply_to() -> None:
         return_value=Response(201, json={"id": 21}),
     )
     g = GithubGateway(token="t")
-    result = g.post_review_comment("o", "r", 1, body="reply", path="f.py", line=5, side="RIGHT", in_reply_to=99)
+    result = g.post_review_comment(
+        "o", "r", 1, body="reply", path="f.py", line=5, side="RIGHT", in_reply_to=99
+    )
     assert result["id"] == 21
 
 
@@ -53,7 +57,9 @@ def test_post_review_comment_422() -> None:
     )
     g = GithubGateway(token="t")
     with pytest.raises(GithubError) as exc:
-        g.post_review_comment("o", "r", 1, body="x", path="f.py", line=1, side="RIGHT", commit_id="abc")
+        g.post_review_comment(
+            "o", "r", 1, body="x", path="f.py", line=1, side="RIGHT", commit_id="abc"
+        )
     assert exc.value.status_code == 422
 
 

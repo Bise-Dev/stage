@@ -10,7 +10,12 @@ _DEVICE_CODE_URL = "https://github.com/login/device/code"
 _TOKEN_URL = "https://github.com/login/oauth/access_token"
 _USER_URL = f"{env.GITHUB_API_BASE}/user"
 
-_TERMINAL_ERRORS = {"expired_token", "access_denied", "incorrect_device_code", "unsupported_grant_type"}
+_TERMINAL_ERRORS = {
+    "expired_token",
+    "access_denied",
+    "incorrect_device_code",
+    "unsupported_grant_type",
+}
 _PENDING_ERRORS = {"authorization_pending", "slow_down"}
 
 

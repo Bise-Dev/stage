@@ -32,12 +32,15 @@ def test_device_poll_success_upserts_user_and_returns_token() -> None:
     client = APIClient()
     with (
         patch("apps.identity.apis.device_poll", return_value={"access_token": "gho_x"}),
-        patch("apps.identity.apis.fetch_user", return_value={
-            "login": "octocat",
-            "id": 583231,
-            "name": "Octo",
-            "avatar_url": "https://x",
-        }),
+        patch(
+            "apps.identity.apis.fetch_user",
+            return_value={
+                "login": "octocat",
+                "id": 583231,
+                "name": "Octo",
+                "avatar_url": "https://x",
+            },
+        ),
     ):
         resp = client.post("/api/v1/auth/device/poll/", {"device_code": "x"}, format="json")
 

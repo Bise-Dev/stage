@@ -1,6 +1,7 @@
 from typing import cast
 
 import pytest
+from django.core.exceptions import ValidationError
 
 from apps.users.factories import UserFactory
 from apps.users.models import User
@@ -15,7 +16,7 @@ def test_storyline_is_one_to_one_with_workspace() -> None:
     # so we create one here explicitly:
     user = cast(User, UserFactory())
     Storyline.objects.create(workspace=ws, etag="e", updated_by=user)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Storyline.objects.create(workspace=ws, etag="e2", updated_by=user)
 
 
@@ -25,5 +26,5 @@ def test_storyline_file_unique_path_per_storyline() -> None:
     user = cast(User, UserFactory())
     s = Storyline.objects.create(workspace=ws, etag="e", updated_by=user)
     StorylineFile.objects.create(storyline=s, diff_file_path="a.py", order_index=0)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         StorylineFile.objects.create(storyline=s, diff_file_path="a.py", order_index=1)

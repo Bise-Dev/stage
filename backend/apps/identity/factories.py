@@ -13,4 +13,6 @@ class SessionFactory(DjangoModelFactory):
         model = Session
 
     user = factory.SubFactory(UserFactory)
-    token_hash = factory.LazyFunction(lambda: hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest())
+    token_hash = factory.LazyFunction(
+        lambda: hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
+    )

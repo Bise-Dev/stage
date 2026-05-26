@@ -36,11 +36,9 @@ pub fn set_active_repo(
 
 #[tauri::command]
 pub fn get_active_repo(state: State<'_, AppState>) -> Option<RepoInfo> {
-    state
-        .active
-        .lock()
-        .as_ref()
-        .map(|a| RepoInfo { path: a.path.clone() })
+    state.active.lock().as_ref().map(|a| RepoInfo {
+        path: a.path.clone(),
+    })
 }
 
 #[tauri::command]
@@ -49,10 +47,7 @@ pub fn list_recent_repos(state: State<'_, AppState>) -> Vec<RecentRepo> {
 }
 
 #[tauri::command]
-pub fn forget_recent_repo(
-    state: State<'_, AppState>,
-    path: PathBuf,
-) -> Result<(), AppError> {
+pub fn forget_recent_repo(state: State<'_, AppState>, path: PathBuf) -> Result<(), AppError> {
     state.recents.forget(&path)
 }
 

@@ -4,11 +4,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from apps.core.exceptions import ApplicationError
-from apps.identity.services import session_issue
 from apps.users.factories import UserFactory
 from apps.users.models import User
 from apps.workspaces.factories import WorkspaceFactory
-from apps.workspaces.models import IntroComment, StorylineFile, Workspace
+from apps.workspaces.models import StorylineFile, Workspace
 from apps.workspaces.services import (
     intro_comment_create,
     intro_comment_resolve,
@@ -46,7 +45,7 @@ def setup(db):
 
 @pytest.mark.django_db
 def test_intro_comment_create_root(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     comment = intro_comment_create(storyline_file=sf, user=creator, body="hello", gateway=gw)
     assert comment.pk is not None
@@ -56,21 +55,27 @@ def test_intro_comment_create_root(setup) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_create_reply(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     root = intro_comment_create(storyline_file=sf, user=creator, body="root", gateway=gw)
-    reply = intro_comment_create(storyline_file=sf, user=creator, body="reply", parent=root, gateway=gw)
+    reply = intro_comment_create(
+        storyline_file=sf, user=creator, body="reply", parent=root, gateway=gw
+    )
     assert reply.parent_id == root.pk
 
 
 @pytest.mark.django_db
 def test_intro_comment_create_depth_exceeded(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     root = intro_comment_create(storyline_file=sf, user=creator, body="root", gateway=gw)
-    reply = intro_comment_create(storyline_file=sf, user=creator, body="reply", parent=root, gateway=gw)
+    reply = intro_comment_create(
+        storyline_file=sf, user=creator, body="reply", parent=root, gateway=gw
+    )
     with pytest.raises(ApplicationError) as exc:
-        intro_comment_create(storyline_file=sf, user=creator, body="nested", parent=reply, gateway=gw)
+        intro_comment_create(
+            storyline_file=sf, user=creator, body="nested", parent=reply, gateway=gw
+        )
     assert exc.value.status == 400
     assert "depth_exceeded" in str(exc.value)
 
@@ -89,7 +94,7 @@ def test_intro_comment_create_frozen_workspace(setup) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_update_owner(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     comment = intro_comment_create(storyline_file=sf, user=creator, body="orig", gateway=gw)
     updated = intro_comment_update(comment=comment, user=creator, body="new")
@@ -98,7 +103,7 @@ def test_intro_comment_update_owner(setup) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_update_not_owner(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     comment = intro_comment_create(storyline_file=sf, user=creator, body="orig", gateway=gw)
     other = cast(User, UserFactory())
@@ -109,7 +114,7 @@ def test_intro_comment_update_not_owner(setup) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_update_deleted(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     comment = intro_comment_create(storyline_file=sf, user=creator, body="orig", gateway=gw)
     intro_comment_soft_delete(comment=comment, user=creator)
@@ -121,7 +126,7 @@ def test_intro_comment_update_deleted(setup) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_soft_delete_owner(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     comment = intro_comment_create(storyline_file=sf, user=creator, body="bye", gateway=gw)
     intro_comment_soft_delete(comment=comment, user=creator)
@@ -131,7 +136,7 @@ def test_intro_comment_soft_delete_owner(setup) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_soft_delete_not_owner(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     comment = intro_comment_create(storyline_file=sf, user=creator, body="bye", gateway=gw)
     other = cast(User, UserFactory())
@@ -142,7 +147,7 @@ def test_intro_comment_soft_delete_not_owner(setup) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_resolve_creator(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     comment = intro_comment_create(storyline_file=sf, user=creator, body="root", gateway=gw)
     resolved = intro_comment_resolve(comment=comment, creator=creator)
@@ -152,7 +157,7 @@ def test_intro_comment_resolve_creator(setup) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_resolve_not_creator(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     comment = intro_comment_create(storyline_file=sf, user=creator, body="root", gateway=gw)
     other = cast(User, UserFactory())
@@ -163,10 +168,12 @@ def test_intro_comment_resolve_not_creator(setup) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_resolve_reply_raises(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     root = intro_comment_create(storyline_file=sf, user=creator, body="root", gateway=gw)
-    reply = intro_comment_create(storyline_file=sf, user=creator, body="reply", parent=root, gateway=gw)
+    reply = intro_comment_create(
+        storyline_file=sf, user=creator, body="reply", parent=root, gateway=gw
+    )
     with pytest.raises(ApplicationError) as exc:
         intro_comment_resolve(comment=reply, creator=creator)
     assert exc.value.status == 400
@@ -174,7 +181,7 @@ def test_intro_comment_resolve_reply_raises(setup) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_unresolve_creator(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     comment = intro_comment_create(storyline_file=sf, user=creator, body="root", gateway=gw)
     intro_comment_resolve(comment=comment, creator=creator)
@@ -186,7 +193,7 @@ def test_intro_comment_unresolve_creator(setup) -> None:
 
 @pytest.mark.django_db
 def test_intro_comment_unresolve_not_creator(setup) -> None:
-    ws, sf, creator = setup
+    _ws, sf, creator = setup
     gw = _open_gateway()
     comment = intro_comment_create(storyline_file=sf, user=creator, body="root", gateway=gw)
     other = cast(User, UserFactory())

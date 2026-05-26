@@ -89,8 +89,8 @@ class WorkspaceDetailApi(APIView):
     def _get_workspace(self, workspace_id: uuid.UUID) -> Workspace:
         try:
             return workspace_get(workspace_id=workspace_id)
-        except Workspace.DoesNotExist:
-            raise ApplicationError("Not found", status=404)
+        except Workspace.DoesNotExist as err:
+            raise ApplicationError("Not found", status=404) from err
 
     def get(self, request: Request, workspace_id: uuid.UUID) -> Response:
         ws = self._get_workspace(workspace_id)
@@ -159,8 +159,8 @@ def _get_storyline_file(workspace_id: uuid.UUID, file_id: uuid.UUID) -> Storylin
         return StorylineFile.objects.select_related("storyline__workspace").get(
             pk=file_id, storyline__workspace_id=workspace_id
         )
-    except StorylineFile.DoesNotExist:
-        raise ApplicationError("not_found", status=404)
+    except StorylineFile.DoesNotExist as err:
+        raise ApplicationError("not_found", status=404) from err
 
 
 def _get_intro_comment(comment_id: uuid.UUID) -> IntroComment:
@@ -170,8 +170,8 @@ def _get_intro_comment(comment_id: uuid.UUID) -> IntroComment:
             "user",
             "resolved_by",
         ).get(pk=comment_id)
-    except IntroComment.DoesNotExist:
-        raise ApplicationError("not_found", status=404)
+    except IntroComment.DoesNotExist as err:
+        raise ApplicationError("not_found", status=404) from err
 
 
 def _comment_to_dict(comment: IntroComment) -> dict:
@@ -214,8 +214,8 @@ class IntroCommentCollectionApi(APIView):
         if parent_id:
             try:
                 parent = IntroComment.objects.get(pk=parent_id)
-            except IntroComment.DoesNotExist:
-                raise ApplicationError("parent_not_found", status=404)
+            except IntroComment.DoesNotExist as err:
+                raise ApplicationError("parent_not_found", status=404) from err
         with _gateway() as g:
             comment = intro_comment_create(
                 storyline_file=sf,
@@ -270,8 +270,8 @@ class OpenPrApi(APIView):
     def post(self, request: Request, workspace_id: uuid.UUID) -> Response:
         try:
             ws = workspace_get(workspace_id=workspace_id)
-        except Workspace.DoesNotExist:
-            raise ApplicationError("Not found", status=404)
+        except Workspace.DoesNotExist as err:
+            raise ApplicationError("Not found", status=404) from err
         serializer = OpenPrInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         with _gateway() as g:
@@ -288,8 +288,8 @@ class ReopenPrApi(APIView):
     def post(self, request: Request, workspace_id: uuid.UUID) -> Response:
         try:
             ws = workspace_get(workspace_id=workspace_id)
-        except Workspace.DoesNotExist:
-            raise ApplicationError("Not found", status=404)
+        except Workspace.DoesNotExist as err:
+            raise ApplicationError("Not found", status=404) from err
         with _gateway() as g:
             pr = pull_request_reopen(workspace=ws, creator=cast(User, request.user), gateway=g)
         return Response(pr)

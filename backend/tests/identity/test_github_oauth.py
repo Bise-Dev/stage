@@ -9,13 +9,16 @@ from apps.identity.github_oauth import device_poll, device_start, fetch_user
 @respx.mock
 def test_device_start_returns_codes() -> None:
     respx.post("https://github.com/login/device/code").mock(
-        return_value=Response(200, json={
-            "device_code": "dev_abc",
-            "user_code": "ABCD-1234",
-            "verification_uri": "https://github.com/login/device",
-            "interval": 5,
-            "expires_in": 900,
-        }),
+        return_value=Response(
+            200,
+            json={
+                "device_code": "dev_abc",
+                "user_code": "ABCD-1234",
+                "verification_uri": "https://github.com/login/device",
+                "interval": 5,
+                "expires_in": 900,
+            },
+        ),
     )
     out = device_start()
     assert out["user_code"] == "ABCD-1234"
@@ -51,12 +54,15 @@ def test_device_poll_raises_application_error_on_terminal() -> None:
 @respx.mock
 def test_fetch_user() -> None:
     respx.get("https://api.github.com/user").mock(
-        return_value=Response(200, json={
-            "login": "octocat",
-            "id": 583231,
-            "name": "Octo",
-            "avatar_url": "https://x",
-        }),
+        return_value=Response(
+            200,
+            json={
+                "login": "octocat",
+                "id": 583231,
+                "name": "Octo",
+                "avatar_url": "https://x",
+            },
+        ),
     )
     out = fetch_user(access_token="gho_x")
     assert out["login"] == "octocat"

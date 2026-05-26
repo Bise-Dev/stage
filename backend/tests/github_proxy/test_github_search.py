@@ -9,7 +9,6 @@ from apps.users.factories import UserFactory
 from apps.users.models import User
 from apps.workspaces.factories import WorkspaceFactory
 
-
 SEARCH_ITEMS = [
     {
         "number": 10,
@@ -37,7 +36,10 @@ def _mock_gateway(items=None):
     mock_gw = MagicMock()
     mock_gw.__enter__ = MagicMock(return_value=mock_gw)
     mock_gw.__exit__ = MagicMock(return_value=False)
-    mock_gw.search_issues.return_value = {"items": items if items is not None else SEARCH_ITEMS, "total_count": len(items or SEARCH_ITEMS)}
+    mock_gw.search_issues.return_value = {
+        "items": items if items is not None else SEARCH_ITEMS,
+        "total_count": len(items or SEARCH_ITEMS),
+    }
     return mock_gw
 
 

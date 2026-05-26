@@ -5,9 +5,13 @@ from rest_framework.views import APIView
 
 from apps.core.exceptions import ApplicationError
 from apps.github_proxy.gateway import GithubGateway
-from apps.github_proxy.serializers.pr_comment_create_input import PullRequestCommentCreateInputSerializer
+from apps.github_proxy.serializers.pr_comment_create_input import (
+    PullRequestCommentCreateInputSerializer,
+)
 from apps.github_proxy.serializers.pr_merge_input import PullRequestMergeInputSerializer
-from apps.github_proxy.serializers.pr_review_create_input import PullRequestReviewCreateInputSerializer
+from apps.github_proxy.serializers.pr_review_create_input import (
+    PullRequestReviewCreateInputSerializer,
+)
 from apps.workspaces.selectors import workspaces_existing_for_prs
 from config.settings.env_schemas import env
 
@@ -97,7 +101,9 @@ class PullRequestReviewCreateApi(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         with _gateway() as g:
-            result = g.post_review(o, r, n, body=data["body"], event=data["event"], comments=data["comments"])
+            result = g.post_review(
+                o, r, n, body=data["body"], event=data["event"], comments=data["comments"]
+            )
         return Response(result)
 
 
@@ -126,7 +132,7 @@ class GithubPullsSearchApi(APIView):
             prs.append((parts[0], parts[1], item["number"]))
 
         existing = workspaces_existing_for_prs(prs=prs)
-        filtered = [item for item, key in zip(items, prs) if key not in existing]
+        filtered = [item for item, key in zip(items, prs, strict=True) if key not in existing]
         return Response({"items": filtered, "count": len(filtered)})
 
 

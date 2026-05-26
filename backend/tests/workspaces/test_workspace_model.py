@@ -2,6 +2,7 @@ import uuid
 from typing import cast
 
 import pytest
+from django.core.exceptions import ValidationError
 
 from apps.users.factories import UserFactory
 from apps.users.models import User
@@ -20,7 +21,7 @@ def test_workspace_has_uuid_id_from_base_model() -> None:
 def test_workspace_unique_per_repo_head_ref() -> None:
     creator = cast(User, UserFactory())
     WorkspaceFactory(repo_owner="o", repo_name="r", head_ref="feat/x", created_by=creator)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         WorkspaceFactory(repo_owner="o", repo_name="r", head_ref="feat/x", created_by=creator)
 
 
@@ -28,5 +29,7 @@ def test_workspace_unique_per_repo_head_ref() -> None:
 def test_workspace_unique_per_repo_pr_when_pr_set() -> None:
     creator = cast(User, UserFactory())
     WorkspaceFactory(repo_owner="o", repo_name="r", head_ref="a", pr_number=42, created_by=creator)
-    with pytest.raises(Exception):
-        WorkspaceFactory(repo_owner="o", repo_name="r", head_ref="b", pr_number=42, created_by=creator)
+    with pytest.raises(ValidationError):
+        WorkspaceFactory(
+            repo_owner="o", repo_name="r", head_ref="b", pr_number=42, created_by=creator
+        )

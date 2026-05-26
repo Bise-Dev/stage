@@ -17,7 +17,7 @@ from apps.identity.services import session_issue, session_revoke, user_upsert_fr
 
 
 class DeviceStartApi(APIView):
-    permission_classes = [AllowAny]
+    permission_classes: ClassVar[list] = [AllowAny]  # pyrefly: ignore[bad-override]
     authentication_classes: ClassVar[list[type[authentication.BaseAuthentication]]] = []  # pyrefly: ignore[bad-override]
 
     def post(self, request: Request) -> Response:
@@ -25,7 +25,7 @@ class DeviceStartApi(APIView):
 
 
 class DevicePollApi(APIView):
-    permission_classes = [AllowAny]
+    permission_classes: ClassVar[list] = [AllowAny]  # pyrefly: ignore[bad-override]
     authentication_classes: ClassVar[list[type[authentication.BaseAuthentication]]] = []  # pyrefly: ignore[bad-override]
 
     def post(self, request: Request) -> Response:
@@ -38,11 +38,13 @@ class DevicePollApi(APIView):
         user = user_upsert_from_github(github_payload=gh_user)
         raw, _ = session_issue(user=user)
         return Response(
-            DevicePollOkOutputSerializer({
-                "status": "ok",
-                "session_token": raw,
-                "user": user,
-            }).data,
+            DevicePollOkOutputSerializer(
+                {
+                    "status": "ok",
+                    "session_token": raw,
+                    "user": user,
+                }
+            ).data,
         )
 
 
@@ -56,7 +58,8 @@ class AuthLogoutApi(APIView):
         raw = request.auth
         if raw:
             session = Session.objects.filter(
-                token_hash=_hash_token(str(raw)), revoked_at__isnull=True,
+                token_hash=_hash_token(str(raw)),
+                revoked_at__isnull=True,
             ).first()
             if session:
                 session_revoke(session=session)

@@ -72,7 +72,7 @@ def test_storyline_put_writes_files(authed_ws) -> None:
 
 @pytest.mark.django_db
 def test_storyline_put_rejects_non_creator(authed_ws) -> None:
-    client, _, ws = authed_ws
+    _client, _, ws = authed_ws
     bob = cast(User, UserFactory())
     raw, _ = session_issue(user=bob)
     bob_client = APIClient()
@@ -100,7 +100,7 @@ def test_storyline_pre_publish_404_for_non_creator(authed_ws, db) -> None:
     from apps.identity.services import session_issue
     from apps.users.factories import UserFactory
 
-    _, user_a, ws = authed_ws
+    _, _user_a, ws = authed_ws
     user_b = cast(User, UserFactory())
     raw_b, _ = session_issue(user=user_b)
     client_b = APIClient()

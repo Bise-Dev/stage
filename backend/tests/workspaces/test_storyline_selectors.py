@@ -21,7 +21,9 @@ def author_ws(db) -> tuple[Workspace, User]:
 
 def test_storyline_read_local_phase_no_stale(author_ws) -> None:
     ws, _ = author_ws
-    StorylineFile.objects.create(storyline=ws.storyline, diff_file_path="a.py", order_index=0, intro_text="hi")
+    StorylineFile.objects.create(
+        storyline=ws.storyline, diff_file_path="a.py", order_index=0, intro_text="hi"
+    )
     gateway = MagicMock()
     data, etag = storyline_read(workspace=ws, gateway=gateway)
     assert etag
@@ -33,7 +35,9 @@ def test_storyline_read_public_phase_marks_stale(author_ws) -> None:
     ws, _ = author_ws
     ws.pr_number = 5
     ws.save(update_fields=["pr_number"])
-    StorylineFile.objects.create(storyline=ws.storyline, diff_file_path="gone.py", order_index=0, intro_text="x")
+    StorylineFile.objects.create(
+        storyline=ws.storyline, diff_file_path="gone.py", order_index=0, intro_text="x"
+    )
     gateway = MagicMock()
     gateway.list_pr_files.return_value = [{"filename": "still_here.py"}]
     gateway.get_pr.return_value = {"head": {"sha": "abc"}}
