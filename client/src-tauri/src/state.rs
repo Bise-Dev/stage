@@ -26,7 +26,6 @@ pub struct ActiveRepo {
 
 pub struct AuthSession {
     pub token: String,
-    pub user: api::User,
 }
 
 impl AppState {
