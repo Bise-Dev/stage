@@ -14,17 +14,16 @@ impl Client {
             tracing::warn!(err = %err, "device_start non-2xx");
             return Err(err);
         }
-        resp.json::<DeviceCode>().await.map_err(|e| Self::json_err(status, e))
+        resp.json::<DeviceCode>()
+            .await
+            .map_err(|e| Self::json_err(status, e))
     }
 
     /// `POST /api/v1/auth/device/poll/` — one poll attempt.
     ///
     /// The caller drives the loop. Returns a `DevicePollOutcome` describing
     /// the terminal-or-non-terminal state of the device flow.
-    pub async fn device_poll(
-        &self,
-        device_code: &str,
-    ) -> Result<DevicePollOutcome, Error> {
+    pub async fn device_poll(&self, device_code: &str) -> Result<DevicePollOutcome, Error> {
         let url = self.base_url.join("api/v1/auth/device/poll/").unwrap();
         tracing::debug!(url = %url, "POST device/poll");
         let resp = self
@@ -35,7 +34,8 @@ impl Client {
             .await?;
         let status = resp.status();
         if status.is_success() {
-            let parsed: DevicePollSuccess = resp.json().await.map_err(|e| Self::json_err(status, e))?;
+            let parsed: DevicePollSuccess =
+                resp.json().await.map_err(|e| Self::json_err(status, e))?;
             let outcome = match parsed {
                 DevicePollSuccess::Pending => DevicePollOutcome::Pending,
                 DevicePollSuccess::Ok {
@@ -87,7 +87,9 @@ impl Client {
             tracing::warn!(err = %err, "auth_me non-2xx");
             return Err(err);
         }
-        resp.json::<User>().await.map_err(|e| Self::json_err(status, e))
+        resp.json::<User>()
+            .await
+            .map_err(|e| Self::json_err(status, e))
     }
 
     /// `POST /api/v1/auth/logout/` — revokes the session server-side.
@@ -174,7 +176,9 @@ mod tests {
         let client = Client::new(server.uri()).unwrap();
         let err = client.device_start().await.unwrap_err();
         match &err {
-            Error::Unexpected { status, message, .. } if status.as_u16() == 500 => {
+            Error::Unexpected {
+                status, message, ..
+            } if status.as_u16() == 500 => {
                 assert_eq!(message, "internal err");
             }
             _ => panic!("got {err:?}"),
@@ -254,7 +258,10 @@ mod tests {
         let server = MockServer::start().await;
         arrange_poll_github_error(&server, "authorization_pending").await;
         let client = Client::new(server.uri()).unwrap();
-        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::Pending));
+        assert!(matches!(
+            client.device_poll("dc").await.unwrap(),
+            DevicePollOutcome::Pending
+        ));
     }
 
     #[tokio::test]
@@ -262,7 +269,10 @@ mod tests {
         let server = MockServer::start().await;
         arrange_poll_github_error(&server, "slow_down").await;
         let client = Client::new(server.uri()).unwrap();
-        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::SlowDown));
+        assert!(matches!(
+            client.device_poll("dc").await.unwrap(),
+            DevicePollOutcome::SlowDown
+        ));
     }
 
     #[tokio::test]
@@ -270,7 +280,10 @@ mod tests {
         let server = MockServer::start().await;
         arrange_poll_github_error(&server, "expired_token").await;
         let client = Client::new(server.uri()).unwrap();
-        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::Expired));
+        assert!(matches!(
+            client.device_poll("dc").await.unwrap(),
+            DevicePollOutcome::Expired
+        ));
     }
 
     #[tokio::test]
@@ -278,7 +291,10 @@ mod tests {
         let server = MockServer::start().await;
         arrange_poll_github_error(&server, "access_denied").await;
         let client = Client::new(server.uri()).unwrap();
-        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::Denied));
+        assert!(matches!(
+            client.device_poll("dc").await.unwrap(),
+            DevicePollOutcome::Denied
+        ));
     }
 
     #[tokio::test]
@@ -485,7 +501,10 @@ mod tests {
         let err = client.device_start().await.unwrap_err();
         match &err {
             Error::Unexpected { message, extra, .. } => {
-                assert!(message.contains("foo"), "expected raw body, got {message:?}");
+                assert!(
+                    message.contains("foo"),
+                    "expected raw body, got {message:?}"
+                );
                 assert!(extra.is_null());
             }
             other => panic!("expected Unexpected, got {other:?}"),
@@ -529,7 +548,10 @@ mod tests {
             .await;
         let client = Client::new(server.uri()).unwrap();
         let err = client.device_poll("dc").await.unwrap_err();
-        assert!(matches!(err, Error::Github { .. }), "expected Github, got {err:?}");
+        assert!(
+            matches!(err, Error::Github { .. }),
+            "expected Github, got {err:?}"
+        );
     }
 
     // #10 — device_poll issues exactly one HTTP request per call (ADR-0006 pin)
@@ -541,7 +563,12 @@ mod tests {
         let out = client.device_poll("dc").await.unwrap();
         assert!(matches!(out, DevicePollOutcome::SlowDown));
         let received = server.received_requests().await.unwrap();
-        assert_eq!(received.len(), 1, "expected exactly 1 request, got {}", received.len());
+        assert_eq!(
+            received.len(),
+            1,
+            "expected exactly 1 request, got {}",
+            received.len()
+        );
     }
 
     #[tokio::test]
@@ -549,15 +576,11 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/v1/auth/device/start/"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_delay(Duration::from_millis(2_000)),
-            )
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(2_000)))
             .mount(&server)
             .await;
 
-        let client =
-            Client::with_timeout(server.uri(), Duration::from_millis(50)).unwrap();
+        let client = Client::with_timeout(server.uri(), Duration::from_millis(50)).unwrap();
         // Timeout fires before any response byte arrives; reqwest propagates it
         // via `?` → `Error::Transport`. Neither map_error nor json_err runs.
         let err = client.device_start().await.unwrap_err();

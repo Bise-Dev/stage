@@ -20,14 +20,10 @@ impl Client {
     }
 
     /// Construct with explicit HTTP timeout.
-    pub fn with_timeout(
-        base_url: impl AsRef<str>,
-        timeout: Duration,
-    ) -> Result<Self, Error> {
+    pub fn with_timeout(base_url: impl AsRef<str>, timeout: Duration) -> Result<Self, Error> {
         let raw = base_url.as_ref();
         // Validate by parsing through reqwest's URL type.
-        let parsed = reqwest::Url::parse(raw)
-            .map_err(|e| Error::InvalidBaseUrl(e.to_string()))?;
+        let parsed = reqwest::Url::parse(raw).map_err(|e| Error::InvalidBaseUrl(e.to_string()))?;
         let http = reqwest::Client::builder()
             .timeout(timeout)
             .user_agent(concat!("stage-client/", env!("CARGO_PKG_VERSION")))
@@ -64,15 +60,14 @@ impl Client {
             }
         };
         // Try parse `{"message": "...", "extra": {...}}`.
-        let parsed: Option<(String, serde_json::Value)> = serde_json::from_str::<
-            serde_json::Value,
-        >(&body)
-        .ok()
-        .and_then(|v| {
-            let m = v.get("message")?.as_str()?.to_string();
-            let e = v.get("extra").cloned().unwrap_or(serde_json::Value::Null);
-            Some((m, e))
-        });
+        let parsed: Option<(String, serde_json::Value)> =
+            serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| {
+                    let m = v.get("message")?.as_str()?.to_string();
+                    let e = v.get("extra").cloned().unwrap_or(serde_json::Value::Null);
+                    Some((m, e))
+                });
         let (message, extra) = parsed.unwrap_or_else(|| (body.clone(), serde_json::Value::Null));
         match (status.as_u16(), message.as_str()) {
             (401, _) => Error::Unauthenticated,
@@ -117,8 +112,6 @@ mod tests {
 
     #[test]
     fn with_timeout_constructs() {
-        let _ = Client::with_timeout("http://localhost:8000", Duration::from_millis(500))
-            .unwrap();
+        let _ = Client::with_timeout("http://localhost:8000", Duration::from_millis(500)).unwrap();
     }
-
 }

@@ -15,8 +15,8 @@ use stage_client_lib::api::{Client, DevicePollOutcome};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let url = std::env::var("STAGE_BACKEND_URL")
-        .unwrap_or_else(|_| "http://localhost:8000".to_string());
+    let url =
+        std::env::var("STAGE_BACKEND_URL").unwrap_or_else(|_| "http://localhost:8000".to_string());
     println!("backend: {url}");
 
     let client = Client::new(&url)?;
