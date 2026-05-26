@@ -1,11 +1,62 @@
+import { useEffect, useRef, useState } from 'react';
+
 import { Icon } from '../../components/Icon';
 import { StageLogo } from '../../components/StageLogo';
+import { type AuthEvent, runWebFlow } from '../../lib/auth';
+import type { User } from '../../tauri';
 
-export function SignIn({ onContinue }: { onContinue: () => void }) {
+type SignInState = { kind: 'idle' } | { kind: 'signing-in' } | { kind: 'error'; message: string };
+
+type Props = {
+  onAuthenticated: (user: User) => void;
+};
+
+export function SignIn({ onAuthenticated }: Props) {
+  const [state, setState] = useState<SignInState>({ kind: 'idle' });
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  const startSignIn = () => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setState({ kind: 'signing-in' });
+
+    runWebFlow((event: AuthEvent) => {
+      switch (event.kind) {
+        case 'started':
+          break;
+        case 'authenticated':
+          setState({ kind: 'idle' });
+          onAuthenticated(event.user);
+          break;
+        case 'cancelled':
+          setState({ kind: 'idle' });
+          break;
+        case 'error':
+          setState({ kind: 'error', message: event.message });
+          break;
+      }
+    }, controller.signal).catch(() => {
+      // runWebFlow routes errors through onEvent
+    });
+  };
+
+  const cancelSignIn = () => {
+    abortRef.current?.abort();
+    setState({ kind: 'idle' });
+  };
+
   return (
     <div
       className="flex h-full w-full items-center justify-center relative"
-      style={{ background: 'linear-gradient(180deg, #fbfaf8 0%, #f0eee9 100%)' }}
+      style={{
+        background: 'linear-gradient(180deg, #fbfaf8 0%, #f0eee9 100%)',
+      }}
     >
       <div
         className="absolute inset-0 pointer-events-none"
@@ -67,10 +118,10 @@ export function SignIn({ onContinue }: { onContinue: () => void }) {
           on your behalf.
         </div>
 
-        <div className="flex flex-col gap-2">
+        {state.kind === 'idle' && (
           <button
             type="button"
-            onClick={onContinue}
+            onClick={startSignIn}
             className="flex items-center justify-center gap-1.5 w-full cursor-default"
             style={{
               height: 38,
@@ -86,61 +137,72 @@ export function SignIn({ onContinue }: { onContinue: () => void }) {
             <Icon name="gh" size={14} color="#fff" />
             Continue with GitHub
           </button>
-          <button
-            type="button"
-            onClick={onContinue}
-            className="flex items-center justify-center gap-1.5 w-full cursor-default"
-            style={{
-              height: 38,
-              borderRadius: 'var(--r-sm)',
-              background: '#ffffff',
-              border: '1px solid rgba(0,0,0,0.12)',
-              boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
-              color: 'var(--gray-800)',
-              fontSize: 13,
-              fontWeight: 500,
-              fontFamily: 'inherit',
-            }}
-          >
-            Continue with SSO
-          </button>
-        </div>
+        )}
 
-        <div className="flex items-center gap-2.5" style={{ margin: '18px 0' }}>
-          <div style={{ flex: 1, height: 1, background: 'var(--hairline)' }} />
-          <span
-            style={{
-              fontSize: 11,
-              color: 'var(--gray-500)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.06em',
-              fontWeight: 600,
-            }}
-          >
-            or
-          </span>
-          <div style={{ flex: 1, height: 1, background: 'var(--hairline)' }} />
-        </div>
-
-        <div className="text-center" style={{ fontSize: 12.5, color: 'var(--gray-700)' }}>
-          <button
-            type="button"
-            onClick={onContinue}
-            className="cursor-default bg-transparent border-none p-0"
-            style={{
-              color: 'var(--blue)',
-              fontWeight: 600,
-              fontSize: 'inherit',
-              fontFamily: 'inherit',
-            }}
-          >
-            Skip — use Stage locally only
-          </button>
-          <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 4 }}>
-            You can still review your own branches and storylines. Connect GitHub later from
-            Settings.
+        {state.kind === 'signing-in' && (
+          <div>
+            <div
+              style={{
+                fontSize: 13,
+                color: 'var(--gray-700)',
+                marginBottom: 12,
+                lineHeight: 1.5,
+              }}
+            >
+              Continue in your browser to finish signing in…
+            </div>
+            <button
+              type="button"
+              onClick={cancelSignIn}
+              className="w-full cursor-default"
+              style={{
+                height: 36,
+                borderRadius: 'var(--r-sm)',
+                background: '#ffffff',
+                border: '1px solid rgba(0,0,0,0.12)',
+                color: 'var(--gray-800)',
+                fontSize: 13,
+                fontWeight: 500,
+                fontFamily: 'inherit',
+              }}
+            >
+              Cancel
+            </button>
           </div>
-        </div>
+        )}
+
+        {state.kind === 'error' && (
+          <div>
+            <div
+              style={{
+                fontSize: 12.5,
+                color: '#b42318',
+                marginBottom: 12,
+                lineHeight: 1.5,
+              }}
+            >
+              Sign-in failed: {state.message}
+            </div>
+            <button
+              type="button"
+              onClick={startSignIn}
+              className="flex items-center justify-center gap-1.5 w-full cursor-default"
+              style={{
+                height: 38,
+                borderRadius: 'var(--r-sm)',
+                background: '#1a1917',
+                color: '#fff',
+                border: 'none',
+                fontSize: 13,
+                fontWeight: 600,
+                fontFamily: 'inherit',
+              }}
+            >
+              <Icon name="gh" size={14} color="#fff" />
+              Retry
+            </button>
+          </div>
+        )}
       </div>
 
       <div
