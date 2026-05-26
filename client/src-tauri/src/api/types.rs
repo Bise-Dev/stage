@@ -1,5 +1,5 @@
 /// Stage user identity returned by `auth_me`.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct User {
     pub id: i64,
     pub github_login: String,
@@ -20,6 +20,16 @@ pub struct User {
 pub struct SessionData {
     pub session_token: String,
     pub user: User,
+}
+
+/// A single PR item returned by `GET /api/v1/github/prs/`.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct GithubPrSearchItem {
+    pub number: u64,
+    pub title: String,
+    pub html_url: String,
+    pub state: String,
+    pub repository_full_name: String,
 }
 
 #[cfg(test)]
