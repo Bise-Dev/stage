@@ -12,3 +12,14 @@ class Session(BaseModel):
 
     class Meta:  # pyrefly: ignore[bad-override]
         db_table = "identity_session"
+
+
+class GitHubIdentity(BaseModel):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="github_identity")
+    access_token = models.TextField()
+    refresh_token = models.TextField()
+    access_token_expires_at = models.DateTimeField()
+    refresh_token_expires_at = models.DateTimeField()
+
+    class Meta:  # pyrefly: ignore[bad-override]
+        db_table = "identity_githubidentity"
