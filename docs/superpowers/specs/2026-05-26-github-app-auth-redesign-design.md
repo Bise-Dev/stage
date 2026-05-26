@@ -4,6 +4,7 @@
 > **Date:** 2026-05-26
 > **Branch:** `feat/github-app-auth-redesign` (design + plan only; implementation split into 3 stacked PRs)
 > **Supersedes:** the auth shape in `docs/superpowers/specs/2026-05-25-tauri-auth-and-github-prs-design.md` (OAuth App + device flow + admin PAT) and ADR-0005 (hand-rolled device-flow vocabulary).
+> **Companion ADRs:** ADR-0007 (GitHub App + loopback + PKCE, primitive choice) · ADR-0008 (GitHub as Stage IDP, identity model commitment).
 > **References (verified 2026-05-26):**
 >
 > - [GitHub Apps user-to-server tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app)
@@ -114,6 +115,44 @@ client ──Bearer stg_X──► backend api ──looks up user.github_identi
 ### 3.6 Bot-mode seam (future)
 
 When bot mode lands, the same GitHub App mints **installation tokens** via JWT-signed calls to `POST /app/installations/{id}/access_tokens`. A new `GithubAppInstallation` table caches install IDs per org. `make_gateway()` grows two strategies: `as_user(user)` and `as_installation(o, r)`. This slice introduces the factory function so callers can switch strategies later without touching every API view.
+
+### 3.7 Identity vs credential layers (GitHub-as-IDP)
+
+Stage uses GitHub as its sole identity provider. One sign-in ceremony produces two independent layers:
+
+| Layer | Token | Purpose | Where consumed |
+|---|---|---|---|
+| **Identity** | `stg_…` Stage session (in `Session` row, hashed) | Answers "who is this user on Stage?" | Every authenticated backend endpoint — Workspace, Storyline, IntroComment, github_proxy. Resolved by `BearerSessionAuthentication` in `apps/identity/auth.py`. |
+| **Credential** | `ghu_…` per-user GitHub user-to-server token (in `GitHubIdentity` row) | Answers "how does the backend act as this user against GitHub?" | Only github_proxy endpoints + the workspace endpoints that embed storylines in GitHub commits. Accessed via `make_user_gateway(request.user)`. |
+
+Both layers are minted in the same call: `AuthWebExchangeApi` (§4.1) exchanges the OAuth code, then:
+
+```
+fetch_user(ghu_…) → user_upsert_from_github → User row    ← identity established
+github_identity_upsert(user, payload) → GitHubIdentity row ← credential stored
+session_issue(user) → stg_…                                ← session issued
+```
+
+Stage-native endpoints (`Workspace`, `Storyline`, `IntroComment`) use `request.user.pk` for ownership / authorization checks and FK fields like `Workspace.created_by`, `IntroComment.user`. They **never** read `GitHubIdentity` directly. Only the github_proxy + workspace storyline paths reach for the credential layer.
+
+The two layers have independent lifetimes:
+
+- The Stage session lives in client memory (memory-only this slice; keychain is a deferred follow-up). Logout clears it without touching `GitHubIdentity`. Sign-in again on the same machine reuses the existing `GitHubIdentity` (no second GitHub-authorize prompt because GitHub caches the user's grant).
+- `GitHubIdentity` lives in the backend DB until either both tokens expire permanently (refresh-token TTL = 6 months, or user-revoked grant), at which point `github_identity_ensure_fresh` deletes it and raises `github_reauth_required`. A future "Disconnect GitHub" button (deferred) would let the user delete it explicitly.
+
+**Failure modes by construction** (Stage-native vs github-proxied behavior is decoupled):
+
+| Scenario | Stage-native endpoints | github_proxy endpoints |
+|---|---|---|
+| `stg_` valid, `GitHubIdentity` present + fresh | ✅ works | ✅ works |
+| `stg_` valid, `GitHubIdentity` access expired (refresh good) | ✅ works | ⤴ refreshes transparently, works |
+| `stg_` valid, `GitHubIdentity` refresh dead/revoked | ✅ works | ❌ 401 `github_reauth_required` → client re-prompts sign-in |
+| `stg_` valid, user has zero Stage installs on relevant repos | ✅ works | 403 from GitHub on writes / empty list on reads |
+| `stg_` revoked or expired (Stage Session revoked_at set, or hash mismatch) | ❌ 401 | ❌ 401 |
+
+A user can keep editing storylines / intro comments locally even when their GitHub token dies — Stage's data plane keeps working as long as their Stage session is alive. Only the GitHub-touching paths need the live credential.
+
+See [ADR-0008](../../adr/0008-github-as-stage-idp.md) for the rationale behind committing to GitHub as Stage's only IDP (no parallel password / email-link / multi-IDP path).
 
 ## 4. Components by file
 
