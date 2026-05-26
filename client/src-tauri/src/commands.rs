@@ -120,12 +120,10 @@ pub async fn auth_sign_in(state: tauri::State<'_, AppState>) -> Result<api::User
         .web_exchange(&params.code, &verifier, &redirect_uri)
         .await?;
 
-    let user = session.user.clone();
     *state.auth.lock() = Some(AuthSession {
         token: session.session_token,
-        user: user.clone(),
     });
-    Ok(user)
+    Ok(session.user)
 }
 
 #[tauri::command]
