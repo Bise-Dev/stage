@@ -22,14 +22,22 @@ pub struct SessionData {
     pub user: User,
 }
 
+/// GitHub user reference embedded in search result items.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct GithubUserRef {
+    pub login: String,
+    pub avatar_url: Option<String>,
+}
+
 /// A single PR item returned by `GET /api/v1/github/prs/`.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct GithubPrSearchItem {
-    pub number: u64,
+    pub number: i64,
     pub title: String,
     pub html_url: String,
-    pub state: String,
-    pub repository_full_name: String,
+    pub repository_url: String,
+    pub updated_at: String,
+    pub user: GithubUserRef,
 }
 
 #[cfg(test)]

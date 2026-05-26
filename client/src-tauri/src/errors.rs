@@ -37,7 +37,10 @@ impl serde::Serialize for AppError {
 
 impl From<api::Error> for AppError {
     fn from(err: api::Error) -> Self {
-        AppError::Backend(format!("{err}"))
+        match err {
+            api::Error::Unauthenticated => AppError::NotAuthenticated,
+            other => AppError::Backend(format!("{other}")),
+        }
     }
 }
 

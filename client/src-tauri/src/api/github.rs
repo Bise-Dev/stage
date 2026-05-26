@@ -41,8 +41,9 @@ mod tests {
                         "number": 42,
                         "title": "My PR",
                         "html_url": "https://github.com/org/repo/pull/42",
-                        "state": "open",
-                        "repository_full_name": "org/repo"
+                        "repository_url": "https://api.github.com/repos/org/repo",
+                        "updated_at": "2026-05-26T12:00:00Z",
+                        "user": { "login": "alice", "avatar_url": "https://a.example/alice.png" }
                     }
                 ]
             })))
@@ -54,6 +55,8 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].number, 42);
         assert_eq!(items[0].title, "My PR");
+        assert_eq!(items[0].repository_url, "https://api.github.com/repos/org/repo");
+        assert_eq!(items[0].user.login, "alice");
     }
 
     #[tokio::test]
