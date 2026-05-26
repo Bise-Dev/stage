@@ -1,4 +1,4 @@
-//! Manual smoke binary for the api::Client device-flow.
+//! Manual smoke binary for the api::Client web-exchange flow.
 //!
 //! Run with the Stage backend up locally:
 //!     cd backend && just dev      # in another terminal
@@ -7,53 +7,25 @@
 //! Override the URL via env var:
 //!     STAGE_BACKEND_URL=http://other:9000 cargo run --example auth_smoke
 //!
-//! Walks: device_start → poll loop → auth_me → logout.
+//! Walks: web_exchange → auth_me → logout.
+//! Provide CODE, CODE_VERIFIER, and REDIRECT_URI via env vars.
 
-use std::time::{Duration, Instant};
-
-use stage_client_lib::api::{Client, DevicePollOutcome};
+use stage_client_lib::api::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let url = std::env::var("STAGE_BACKEND_URL")
         .unwrap_or_else(|_| "http://localhost:8000".to_string());
+    let code = std::env::var("CODE").expect("CODE env var required");
+    let code_verifier = std::env::var("CODE_VERIFIER").expect("CODE_VERIFIER env var required");
+    let redirect_uri =
+        std::env::var("REDIRECT_URI").unwrap_or_else(|_| "http://127.0.0.1:1234/cb".to_string());
     println!("backend: {url}");
 
     let client = Client::new(&url)?;
-    let device = client.device_start().await?;
+    let session = client.web_exchange(&code, &code_verifier, &redirect_uri).await?;
     println!(
-        "\nOpen: {}\nEnter code: {}\n(interval={}s, expires_in={}s)\n",
-        device.verification_uri, device.user_code, device.interval, device.expires_in
-    );
-
-    let deadline = Instant::now() + Duration::from_secs(device.expires_in);
-    let mut interval = Duration::from_secs(device.interval);
-
-    let session = loop {
-        if Instant::now() > deadline {
-            return Err("client deadline exceeded".into());
-        }
-        match client.device_poll(&device.device_code).await? {
-            DevicePollOutcome::Pending => {
-                print!(".");
-            }
-            DevicePollOutcome::SlowDown => {
-                println!("(slow_down — bumping interval)");
-                interval += Duration::from_secs(5);
-            }
-            DevicePollOutcome::Authorized(s) => break s,
-            DevicePollOutcome::Expired => return Err("device_code expired".into()),
-            DevicePollOutcome::Denied => return Err("user denied".into()),
-            _ => {}
-        }
-        tokio::time::sleep(interval).await;
-        if Instant::now() > deadline {
-            return Err("client deadline exceeded".into());
-        }
-    };
-
-    println!(
-        "\nAuthorized! user={} (token len={})",
+        "Authorized! user={} (token len={})",
         session.user.github_login,
         session.session_token.len()
     );
