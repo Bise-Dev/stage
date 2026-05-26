@@ -9,6 +9,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   changes:
@@ -99,16 +100,21 @@ jobs:
 
   ci-required:
     name: ci required
-    needs: [backend-quality, client-quality]
+    needs: [changes, backend-quality, client-quality]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           BACKEND_RESULT: ${{ needs.backend-quality.result }}
           CLIENT_RESULT: ${{ needs.client-quality.result }}
         run: |
           fail=0
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::detect changes result was '$CHANGES_RESULT'"
+            fail=1
+          fi
           for r in "$BACKEND_RESULT" "$CLIENT_RESULT"; do
             case "$r" in
               success|skipped|"") ;;
