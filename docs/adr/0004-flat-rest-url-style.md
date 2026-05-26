@@ -5,7 +5,7 @@
 
 ## Context
 
-The Stage backend forks `brunovollmer/Django-Starter`, whose canonical ADR (`backend/docs/adr/0001-architecture-and-styleguide-baseline.md`) enforces a HackSoft-style "one `APIView` subclass per HTTP operation" rule. In that style, every verb gets its own URL segment:
+The Stage backend forks `brunovollmer/Django-Starter`, whose conventions [ADR-0005](./0005-backend-architecture-and-styleguide-baseline.md) inherits — including the HackSoft-style "one `APIView` subclass per HTTP operation" rule. In that style, every verb gets its own URL segment:
 
 ```
 GET    /items/                       # ItemListApi

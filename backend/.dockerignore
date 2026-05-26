@@ -14,14 +14,11 @@
 .mypy_cache
 .pyrefly_cache
 staticfiles
-generated
 
 # Developer tooling and private notes
 .claude
 .vscode
 .idea
-docs
 ideas.md
 sdlabs-*.md
-CONTEXT.md
 CLAUDE.md
