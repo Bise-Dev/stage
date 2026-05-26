@@ -1,4 +1,5 @@
 import datetime as dt
+from typing import cast
 
 import httpx
 import pytest
@@ -10,11 +11,12 @@ from apps.identity.factories import GitHubIdentityFactory
 from apps.identity.models import GitHubIdentity
 from apps.identity.services import github_identity_ensure_fresh, github_identity_upsert
 from apps.users.factories import UserFactory
+from apps.users.models import User
 
 
 @pytest.mark.django_db
 def test_github_identity_upsert_creates_row_when_missing():
-    user = UserFactory()
+    user = cast(User, UserFactory())
     payload = {
         "access_token": "ghu_NEW",
         "refresh_token": "ghr_NEW",
@@ -29,14 +31,14 @@ def test_github_identity_upsert_creates_row_when_missing():
 
 @pytest.mark.django_db
 def test_github_identity_upsert_rotates_existing_row():
-    identity = GitHubIdentityFactory()
+    identity = cast(GitHubIdentity, GitHubIdentityFactory())
     payload = {
         "access_token": "ghu_ROTATED",
         "refresh_token": "ghr_ROTATED",
         "expires_in": 28800,
         "refresh_token_expires_in": 15897600,
     }
-    updated = github_identity_upsert(user=identity.user, payload=payload)
+    updated = github_identity_upsert(user=cast(User, identity.user), payload=payload)
     assert updated.pk == identity.pk
     assert updated.access_token == "ghu_ROTATED"
     assert updated.refresh_token == "ghr_ROTATED"
@@ -46,7 +48,7 @@ def test_github_identity_upsert_rotates_existing_row():
 @pytest.mark.django_db
 @respx.mock
 def test_github_identity_ensure_fresh_skips_refresh_when_far_from_expiry():
-    identity = GitHubIdentityFactory()  # default: 8 h future
+    identity = cast(GitHubIdentity, GitHubIdentityFactory())  # default: 8 h future
     result = github_identity_ensure_fresh(identity=identity)
     assert result.pk == identity.pk
     assert result.access_token == identity.access_token
@@ -56,8 +58,9 @@ def test_github_identity_ensure_fresh_skips_refresh_when_far_from_expiry():
 @pytest.mark.django_db
 @respx.mock
 def test_github_identity_ensure_fresh_refreshes_near_expiry():
-    identity = GitHubIdentityFactory(
-        access_token_expires_at=timezone.now() + dt.timedelta(seconds=10)
+    identity = cast(
+        GitHubIdentity,
+        GitHubIdentityFactory(access_token_expires_at=timezone.now() + dt.timedelta(seconds=10)),
     )
     respx.post("https://github.com/login/oauth/access_token").mock(
         return_value=httpx.Response(
@@ -79,8 +82,9 @@ def test_github_identity_ensure_fresh_refreshes_near_expiry():
 @pytest.mark.django_db
 @respx.mock
 def test_github_identity_ensure_fresh_deletes_row_on_bad_refresh():
-    identity = GitHubIdentityFactory(
-        access_token_expires_at=timezone.now() - dt.timedelta(minutes=1)
+    identity = cast(
+        GitHubIdentity,
+        GitHubIdentityFactory(access_token_expires_at=timezone.now() - dt.timedelta(minutes=1)),
     )
     respx.post("https://github.com/login/oauth/access_token").mock(
         return_value=httpx.Response(200, json={"error": "bad_refresh_token"})

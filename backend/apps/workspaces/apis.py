@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.exceptions import ApplicationError
-from apps.github_proxy.gateway import GithubGateway
+from apps.github_proxy.gateway import make_user_gateway
 from apps.users.models import User
 from apps.workspaces.models import IntroComment, StorylineFile, Workspace
 from apps.workspaces.selectors import (
@@ -39,11 +39,6 @@ from apps.workspaces.services import (
     workspace_create,
     workspace_update_local_phase,
 )
-from config.settings.env_schemas import env
-
-
-def _gateway() -> GithubGateway:
-    return GithubGateway(token=env.GITHUB_ADMIN_PAT)
 
 
 class WorkspaceListApi(APIView):
@@ -90,7 +85,7 @@ class WorkspaceDetailApi(APIView):
         try:
             return workspace_get(workspace_id=workspace_id)
         except Workspace.DoesNotExist:
-            raise ApplicationError("Not found", status=404)
+            raise ApplicationError("Not found", status=404) from None
 
     def get(self, request: Request, workspace_id: uuid.UUID) -> Response:
         ws = self._get_workspace(workspace_id)
@@ -113,7 +108,7 @@ class StorylineDetailApi(APIView):
         ws = workspace_get(workspace_id=workspace_id)
         if ws.pr_number is None and request.user.pk != ws.created_by_id:
             raise ApplicationError("Not found", status=404)
-        with _gateway() as g:
+        with make_user_gateway(cast(User, request.user)) as g:
             data, etag = storyline_read(workspace=ws, gateway=g)
         response = Response(data)
         response["ETag"] = etag
@@ -129,7 +124,7 @@ class StorylineDetailApi(APIView):
             )
         serializer = StorylineUpdateInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        with _gateway() as g:
+        with make_user_gateway(cast(User, request.user)) as g:
             storyline_replace(
                 workspace=ws,
                 user=cast(User, request.user),
@@ -146,7 +141,7 @@ class StorylineDetailApi(APIView):
 class StorylineFileDetailApi(APIView):
     def get(self, request: Request, workspace_id: uuid.UUID, file_id: uuid.UUID) -> Response:
         ws = workspace_get(workspace_id=workspace_id)
-        with _gateway() as g:
+        with make_user_gateway(cast(User, request.user)) as g:
             data, _ = storyline_read(workspace=ws, gateway=g)
         for f in data["files"]:
             if str(f["id"]) == str(file_id):
@@ -160,7 +155,7 @@ def _get_storyline_file(workspace_id: uuid.UUID, file_id: uuid.UUID) -> Storylin
             pk=file_id, storyline__workspace_id=workspace_id
         )
     except StorylineFile.DoesNotExist:
-        raise ApplicationError("not_found", status=404)
+        raise ApplicationError("not_found", status=404) from None
 
 
 def _get_intro_comment(comment_id: uuid.UUID) -> IntroComment:
@@ -171,7 +166,7 @@ def _get_intro_comment(comment_id: uuid.UUID) -> IntroComment:
             "resolved_by",
         ).get(pk=comment_id)
     except IntroComment.DoesNotExist:
-        raise ApplicationError("not_found", status=404)
+        raise ApplicationError("not_found", status=404) from None
 
 
 def _comment_to_dict(comment: IntroComment) -> dict:
@@ -215,8 +210,8 @@ class IntroCommentCollectionApi(APIView):
             try:
                 parent = IntroComment.objects.get(pk=parent_id)
             except IntroComment.DoesNotExist:
-                raise ApplicationError("parent_not_found", status=404)
-        with _gateway() as g:
+                raise ApplicationError("parent_not_found", status=404) from None
+        with make_user_gateway(cast(User, request.user)) as g:
             comment = intro_comment_create(
                 storyline_file=sf,
                 user=cast(User, request.user),
@@ -271,10 +266,10 @@ class OpenPrApi(APIView):
         try:
             ws = workspace_get(workspace_id=workspace_id)
         except Workspace.DoesNotExist:
-            raise ApplicationError("Not found", status=404)
+            raise ApplicationError("Not found", status=404) from None
         serializer = OpenPrInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        with _gateway() as g:
+        with make_user_gateway(cast(User, request.user)) as g:
             result = pull_request_open(
                 workspace=ws,
                 creator=cast(User, request.user),
@@ -289,7 +284,7 @@ class ReopenPrApi(APIView):
         try:
             ws = workspace_get(workspace_id=workspace_id)
         except Workspace.DoesNotExist:
-            raise ApplicationError("Not found", status=404)
-        with _gateway() as g:
+            raise ApplicationError("Not found", status=404) from None
+        with make_user_gateway(cast(User, request.user)) as g:
             pr = pull_request_reopen(workspace=ws, creator=cast(User, request.user), gateway=g)
         return Response(pr)

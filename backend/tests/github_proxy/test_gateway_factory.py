@@ -1,4 +1,5 @@
 import datetime as dt
+from typing import cast
 
 import httpx
 import pytest
@@ -9,12 +10,13 @@ from apps.core.exceptions import ApplicationError
 from apps.github_proxy.gateway import make_user_gateway
 from apps.identity.factories import GitHubIdentityFactory
 from apps.users.factories import UserFactory
+from apps.users.models import User
 
 
 @pytest.mark.django_db
 def test_make_user_gateway_uses_user_token():
     identity = GitHubIdentityFactory(access_token="ghu_FRESH")
-    gw = make_user_gateway(identity.user)
+    gw = make_user_gateway(cast(User, identity.user))
     # Inspect httpx client headers (read-only).
     auth_header = gw._client.headers["Authorization"]
     assert auth_header == "token ghu_FRESH"
@@ -40,14 +42,14 @@ def test_make_user_gateway_refreshes_near_expiry():
             },
         )
     )
-    gw = make_user_gateway(identity.user)
+    gw = make_user_gateway(cast(User, identity.user))
     assert gw._client.headers["Authorization"] == "token ghu_REFRESHED"
     gw.close()
 
 
 @pytest.mark.django_db
 def test_make_user_gateway_raises_reauth_required_when_no_identity():
-    user = UserFactory()  # no GitHubIdentity
+    user = cast(User, UserFactory())  # no GitHubIdentity
     with pytest.raises(ApplicationError) as exc:
         make_user_gateway(user)
     assert exc.value.message == "github_reauth_required"

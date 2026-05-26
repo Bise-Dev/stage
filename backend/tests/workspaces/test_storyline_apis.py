@@ -3,6 +3,7 @@ from typing import cast
 import pytest
 from rest_framework.test import APIClient
 
+from apps.identity.factories import GitHubIdentityFactory
 from apps.identity.services import session_issue
 from apps.users.factories import UserFactory
 from apps.users.models import User
@@ -14,6 +15,7 @@ from apps.workspaces.services import storyline_create
 @pytest.fixture
 def authed_ws(db) -> tuple[APIClient, User, Workspace]:
     user = cast(User, UserFactory())
+    GitHubIdentityFactory(user=user)
     raw, _ = session_issue(user=user)
     client = APIClient()
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {raw}")
@@ -72,8 +74,9 @@ def test_storyline_put_writes_files(authed_ws) -> None:
 
 @pytest.mark.django_db
 def test_storyline_put_rejects_non_creator(authed_ws) -> None:
-    client, _, ws = authed_ws
+    _, _, ws = authed_ws
     bob = cast(User, UserFactory())
+    GitHubIdentityFactory(user=bob)
     raw, _ = session_issue(user=bob)
     bob_client = APIClient()
     bob_client.credentials(HTTP_AUTHORIZATION=f"Bearer {raw}")
@@ -100,7 +103,7 @@ def test_storyline_pre_publish_404_for_non_creator(authed_ws, db) -> None:
     from apps.identity.services import session_issue
     from apps.users.factories import UserFactory
 
-    _, user_a, ws = authed_ws
+    _, _, ws = authed_ws
     user_b = cast(User, UserFactory())
     raw_b, _ = session_issue(user=user_b)
     client_b = APIClient()

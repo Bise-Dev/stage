@@ -194,8 +194,9 @@ from apps.users.models import User as _User  # noqa: E402
 def make_user_gateway(user: "_User") -> "GithubGateway":
     """Build a GithubGateway for user. Transparently refreshes near-expired tokens."""
     try:
-        identity = user.github_identity
-    except _User.github_identity.RelatedObjectDoesNotExist:
+        # Django generates the reverse OneToOne accessor at runtime; pyrefly can't see it.
+        identity = user.github_identity  # pyrefly: ignore[missing-attribute]
+    except _User.github_identity.RelatedObjectDoesNotExist:  # pyrefly: ignore[missing-attribute] — same: runtime-generated descriptor
         raise _ApplicationError("github_reauth_required", status=401) from None
     identity = _ensure_fresh(identity=identity)
     return GithubGateway(token=identity.access_token)
