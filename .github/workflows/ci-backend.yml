@@ -1,0 +1,38 @@
+name: ci backend
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'justfile'
+      - '.pre-commit-config.yaml'
+      - '.github/workflows/ci-backend.yml'
+
+concurrency:
+  group: ci-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend-quality:
+    name: backend quality
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Sync Python dependencies
+        run: uv sync --frozen
+      - name: Lint (ruff)
+        run: just lint
+      - name: Typecheck (pyrefly)
+        run: just typecheck
