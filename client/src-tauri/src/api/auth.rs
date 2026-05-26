@@ -1,79 +1,32 @@
 use super::client::Client;
 use super::error::Error;
-use super::types::{DeviceCode, DevicePollOutcome, DevicePollSuccess, SessionData, User};
+use super::types::{SessionData, User};
 
 impl Client {
-    /// `POST /api/v1/auth/device/start/` — kicks off the device flow.
-    pub async fn device_start(&self) -> Result<DeviceCode, Error> {
-        let url = self.base_url.join("api/v1/auth/device/start/").unwrap();
-        tracing::debug!(url = %url, "POST device/start");
-        let resp = self.http.post(url).send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let err = Self::map_error(resp).await;
-            tracing::warn!(err = %err, "device_start non-2xx");
-            return Err(err);
-        }
-        resp.json::<DeviceCode>().await.map_err(|e| Self::json_err(status, e))
-    }
-
-    /// `POST /api/v1/auth/device/poll/` — one poll attempt.
-    ///
-    /// The caller drives the loop. Returns a `DevicePollOutcome` describing
-    /// the terminal-or-non-terminal state of the device flow.
-    pub async fn device_poll(
+    pub async fn web_exchange(
         &self,
-        device_code: &str,
-    ) -> Result<DevicePollOutcome, Error> {
-        let url = self.base_url.join("api/v1/auth/device/poll/").unwrap();
-        tracing::debug!(url = %url, "POST device/poll");
+        code: &str,
+        code_verifier: &str,
+        redirect_uri: &str,
+    ) -> Result<SessionData, Error> {
+        let url = self.base_url.join("api/v1/auth/web/exchange/").unwrap();
         let resp = self
             .http
             .post(url)
-            .json(&serde_json::json!({ "device_code": device_code }))
+            .json(&serde_json::json!({
+                "code": code,
+                "code_verifier": code_verifier,
+                "redirect_uri": redirect_uri,
+            }))
             .send()
             .await?;
         let status = resp.status();
-        if status.is_success() {
-            let parsed: DevicePollSuccess = resp.json().await.map_err(|e| Self::json_err(status, e))?;
-            let outcome = match parsed {
-                DevicePollSuccess::Pending => DevicePollOutcome::Pending,
-                DevicePollSuccess::Ok {
-                    session_token,
-                    user,
-                } => {
-                    tracing::info!(github_login = %user.github_login, "device-flow authorized");
-                    DevicePollOutcome::Authorized(SessionData {
-                        session_token,
-                        user,
-                    })
-                }
-            };
-            return Ok(outcome);
+        if !status.is_success() {
+            return Err(Self::map_error(resp).await);
         }
-        // Non-2xx. Interpret the envelope. github_error with a known device-flow
-        // slug maps to its DevicePollOutcome variant; otherwise propagate as
-        // Error.
-        let err = Self::map_error(resp).await;
-        if let Error::Github { ref extra, .. } = err {
-            if let Some(slug) = extra.get("error").and_then(|v| v.as_str()) {
-                match slug {
-                    "authorization_pending" => return Ok(DevicePollOutcome::Pending),
-                    "slow_down" => return Ok(DevicePollOutcome::SlowDown),
-                    "access_denied" => {
-                        tracing::info!("device-flow denied");
-                        return Ok(DevicePollOutcome::Denied);
-                    }
-                    "expired_token" => {
-                        tracing::info!("device-flow expired");
-                        return Ok(DevicePollOutcome::Expired);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        tracing::warn!(err = %err, "device_poll non-2xx (no known slug)");
-        Err(err)
+        resp.json::<SessionData>()
+            .await
+            .map_err(|e| Self::json_err(status, e))
     }
 
     /// `GET /api/v1/auth/me/` — returns the user currently bound to `token`.
@@ -118,195 +71,66 @@ mod tests {
 
     use super::super::client::Client;
     use super::super::error::Error;
-    use super::super::types::DevicePollOutcome;
-
-    async fn arrange_poll_pending(server: &MockServer) {
-        Mock::given(method("POST"))
-            .and(path("/api/v1/auth/device/poll/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status": "pending"
-            })))
-            .mount(server)
-            .await;
-    }
-
-    async fn arrange_poll_github_error(server: &MockServer, slug: &str) {
-        Mock::given(method("POST"))
-            .and(path("/api/v1/auth/device/poll/"))
-            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
-                "message": "github_error",
-                "extra": {"error": slug}
-            })))
-            .mount(server)
-            .await;
-    }
 
     #[tokio::test]
-    async fn device_start_ok() {
+    async fn web_exchange_returns_session_data_on_ok() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/v1/auth/device/start/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "device_code": "abc",
-                "user_code": "ABCD-1234",
-                "verification_uri": "https://github.com/login/device",
-                "interval": 5,
-                "expires_in": 900,
-            })))
-            .mount(&server)
-            .await;
-
-        let client = Client::new(server.uri()).unwrap();
-        let dc = client.device_start().await.unwrap();
-        assert_eq!(dc.user_code, "ABCD-1234");
-        assert_eq!(dc.expires_in, 900);
-    }
-
-    #[tokio::test]
-    async fn device_start_500_maps_to_unexpected() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/api/v1/auth/device/start/"))
-            .respond_with(ResponseTemplate::new(500).set_body_string("internal err"))
-            .mount(&server)
-            .await;
-
-        let client = Client::new(server.uri()).unwrap();
-        let err = client.device_start().await.unwrap_err();
-        match &err {
-            Error::Unexpected { status, message, .. } if status.as_u16() == 500 => {
-                assert_eq!(message, "internal err");
-            }
-            _ => panic!("got {err:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn device_start_200_with_bad_body_maps_to_unexpected() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/api/v1/auth/device/start/"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("not json at all"))
-            .mount(&server)
-            .await;
-        let client = Client::new(server.uri()).unwrap();
-        let err = client.device_start().await.unwrap_err();
-        assert!(
-            matches!(&err, Error::Unexpected { status, .. } if status.as_u16() == 200),
-            "got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn device_start_transport_error_when_server_down() {
-        // Bind a port and immediately drop it — the backend client will get
-        // connection refused.
-        let port = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            l.local_addr().unwrap().port()
-        };
-        let url = format!("http://127.0.0.1:{port}");
-        let client = Client::with_timeout(&url, Duration::from_millis(500)).unwrap();
-        let err = client.device_start().await.unwrap_err();
-        assert!(matches!(err, Error::Transport(_)), "got {err:?}");
-    }
-
-    #[tokio::test]
-    async fn device_poll_pending() {
-        let server = MockServer::start().await;
-        arrange_poll_pending(&server).await;
-        let client = Client::new(server.uri()).unwrap();
-        let out = client.device_poll("dc").await.unwrap();
-        assert!(matches!(out, DevicePollOutcome::Pending));
-    }
-
-    #[tokio::test]
-    async fn device_poll_authorized() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/api/v1/auth/device/poll/"))
+            .and(path("/api/v1/auth/web/exchange/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "status": "ok",
-                "session_token": "stg_abc",
+                "session_token": "stg_AAAA",
                 "user": {
-                    "id": 42,
-                    "github_login": "octocat",
-                    "github_user_id": 583231,
-                    "display_name": null,
-                    "avatar_url": null
+                    "id": 7,
+                    "github_login": "alice",
+                    "github_user_id": 12345,
+                    "display_name": "Alice",
+                    "avatar_url": "https://a.example/alice.png"
                 }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let result = client
+            .web_exchange("code_abc", &"v".repeat(43), "http://127.0.0.1:1234/cb")
+            .await
+            .expect("ok");
+        assert_eq!(result.session_token, "stg_AAAA");
+        assert_eq!(result.user.github_login, "alice");
+    }
+
+    #[tokio::test]
+    async fn web_exchange_maps_400_github_code_invalid_to_domain_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/auth/web/exchange/"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "message": "github_code_invalid",
+                "extra": {"error": "bad_verification_code"}
             })))
             .mount(&server)
             .await;
         let client = Client::new(server.uri()).unwrap();
-        let out = client.device_poll("dc").await.unwrap();
-        match out {
-            DevicePollOutcome::Authorized(s) => {
-                assert_eq!(s.session_token, "stg_abc");
-                assert_eq!(s.user.github_login, "octocat");
-            }
-            other => panic!("expected Authorized, got {other:?}"),
-        }
+        let result = client
+            .web_exchange("bad", &"v".repeat(43), "http://127.0.0.1:1234/cb")
+            .await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn device_poll_authorization_pending_maps_to_pending() {
-        let server = MockServer::start().await;
-        arrange_poll_github_error(&server, "authorization_pending").await;
-        let client = Client::new(server.uri()).unwrap();
-        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::Pending));
-    }
-
-    #[tokio::test]
-    async fn device_poll_slow_down() {
-        let server = MockServer::start().await;
-        arrange_poll_github_error(&server, "slow_down").await;
-        let client = Client::new(server.uri()).unwrap();
-        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::SlowDown));
-    }
-
-    #[tokio::test]
-    async fn device_poll_expired() {
-        let server = MockServer::start().await;
-        arrange_poll_github_error(&server, "expired_token").await;
-        let client = Client::new(server.uri()).unwrap();
-        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::Expired));
-    }
-
-    #[tokio::test]
-    async fn device_poll_denied() {
-        let server = MockServer::start().await;
-        arrange_poll_github_error(&server, "access_denied").await;
-        let client = Client::new(server.uri()).unwrap();
-        assert!(matches!(client.device_poll("dc").await.unwrap(), DevicePollOutcome::Denied));
-    }
-
-    #[tokio::test]
-    async fn device_poll_unknown_slug_propagates_as_backend_error() {
-        let server = MockServer::start().await;
-        arrange_poll_github_error(&server, "nonsense_error").await;
-        let client = Client::new(server.uri()).unwrap();
-        let err = client.device_poll("dc").await.unwrap_err();
-        assert!(
-            matches!(err, Error::Github { .. }),
-            "expected Github error, got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn device_poll_200_with_bad_body_maps_to_unexpected() {
+    async fn web_exchange_maps_502_to_backend_error() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/v1/auth/device/poll/"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("not json at all"))
+            .and(path("/api/v1/auth/web/exchange/"))
+            .respond_with(ResponseTemplate::new(502))
             .mount(&server)
             .await;
         let client = Client::new(server.uri()).unwrap();
-        let err = client.device_poll("dc").await.unwrap_err();
-        assert!(
-            matches!(&err, Error::Unexpected { status, .. } if status.as_u16() == 200),
-            "got {err:?}"
-        );
+        let result = client
+            .web_exchange("c", &"v".repeat(43), "http://127.0.0.1:1234/cb")
+            .await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -470,85 +294,36 @@ mod tests {
         }
     }
 
-    // #8 — valid JSON with no `message` key falls back to raw body
+    // #8 — valid JSON with no `message` key falls back to raw body (using web_exchange)
     #[tokio::test]
-    async fn device_start_400_no_message_key_falls_back_to_raw_body() {
+    async fn web_exchange_400_no_message_key_falls_back_to_raw_body() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/v1/auth/device/start/"))
+            .and(path("/api/v1/auth/web/exchange/"))
             .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
                 "foo": "bar"
             })))
             .mount(&server)
             .await;
         let client = Client::new(server.uri()).unwrap();
-        let err = client.device_start().await.unwrap_err();
-        match &err {
-            Error::Unexpected { message, extra, .. } => {
+        match client
+            .web_exchange("c", &"v".repeat(43), "http://127.0.0.1:1234/cb")
+            .await
+        {
+            Err(Error::Unexpected { message, extra, .. }) => {
                 assert!(message.contains("foo"), "expected raw body, got {message:?}");
                 assert!(extra.is_null());
             }
-            other => panic!("expected Unexpected, got {other:?}"),
+            Err(other) => panic!("expected Unexpected, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
         }
-    }
-
-    // #9a — github_error envelope with missing `error` key
-    #[tokio::test]
-    async fn device_poll_github_error_missing_error_key_propagates() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/api/v1/auth/device/poll/"))
-            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
-                "message": "github_error",
-                "extra": {}
-            })))
-            .mount(&server)
-            .await;
-        let client = Client::new(server.uri()).unwrap();
-        let err = client.device_poll("dc").await.unwrap_err();
-        match err {
-            Error::Github { extra, .. } => {
-                assert!(extra.is_object());
-                assert!(extra.as_object().unwrap().is_empty());
-            }
-            other => panic!("expected Github, got {other:?}"),
-        }
-    }
-
-    // #9b — github_error envelope where `error` is non-string (e.g. integer)
-    #[tokio::test]
-    async fn device_poll_github_error_non_string_slug_propagates() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/api/v1/auth/device/poll/"))
-            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
-                "message": "github_error",
-                "extra": {"error": 42}
-            })))
-            .mount(&server)
-            .await;
-        let client = Client::new(server.uri()).unwrap();
-        let err = client.device_poll("dc").await.unwrap_err();
-        assert!(matches!(err, Error::Github { .. }), "expected Github, got {err:?}");
-    }
-
-    // #10 — device_poll issues exactly one HTTP request per call (ADR-0006 pin)
-    #[tokio::test]
-    async fn device_poll_slow_down_issues_exactly_one_request() {
-        let server = MockServer::start().await;
-        arrange_poll_github_error(&server, "slow_down").await;
-        let client = Client::new(server.uri()).unwrap();
-        let out = client.device_poll("dc").await.unwrap();
-        assert!(matches!(out, DevicePollOutcome::SlowDown));
-        let received = server.received_requests().await.unwrap();
-        assert_eq!(received.len(), 1, "expected exactly 1 request, got {}", received.len());
     }
 
     #[tokio::test]
     async fn with_timeout_honored_on_slow_server() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/v1/auth/device/start/"))
+            .and(path("/api/v1/auth/web/exchange/"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_delay(Duration::from_millis(2_000)),
@@ -558,9 +333,13 @@ mod tests {
 
         let client =
             Client::with_timeout(server.uri(), Duration::from_millis(50)).unwrap();
-        // Timeout fires before any response byte arrives; reqwest propagates it
-        // via `?` → `Error::Transport`. Neither map_error nor json_err runs.
-        let err = client.device_start().await.unwrap_err();
-        assert!(matches!(err, Error::Transport(_)), "got {err:?}");
+        match client
+            .web_exchange("c", &"v".repeat(43), "http://127.0.0.1:1234/cb")
+            .await
+        {
+            Err(Error::Transport(_)) => {}
+            Err(other) => panic!("expected Transport, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
+        }
     }
 }
