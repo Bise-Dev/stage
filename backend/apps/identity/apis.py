@@ -9,9 +9,9 @@ from rest_framework.views import APIView
 from apps.identity.github_app import exchange_code, fetch_user
 from apps.identity.models import Session
 from apps.identity.selectors import _hash_token
-from apps.identity.serializers.device_poll_ok_output import DevicePollOkOutputSerializer
 from apps.identity.serializers.user_output import UserOutputSerializer
 from apps.identity.serializers.web_exchange_input import WebExchangeInputSerializer
+from apps.identity.serializers.web_exchange_output import WebExchangeOutputSerializer
 from apps.identity.services import (
     github_identity_upsert,
     session_issue,
@@ -37,7 +37,7 @@ class AuthWebExchangeApi(APIView):
         github_identity_upsert(user=user, payload=payload)
         raw, _ = session_issue(user=user)
         return Response(
-            DevicePollOkOutputSerializer(
+            WebExchangeOutputSerializer(
                 {
                     "status": "ok",
                     "session_token": raw,
