@@ -227,12 +227,11 @@ Three layers, all green at v0.1.0-poc-backend (168 tests, 96% line coverage):
 
 No real github calls in CI. A manual real-PAT smoke is part of the release checklist (`just generate-schema`, runserver, curl through a couple of endpoints).
 
-After every code change run the verify pipeline before declaring done (see `backend/CLAUDE.md`):
+After every code change run the verify pipeline before declaring done (see [CLAUDE.md](../CLAUDE.md)):
 
 ```sh
-uv run pre-commit run --all-files   # ruff check + format
-just typecheck                       # pyrefly
-just test                            # pytest
+just pre-commit       # ruff + format + pyrefly + biome + cargo fmt + tsc + cargo check
+just verify           # pre-commit + clippy + cargo test + pytest
 ```
 
 ## 14 · Tech debt parked (explicit)
@@ -270,7 +269,7 @@ These were proposed during brainstorming and *intentionally* not built. Each is 
   - **ADR-0002** Workspace identity + computed phases
   - **ADR-0003** Write-through comments (POC stance)
   - **ADR-0004** Flat-REST URL style
+  - **ADR-0005** Backend architecture and styleguide baseline
 - `CONTEXT.md` — glossary + design criteria.
-- `backend/CONTEXT.md` + `backend/CLAUDE.md` — backend coding conventions.
-- `backend/docs/adr/0001-architecture-and-styleguide-baseline.md` — boilerplate styleguide.
+- `CLAUDE.md` — repo-wide Claude conventions (backend section covers Django patterns + structlog).
 - `docs/history/` — full brainstorming archive (v1 + v2 specs/plans, v3 plan, the 793-line decisions log). Preserved for the "why did you reject X" lineage; not part of the canonical doc tree.

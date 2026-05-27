@@ -11,11 +11,9 @@ alias t := test
 alias l := lint
 alias f := format
 alias tc := typecheck
-alias v := verify
 
 bootstrap:
     uv sync
-    uv run pre-commit install
     cp -n .env.example .env || true
     docker compose up -d postgres
     uv run python manage.py migrate
@@ -41,12 +39,6 @@ createsuperuser: _require-db
 
 shell: _require-db
     uv run python manage.py shell
-
-# run the full local verify pipeline (matches pre-commit + typecheck + tests)
-verify:
-    uv run pre-commit run --all-files
-    uv run pyrefly check
-    uv run pytest
 
 # wipe the postgres volume and re-bootstrap from scratch
 reset-db:
@@ -79,7 +71,7 @@ down:
 logs:
     docker compose logs -f
 
-GENERATED := "generated"
+GENERATED := "../generated"
 
 # generate the OpenAPI schema into generated/
 generate-schema:

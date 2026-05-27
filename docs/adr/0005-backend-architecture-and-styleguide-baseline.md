@@ -1,4 +1,4 @@
-# Architecture and styleguide baseline
+# Backend architecture and styleguide baseline
 
 ## Context
 
@@ -6,9 +6,11 @@ Django has no opinionated layout for applications larger than the tutorial. The 
 
 A widely-adopted correction is to introduce an explicit **service layer** (writes) and **selector layer** (reads) per app, and to keep everything else — views, serializers, models — thin and free of business logic. The well-known reference for this pattern is the [HackSoft Django Styleguide](https://github.com/HackSoftware/Django-Styleguide), which the structural choices below borrow from heavily.
 
+The Stage backend was originally bootstrapped from [`brunovollmer/Django-Starter`](https://github.com/brunovollmer/Django-Starter) and inherits its conventions wholesale; this ADR documents the baseline as it applies to Stage.
+
 ## Decision
 
-This starter adopts an opinionated structural baseline. It largely follows the styleguide linked above, with a small set of deliberate deviations. The styleguide answers ~90% of the questions a new Django project faces; we accept those answers wholesale and document only where we diverge.
+The backend adopts an opinionated structural baseline. It largely follows the styleguide linked above, with a small set of deliberate deviations. The styleguide answers ~90% of the questions a Django project faces; we accept those answers wholesale and document only where we diverge.
 
 ### What we take from the styleguide, unmodified
 
@@ -24,11 +26,11 @@ This starter adopts an opinionated structural baseline. It largely follows the s
 
 1. **`BaseModel.save()` calls `full_clean()`.** The styleguide says "no logic in `save()`," and we agree in spirit — but we treat `full_clean()` as a validation safety net, not domain logic. Services are still expected to call `full_clean()` explicitly when relevant; this is a backstop, not a contract. Cost: every non-bulk save runs validation twice in the common path. We accept that for the protection against the "service forgot to validate" class of bug.
 
-2. **`User` does not inherit `BaseModel`.** Domain models all inherit `BaseModel`; `User` inherits `AbstractUser` directly and keeps Django's `BigAutoField` PK, `date_joined`, and `last_login`. The asymmetry is documented in [CONTEXT.md](../../CONTEXT.md). Reversing this would mean rewriting `User` from `AbstractBaseUser` upward (manager, password reset flow, admin form path) — a worse default for a generic starter.
+2. **`User` does not inherit `BaseModel`.** Domain models all inherit `BaseModel`; `User` inherits `AbstractUser` directly and keeps Django's `BigAutoField` PK, `date_joined`, and `last_login`. Reversing this would mean rewriting `User` from `AbstractBaseUser` upward (manager, password reset flow, admin form path) — a worse default for a Django project.
 
 3. **Serializers extracted to `apps/<app>/serializers/`, one class per file.** The styleguide says serializers should be nested inside the API class to discourage reuse-driven coupling. In practice, the inline rule produces real duplication when the same output shape is used across list/detail/create-response endpoints, and the resulting copy-paste drift is its own bug class. We extract by default, accept the reuse-coupling risk, and rely on code review to catch shared-serializer changes that affect multiple endpoints.
 
-4. **Tests live at top-level `tests/`, mirroring the app tree.** The styleguide puts tests beside the code at `apps/<app>/tests/`. We move them to a top-level `tests/` directory (with a global `conftest.py` and per-app subdirectories) because cross-app fixtures and integration tests benefit from a single root. The factory module stays under each app (`apps/<app>/factories.py`) so non-test code (management commands, dev-data seeders) can import factories without reaching into a `tests/` package.
+4. **Tests live at top-level `backend/tests/`, mirroring the app tree.** The styleguide puts tests beside the code at `apps/<app>/tests/`. We move them to a top-level `tests/` directory (with a global `conftest.py` and per-app subdirectories) because cross-app fixtures and integration tests benefit from a single root. The factory module stays under each app (`apps/<app>/factories.py`) so non-test code (management commands, dev-data seeders) can import factories without reaching into a `tests/` package.
 
 5. **`apps/admin/` is a real app, not a namespace.** It contains no DRF endpoints — only `ModelAdmin` registrations, Unfold dashboards, custom admin views. It uses the directory name `admin/` with the explicit app `label = "custom_admin"` to avoid colliding with `django.contrib.admin`'s label.
 
@@ -36,7 +38,7 @@ This starter adopts an opinionated structural baseline. It largely follows the s
 
 ## Consequences
 
-- Downstream projects forking this starter inherit an opinionated structure on day one. The cost is the first hour of learning the conventions; the payoff is that the project's tenth API endpoint looks identical to its first.
+- Anyone working in the backend inherits an opinionated structure on day one. The cost is the first hour of learning the conventions; the payoff is that the project's tenth API endpoint looks identical to its first.
 - The deviations are localized. A team familiar with the underlying styleguide can read this codebase and identify each deviation quickly; nothing is hidden in the small print.
 - The `full_clean()`-in-`save()` choice carries a measurable performance cost on write-heavy paths. Projects that hit that ceiling can override `save()` on specific hot models or use `update_fields=` / `bulk_update` to bypass it.
 - The extracted-serializer choice means new reviewers must be vigilant about shared-serializer changes. A future ADR may revisit this if the reuse-coupling bugs the styleguide warns about start materialising.
