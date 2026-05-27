@@ -22,16 +22,6 @@ export type WorkspaceState =
   | 'requested'
   | 'approved';
 
-/** Self-Review: a branch with no Workspace. */
-export interface BranchRow {
-  id: string;
-  branch: string;
-  author: string;
-  added: number;
-  removed: number;
-  updated: string;
-}
-
 /** A Workspace — either pre-publish ("Ready to share") or published ("In review"). */
 export interface WorkspaceRow {
   id: string;
@@ -62,33 +52,6 @@ export interface ExternalPrRow {
 export const YOU = 'You';
 
 /* ─── Stubs (no backend yet) ─────────────────────────────────────────── */
-
-export const STUB_BRANCHES: BranchRow[] = [
-  {
-    id: 'br-edge-cases',
-    branch: 'experiment/edge-cases',
-    author: YOU,
-    added: 31,
-    removed: 14,
-    updated: '5m ago',
-  },
-  {
-    id: 'br-docs-typos',
-    branch: 'docs/api-typos',
-    author: YOU,
-    added: 12,
-    removed: 8,
-    updated: 'yesterday',
-  },
-  {
-    id: 'br-mira-cache',
-    branch: 'mira/cache-key-fix',
-    author: 'Mira Park',
-    added: 18,
-    removed: 6,
-    updated: '3h ago',
-  },
-];
 
 export const STUB_WORKSPACES: WorkspaceRow[] = [
   // Ready to share (workspace, no PR)
@@ -191,6 +154,11 @@ export function relativeTime(iso: string): string {
     if (seconds >= secs) return fmt.format(-Math.floor(seconds / secs), unit);
   }
   return 'just now';
+}
+
+/** Relative time from epoch seconds (UTC) — used for local-branch commit times. */
+export function relativeTimeFromEpoch(seconds: number): string {
+  return relativeTime(new Date(seconds * 1000).toISOString());
 }
 
 export function externalPrFromGithub(

@@ -17,14 +17,14 @@ Implements the design's "1 · Workspaces" (`screens-v2-workspaces.jsx`). Decisio
 
 | Bucket | Source today | Status |
 | --- | --- | --- |
-| **Self-Review** (branch, no workspace) | — | **Deferred** — needs a Rust command to enumerate local branches with diff stats. Rendered from the typed stub in `data.ts`. |
+| **Self-Review** (branch, no workspace) | `gitLocalBranches` | **Live** — lists all local branches (name, current-HEAD marker, last-commit time), most-recent first, refreshed on `repo-changed`. Diff stats (`+/−`) and ahead/behind are not yet computed (next git op). |
 | **Ready to share** (workspace, no PR) | — | **Deferred** — needs a backend `workspace_list` call scoped to the active repo. Stubbed. |
 | **In review** (workspace + PR) | — | **Deferred** — same backend dependency as above. Stubbed. |
-| **Open PRs** (PR, no workspace) | `githubPrs(role)` | **Live** — the only bucket wired to real data. |
+| **Open PRs** (PR, no workspace) | `githubPrs(role)` | **Live**. |
 
-Because no workspace-listing backend exists, **every real GitHub PR returned by `githubPrs` lands in the "Open PRs" bucket** (no workspace can be associated yet). The Self-Review / Ready-to-share / In-review buckets are populated only by stub data and will be empty against a real account until the backend lands.
+Because no workspace-listing backend exists, **every real GitHub PR returned by `githubPrs` lands in the "Open PRs" bucket** (no workspace can be associated yet), and the Self-Review bucket lists *all* local branches regardless of whether a workspace exists (none can, yet). The Ready-to-share / In-review buckets are still populated only by stub data and will be empty against a real account until the backend lands.
 
-Row fields with **no live source** (shown for stub rows only; blank/omitted for live PRs): diff stats (`+added / −removed`), `ahead/behind`, storyline step count, comment count, CI check status, reviewer avatars.
+Row fields with **no live source**: branch diff stats (`+added / −removed`) and ahead/behind (the Self-Review row shows just the last-commit summary + time for now); and for the stubbed workspace buckets — storyline step count, comment count, CI check status, reviewer avatars.
 
 ### Actions — visible and clickable, but no-op
 

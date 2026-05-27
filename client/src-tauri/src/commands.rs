@@ -71,6 +71,17 @@ pub fn repo_summary(path: PathBuf) -> Result<git::RepoSummary, AppError> {
 }
 
 #[tauri::command]
+pub fn git_local_branches(state: State<'_, AppState>) -> Result<Vec<git::BranchInfo>, AppError> {
+    let path = state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| a.path.clone())
+        .ok_or(AppError::NoActiveRepo)?;
+    git::local_branches(&path)
+}
+
+#[tauri::command]
 pub async fn git_fetch(state: State<'_, AppState>) -> Result<git::FetchOutcome, AppError> {
     let path = state
         .active

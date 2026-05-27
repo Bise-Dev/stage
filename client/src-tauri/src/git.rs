@@ -56,6 +56,42 @@ pub fn summary(repo_path: &Path) -> Result<RepoSummary, AppError> {
 }
 
 #[derive(Serialize)]
+pub struct BranchInfo {
+    pub name: String,
+    #[serde(rename = "isHead")]
+    pub is_head: bool,
+    /// Last-commit time, epoch seconds (UTC). Formatted on the client.
+    #[serde(rename = "updatedAt")]
+    pub updated_at: i64,
+    #[serde(rename = "lastCommit")]
+    pub last_commit: Option<String>,
+}
+
+/// All local branches, most-recently-committed first.
+pub fn local_branches(repo_path: &Path) -> Result<Vec<BranchInfo>, AppError> {
+    let repo = Repository::open(repo_path)?;
+    let mut out = Vec::new();
+
+    for entry in repo.branches(Some(BranchType::Local))? {
+        let (branch, _) = entry?;
+        let Some(name) = branch.name()?.map(str::to_string) else {
+            continue; // non-UTF-8 branch name — skip rather than fail the whole list
+        };
+        let is_head = branch.is_head();
+        let commit = branch.get().peel_to_commit()?;
+        out.push(BranchInfo {
+            name,
+            is_head,
+            updated_at: commit.time().seconds(),
+            last_commit: commit.summary().map(str::to_string),
+        });
+    }
+
+    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Ok(out)
+}
+
+#[derive(Serialize)]
 pub struct FetchOutcome {
     pub remote: String,
 }

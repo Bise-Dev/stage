@@ -1,17 +1,25 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar } from '../../components/Avatar';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
-import { getActiveRepo, gitFetch, githubPrs, openInFinder, repoSummary } from '../../tauri';
 import {
-  type BranchRow,
+  type BranchInfo,
+  getActiveRepo,
+  gitFetch,
+  gitLocalBranches,
+  githubPrs,
+  openInFinder,
+  repoSummary,
+} from '../../tauri';
+import {
   type ExternalPrRow,
-  STUB_BRANCHES,
   STUB_WORKSPACES,
   type WorkspaceRow,
   type WorkspaceState,
   YOU,
   externalPrFromGithub,
+  relativeTimeFromEpoch,
 } from './data';
 
 type Show = 'all' | 'yours' | 'review';
@@ -44,8 +52,7 @@ function slugFromRemote(url: string | null): string | null {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
-// Stub buckets never change; live PRs arrive async.
-const yoursBranches = STUB_BRANCHES.filter((b) => b.author === YOU);
+// Stub workspace buckets never change; branches + PRs arrive async.
 const yoursReadyToShare = STUB_WORKSPACES.filter((w) => w.author === YOU && !w.prNumber);
 const yoursInReview = STUB_WORKSPACES.filter((w) => w.author === YOU && w.prNumber);
 const reviewInReview = STUB_WORKSPACES.filter((w) => w.author !== YOU && w.prNumber);
@@ -53,6 +60,7 @@ const reviewInReview = STUB_WORKSPACES.filter((w) => w.author !== YOU && w.prNum
 export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
   const [repoSlug, setRepoSlug] = useState<string | null>(null);
   const [repoPath, setRepoPath] = useState<string | null>(null);
+  const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [externals, setExternals] = useState<ExternalPrRow[]>([]);
   const [show, setShow] = useState<Show>('all');
   const [kind, setKind] = useState<Kind | null>(null);
@@ -63,16 +71,34 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
   const railRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<HTMLButtonElement>(null);
 
+  const loadBranches = useCallback(async () => {
+    try {
+      setBranches(await gitLocalBranches());
+    } catch (e) {
+      console.warn('workspaces_branches_failed', e);
+    }
+  }, []);
+
+  // Initial load, and keep branches live as refs / the working tree change.
+  useEffect(() => {
+    loadBranches();
+    const unlisten = listen('repo-changed', () => loadBranches());
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, [loadBranches]);
+
   const runFetch = async () => {
     setFetching(true);
     setFetchError(null);
     try {
       await gitFetch();
-      // Fetch may have moved remote refs / changed branch count — refresh the rail.
+      // Fetch may have moved refs / changed branch count — refresh rail + branches.
       if (repoPath) {
         const sum = await repoSummary(repoPath);
         setRepoSlug(slugFromRemote(sum.remoteUrl));
       }
+      await loadBranches();
     } catch (e) {
       setFetchError(String(e));
     } finally {
@@ -133,8 +159,8 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
   }, []);
 
   const q = query.trim().toLowerCase();
-  const matchBranch = (b: BranchRow) =>
-    !q || b.branch.toLowerCase().includes(q) || b.author.toLowerCase().includes(q);
+  const matchBranch = (b: BranchInfo) =>
+    !q || b.name.toLowerCase().includes(q) || (b.lastCommit?.toLowerCase().includes(q) ?? false);
   const matchWorkspace = (w: WorkspaceRow) =>
     !q ||
     w.title.toLowerCase().includes(q) ||
@@ -152,13 +178,13 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
 
   // Counts (kind filter is independent of the rail counts, like the design).
   const kindCounts = {
-    'self-review': STUB_BRANCHES.length,
+    'self-review': branches.length,
     'ready-to-share': STUB_WORKSPACES.filter((w) => !w.prNumber).length,
     'in-review': STUB_WORKSPACES.filter((w) => w.prNumber).length,
     'open-prs': externals.length,
   };
   const yoursCount =
-    yoursBranches.length + yoursReadyToShare.length + yoursInReview.length + externalsAuthor.length;
+    branches.length + yoursReadyToShare.length + yoursInReview.length + externalsAuthor.length;
   const reviewCount = reviewInReview.length + externalsReviewer.length;
 
   const showKind = (k: Kind) => kind === null || kind === k;
@@ -357,15 +383,15 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
                   border="rgba(0,122,255,0.16)"
                   accent="var(--blue)"
                 >
-                  {showKind('self-review') && yoursBranches.filter(matchBranch).length > 0 && (
+                  {showKind('self-review') && branches.filter(matchBranch).length > 0 && (
                     <Bucket
                       color="var(--orange)"
                       title="Self-Review"
                       hint="no workspace"
-                      count={yoursBranches.length}
+                      count={branches.length}
                     >
-                      {yoursBranches.filter(matchBranch).map((b) => (
-                        <BranchRowCompact key={b.id} b={b} />
+                      {branches.filter(matchBranch).map((b) => (
+                        <BranchRowCompact key={b.name} b={b} />
                       ))}
                     </Bucket>
                   )}
@@ -833,7 +859,7 @@ function rowShell(active?: boolean): React.CSSProperties {
   };
 }
 
-function BranchRowCompact({ b }: { b: BranchRow }) {
+function BranchRowCompact({ b }: { b: BranchInfo }) {
   return (
     <div style={rowShell()}>
       <Icon name="branch" size={12} color="var(--gray-500)" />
@@ -849,8 +875,13 @@ function BranchRowCompact({ b }: { b: BranchRow }) {
               whiteSpace: 'nowrap',
             }}
           >
-            {b.branch}
+            {b.name}
           </span>
+          {b.isHead && (
+            <span className="badge badge-green" style={{ flex: '0 0 auto' }}>
+              current
+            </span>
+          )}
         </div>
         <div
           style={{
@@ -862,14 +893,14 @@ function BranchRowCompact({ b }: { b: BranchRow }) {
             whiteSpace: 'nowrap',
           }}
         >
-          <span style={{ color: 'var(--green-d)' }}>+{b.added}</span>{' '}
-          <span style={{ color: 'var(--red-d)' }}>−{b.removed}</span> · {b.updated}
+          {b.lastCommit ? `${b.lastCommit} · ` : ''}
+          {relativeTimeFromEpoch(b.updatedAt)}
         </div>
       </div>
       <button
         type="button"
         className="btn"
-        onClick={() => console.info('workspaces_self_review_stub', b.id)}
+        onClick={() => console.info('workspaces_self_review_stub', b.name)}
       >
         <Icon name="play" size={10} color="var(--gray-700)" /> Self-Review
       </button>

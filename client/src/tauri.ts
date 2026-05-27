@@ -7,6 +7,13 @@ export type RepoSummary = {
   branchesCount: number;
   remoteUrl: string | null;
 };
+export type BranchInfo = {
+  name: string;
+  isHead: boolean;
+  /** Last-commit time, epoch seconds (UTC). */
+  updatedAt: number;
+  lastCommit: string | null;
+};
 export type FetchOutcome = {
   remote: string;
 };
@@ -22,6 +29,8 @@ export const forgetRecentRepo = (path: string) => invoke<void>('forget_recent_re
 export const gitCurrentBranch = () => invoke<string>('git_current_branch');
 
 export const repoSummary = (path: string) => invoke<RepoSummary>('repo_summary', { path });
+
+export const gitLocalBranches = () => invoke<BranchInfo[]>('git_local_branches');
 
 export const gitFetch = () => invoke<FetchOutcome>('git_fetch');
 
