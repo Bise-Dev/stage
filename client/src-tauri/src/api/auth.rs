@@ -40,7 +40,9 @@ impl Client {
             tracing::warn!(err = %err, "auth_me non-2xx");
             return Err(err);
         }
-        resp.json::<User>().await.map_err(|e| Self::json_err(status, e))
+        resp.json::<User>()
+            .await
+            .map_err(|e| Self::json_err(status, e))
     }
 
     /// `POST /api/v1/auth/logout/` — revokes the session server-side.
@@ -311,7 +313,10 @@ mod tests {
             .await
         {
             Err(Error::Unexpected { message, extra, .. }) => {
-                assert!(message.contains("foo"), "expected raw body, got {message:?}");
+                assert!(
+                    message.contains("foo"),
+                    "expected raw body, got {message:?}"
+                );
                 assert!(extra.is_null());
             }
             Err(other) => panic!("expected Unexpected, got {other:?}"),
@@ -324,15 +329,11 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/v1/auth/web/exchange/"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_delay(Duration::from_millis(2_000)),
-            )
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(2_000)))
             .mount(&server)
             .await;
 
-        let client =
-            Client::with_timeout(server.uri(), Duration::from_millis(50)).unwrap();
+        let client = Client::with_timeout(server.uri(), Duration::from_millis(50)).unwrap();
         match client
             .web_exchange("c", &"v".repeat(43), "http://127.0.0.1:1234/cb")
             .await

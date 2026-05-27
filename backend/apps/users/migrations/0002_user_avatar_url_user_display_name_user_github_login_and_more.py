@@ -4,35 +4,34 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('users', '0001_initial'),
+        ("users", "0001_initial"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='user',
-            name='avatar_url',
-            field=models.URLField(blank=True, default=''),
+            model_name="user",
+            name="avatar_url",
+            field=models.URLField(blank=True, default=""),
         ),
         migrations.AddField(
-            model_name='user',
-            name='display_name',
-            field=models.CharField(blank=True, default='', max_length=255),
+            model_name="user",
+            name="display_name",
+            field=models.CharField(blank=True, default="", max_length=255),
         ),
         migrations.AddField(
-            model_name='user',
-            name='github_login',
+            model_name="user",
+            name="github_login",
             field=models.CharField(blank=True, max_length=39, null=True, unique=True),
         ),
         migrations.AddField(
-            model_name='user',
-            name='github_user_id',
+            model_name="user",
+            name="github_user_id",
             field=models.BigIntegerField(blank=True, null=True, unique=True),
         ),
         migrations.AddField(
-            model_name='user',
-            name='last_login_at',
+            model_name="user",
+            name="last_login_at",
             field=models.DateTimeField(blank=True, null=True),
         ),
     ]

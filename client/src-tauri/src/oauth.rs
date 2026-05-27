@@ -1,7 +1,7 @@
-use std::time::Duration;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -83,16 +83,26 @@ impl LoopbackListener {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(OauthError::BindFailed)?;
-        let port = listener.local_addr().map_err(OauthError::BindFailed)?.port();
+        let port = listener
+            .local_addr()
+            .map_err(OauthError::BindFailed)?
+            .port();
         let redirect_uri = format!("http://127.0.0.1:{}/cb", port);
-        Ok(Self { listener, redirect_uri })
+        Ok(Self {
+            listener,
+            redirect_uri,
+        })
     }
 
     pub fn redirect_uri(&self) -> &str {
         &self.redirect_uri
     }
 
-    pub async fn recv(self, deadline: Duration, expected_state: &str) -> Result<CallbackParams, OauthError> {
+    pub async fn recv(
+        self,
+        deadline: Duration,
+        expected_state: &str,
+    ) -> Result<CallbackParams, OauthError> {
         let listener = self.listener;
         let expected_state = expected_state.to_string();
         let result = timeout(deadline, async move {
@@ -173,10 +183,9 @@ fn urldecode_safe(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(b) = u8::from_str_radix(
-                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
-                16,
-            ) {
+            if let Ok(b) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
                 out.push(b);
                 i += 3;
                 continue;
@@ -249,13 +258,14 @@ mod tests {
     #[tokio::test]
     async fn listener_receives_callback_and_returns_parsed() {
         let listener = LoopbackListener::bind().await.expect("bind");
-        let addr = listener.redirect_uri().trim_start_matches("http://").trim_end_matches("/cb").to_string();
+        let addr = listener
+            .redirect_uri()
+            .trim_start_matches("http://")
+            .trim_end_matches("/cb")
+            .to_string();
 
-        let recv_handle = tokio::spawn(async move {
-            listener
-                .recv(Duration::from_secs(5), "STATE_OK")
-                .await
-        });
+        let recv_handle =
+            tokio::spawn(async move { listener.recv(Duration::from_secs(5), "STATE_OK").await });
 
         send_raw_get(&addr, "/cb?code=ABC&state=STATE_OK&installation_id=42").await;
 
@@ -268,12 +278,13 @@ mod tests {
     #[tokio::test]
     async fn listener_returns_state_mismatch_when_state_differs() {
         let listener = LoopbackListener::bind().await.expect("bind");
-        let addr = listener.redirect_uri().trim_start_matches("http://").trim_end_matches("/cb").to_string();
-        let recv_handle = tokio::spawn(async move {
-            listener
-                .recv(Duration::from_secs(5), "EXPECTED")
-                .await
-        });
+        let addr = listener
+            .redirect_uri()
+            .trim_start_matches("http://")
+            .trim_end_matches("/cb")
+            .to_string();
+        let recv_handle =
+            tokio::spawn(async move { listener.recv(Duration::from_secs(5), "EXPECTED").await });
         send_raw_get(&addr, "/cb?code=ABC&state=DIFFERENT").await;
         let result = recv_handle.await.expect("join");
         assert!(matches!(result, Err(OauthError::StateMismatch)));
@@ -282,12 +293,13 @@ mod tests {
     #[tokio::test]
     async fn listener_returns_user_denied_on_access_denied_error() {
         let listener = LoopbackListener::bind().await.expect("bind");
-        let addr = listener.redirect_uri().trim_start_matches("http://").trim_end_matches("/cb").to_string();
-        let recv_handle = tokio::spawn(async move {
-            listener
-                .recv(Duration::from_secs(5), "STATE")
-                .await
-        });
+        let addr = listener
+            .redirect_uri()
+            .trim_start_matches("http://")
+            .trim_end_matches("/cb")
+            .to_string();
+        let recv_handle =
+            tokio::spawn(async move { listener.recv(Duration::from_secs(5), "STATE").await });
         send_raw_get(&addr, "/cb?error=access_denied").await;
         let result = recv_handle.await.expect("join");
         assert!(matches!(result, Err(OauthError::UserDenied)));
@@ -296,9 +308,7 @@ mod tests {
     #[tokio::test]
     async fn listener_times_out_when_no_callback() {
         let listener = LoopbackListener::bind().await.expect("bind");
-        let result = listener
-            .recv(Duration::from_millis(100), "STATE")
-            .await;
+        let result = listener.recv(Duration::from_millis(100), "STATE").await;
         assert!(matches!(result, Err(OauthError::Timeout)));
     }
 
@@ -313,9 +323,8 @@ mod tests {
             .trim_end_matches("/cb")
             .to_string();
 
-        let recv_handle = tokio::spawn(async move {
-            listener.recv(Duration::from_secs(5), "STATE_OK").await
-        });
+        let recv_handle =
+            tokio::spawn(async move { listener.recv(Duration::from_secs(5), "STATE_OK").await });
 
         // First: a probe — open + close write side immediately, no data.
         {

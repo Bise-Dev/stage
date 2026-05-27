@@ -14,7 +14,11 @@ def storyline_file(db) -> StorylineFile:
     user = cast(User, UserFactory())
     ws = cast(Workspace, WorkspaceFactory(created_by=user))
     storyline_create(workspace=ws, author=user)
-    return StorylineFile.objects.create(storyline=ws.storyline, diff_file_path="a.py", order_index=0)  # pyrefly: ignore[missing-attribute]
+    return StorylineFile.objects.create(
+        storyline=ws.storyline,  # pyrefly: ignore[missing-attribute]
+        diff_file_path="a.py",
+        order_index=0,
+    )
 
 
 @pytest.mark.django_db
@@ -29,5 +33,7 @@ def test_intro_comment_root(storyline_file) -> None:
 def test_intro_comment_reply_depth1(storyline_file) -> None:
     user = cast(User, UserFactory())
     root = IntroComment.objects.create(storyline_file=storyline_file, user=user, body="root")
-    reply = IntroComment.objects.create(storyline_file=storyline_file, user=user, body="reply", parent=root)
+    reply = IntroComment.objects.create(
+        storyline_file=storyline_file, user=user, body="reply", parent=root
+    )
     assert reply.parent_id == root.pk

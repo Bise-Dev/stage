@@ -16,8 +16,8 @@ use stage_client_lib::oauth::{authorize_url, gen_state, pkce_pair, LoopbackListe
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let backend_url = std::env::var("STAGE_BACKEND_URL")
-        .unwrap_or_else(|_| "http://localhost:8000".to_string());
+    let backend_url =
+        std::env::var("STAGE_BACKEND_URL").unwrap_or_else(|_| "http://localhost:8000".to_string());
     let client_id = std::env::var("STAGE_GITHUB_APP_CLIENT_ID")
         .expect("set STAGE_GITHUB_APP_CLIENT_ID to the dev GitHub App's Client ID");
 
@@ -38,7 +38,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let params = listener.recv(Duration::from_secs(300), &state).await?;
     println!("Received code (len={})", params.code.len());
 
-    let session = api_client.web_exchange(&params.code, &verifier, &redirect).await?;
+    let session = api_client
+        .web_exchange(&params.code, &verifier, &redirect)
+        .await?;
     println!(
         "Signed in as @{} (Stage session: stg_…{})",
         session.user.github_login,

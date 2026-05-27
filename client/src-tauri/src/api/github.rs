@@ -3,7 +3,11 @@ use super::error::Error;
 use super::types::GithubPrSearchItem;
 
 impl Client {
-    pub async fn github_prs(&self, token: &str, role: &str) -> Result<Vec<GithubPrSearchItem>, Error> {
+    pub async fn github_prs(
+        &self,
+        token: &str,
+        role: &str,
+    ) -> Result<Vec<GithubPrSearchItem>, Error> {
         let mut url = self.base_url.join("api/v1/github/prs/").unwrap();
         url.query_pairs_mut().append_pair("role", role);
         let resp = self.http.get(url).bearer_auth(token).send().await?;
@@ -55,7 +59,10 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].number, 42);
         assert_eq!(items[0].title, "My PR");
-        assert_eq!(items[0].repository_url, "https://api.github.com/repos/org/repo");
+        assert_eq!(
+            items[0].repository_url,
+            "https://api.github.com/repos/org/repo"
+        );
         assert_eq!(items[0].user.login, "alice");
     }
 

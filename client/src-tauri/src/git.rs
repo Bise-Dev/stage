@@ -38,7 +38,11 @@ pub fn summary(repo_path: &Path) -> Result<RepoSummary, AppError> {
             repo.remotes()
                 .ok()
                 .and_then(|names| names.iter().flatten().next().map(str::to_string))
-                .and_then(|name| repo.find_remote(&name).ok().and_then(|r| r.url().map(str::to_string)))
+                .and_then(|name| {
+                    repo.find_remote(&name)
+                        .ok()
+                        .and_then(|r| r.url().map(str::to_string))
+                })
         });
 
     let default_branch = default_branch_for(&repo);

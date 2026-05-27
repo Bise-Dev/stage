@@ -54,7 +54,11 @@ pub fn run() {
                 .get("stage")
                 .and_then(|v| v.get("githubAppClientId"))
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| std::io::Error::other("plugins.stage.githubAppClientId not set in tauri.conf.json"))?
+                .ok_or_else(|| {
+                    std::io::Error::other(
+                        "plugins.stage.githubAppClientId not set in tauri.conf.json",
+                    )
+                })?
                 .to_string();
 
             let api_client = api::Client::new(&backend_url)

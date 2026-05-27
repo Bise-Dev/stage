@@ -56,7 +56,9 @@ def test_workspace_list_api(authed_client) -> None:
 @pytest.mark.django_db
 def test_workspace_lookup_api_hit(authed_client) -> None:
     client, user = authed_client
-    ws = cast(Workspace, WorkspaceFactory(repo_owner="o", repo_name="r", pr_number=42, created_by=user))
+    ws = cast(
+        Workspace, WorkspaceFactory(repo_owner="o", repo_name="r", pr_number=42, created_by=user)
+    )
     resp = client.get("/api/v1/workspaces/lookup/?repo_owner=o&repo_name=r&pr_number=42")
     assert resp.status_code == 200
     assert resp.json()["workspace_id"] == str(ws.id)
@@ -98,7 +100,7 @@ def _make_authed_client(db) -> tuple[APIClient, User]:
 
 @pytest.mark.django_db
 def test_workspace_list_excludes_other_users_drafts(authed_client) -> None:
-    client_b, user_b = authed_client
+    client_b, _user_b = authed_client
     user_a = cast(User, UserFactory())
     draft_a = cast(Workspace, WorkspaceFactory(created_by=user_a))
     published_a = cast(Workspace, WorkspaceFactory(created_by=user_a, pr_number=10))
@@ -112,7 +114,7 @@ def test_workspace_list_excludes_other_users_drafts(authed_client) -> None:
 
 @pytest.mark.django_db
 def test_workspace_detail_pre_publish_404_for_non_creator(authed_client) -> None:
-    client_b, user_b = authed_client
+    client_b, _user_b = authed_client
     user_a = cast(User, UserFactory())
     draft_a = cast(Workspace, WorkspaceFactory(created_by=user_a))
     published_a = cast(Workspace, WorkspaceFactory(created_by=user_a, pr_number=11))
@@ -126,7 +128,7 @@ def test_workspace_detail_pre_publish_404_for_non_creator(authed_client) -> None
 
 @pytest.mark.django_db
 def test_workspace_patch_local_phase_creator_only(authed_client) -> None:
-    client_b, user_b = authed_client
+    client_b, _user_b = authed_client
     user_a = cast(User, UserFactory())
     ws_a = cast(Workspace, WorkspaceFactory(created_by=user_a, head_ref="feat/x"))
 

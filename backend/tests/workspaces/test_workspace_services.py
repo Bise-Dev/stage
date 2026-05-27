@@ -14,8 +14,11 @@ from apps.workspaces.services import workspace_create, workspace_update_local_ph
 def test_workspace_create_persists_with_creator() -> None:
     creator = cast(User, UserFactory())
     ws = workspace_create(
-        creator=creator, repo_owner="o", repo_name="r",
-        head_ref="feat/x", base_ref="main",
+        creator=creator,
+        repo_owner="o",
+        repo_name="r",
+        head_ref="feat/x",
+        base_ref="main",
     )
     assert ws.created_by_id == creator.pk
     assert ws.pr_number is None
@@ -27,7 +30,9 @@ def test_workspace_create_rejects_duplicate() -> None:
     creator = cast(User, UserFactory())
     WorkspaceFactory(repo_owner="o", repo_name="r", head_ref="feat/x", created_by=creator)
     with pytest.raises(ApplicationError) as exc:
-        workspace_create(creator=creator, repo_owner="o", repo_name="r", head_ref="feat/x", base_ref="main")
+        workspace_create(
+            creator=creator, repo_owner="o", repo_name="r", head_ref="feat/x", base_ref="main"
+        )
     assert exc.value.status == 409
 
 
@@ -60,10 +65,14 @@ def test_workspace_update_local_phase_rejects_non_creator() -> None:
 @pytest.mark.django_db
 def test_workspace_create_seeds_empty_storyline() -> None:
     from apps.workspaces.models import Storyline
+
     creator = cast(User, UserFactory())
     ws = workspace_create(
-        creator=creator, repo_owner="o", repo_name="r",
-        head_ref="feat/x", base_ref="main",
+        creator=creator,
+        repo_owner="o",
+        repo_name="r",
+        head_ref="feat/x",
+        base_ref="main",
     )
     assert Storyline.objects.filter(workspace=ws).exists()
     assert ws.storyline.files.count() == 0  # pyrefly: ignore[missing-attribute]

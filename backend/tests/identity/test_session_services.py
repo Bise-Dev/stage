@@ -2,7 +2,6 @@ from typing import cast
 
 import pytest
 
-from apps.identity.selectors import session_find_user
 from apps.identity.services import session_issue, session_revoke
 from apps.users.factories import UserFactory
 from apps.users.models import User

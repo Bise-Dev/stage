@@ -4,13 +4,13 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
+use crate::api;
 use crate::errors::AppError;
 use crate::git;
 use crate::oauth::{authorize_url, gen_state, pkce_pair, LoopbackListener};
 use crate::recents::RecentRepo;
 use crate::state::{ActiveRepo, AppState, AuthSession};
 use crate::watcher;
-use crate::api;
 
 #[derive(Serialize, Deserialize)]
 pub struct RepoInfo {
@@ -39,11 +39,9 @@ pub fn set_active_repo(
 
 #[tauri::command]
 pub fn get_active_repo(state: State<'_, AppState>) -> Option<RepoInfo> {
-    state
-        .active
-        .lock()
-        .as_ref()
-        .map(|a| RepoInfo { path: a.path.clone() })
+    state.active.lock().as_ref().map(|a| RepoInfo {
+        path: a.path.clone(),
+    })
 }
 
 #[tauri::command]
@@ -52,10 +50,7 @@ pub fn list_recent_repos(state: State<'_, AppState>) -> Vec<RecentRepo> {
 }
 
 #[tauri::command]
-pub fn forget_recent_repo(
-    state: State<'_, AppState>,
-    path: PathBuf,
-) -> Result<(), AppError> {
+pub fn forget_recent_repo(state: State<'_, AppState>, path: PathBuf) -> Result<(), AppError> {
     state.recents.forget(&path)
 }
 
@@ -98,7 +93,9 @@ pub async fn auth_sign_in(state: tauri::State<'_, AppState>) -> Result<api::User
     // Run the listener inside an abortable task so cancel works.
     let state_param_owned = state_param.clone();
     let handle = tokio::spawn(async move {
-        listener.recv(Duration::from_secs(300), &state_param_owned).await
+        listener
+            .recv(Duration::from_secs(300), &state_param_owned)
+            .await
     });
     {
         *state.auth_in_flight.lock() = Some(handle.abort_handle());
