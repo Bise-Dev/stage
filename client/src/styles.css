@@ -257,6 +257,33 @@ body {
   margin-bottom: 4px;
 }
 
+/* Draggable vertical divider for resizable rails */
+.rail-resize {
+  flex: 0 0 6px;
+  align-self: stretch;
+  position: relative;
+  cursor: col-resize;
+  background: none;
+  border: none;
+  padding: 0;
+}
+.rail-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--hairline);
+  transition: background 80ms ease, width 80ms ease;
+}
+.rail-resize:hover::after,
+.rail-resize.dragging::after {
+  background: var(--blue);
+  width: 2px;
+}
+
 /* Hide scrollbars within the app frame */
 .stage ::-webkit-scrollbar {
   display: none;

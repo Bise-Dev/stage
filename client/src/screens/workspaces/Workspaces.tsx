@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Avatar } from '../../components/Avatar';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
@@ -16,6 +16,27 @@ import {
 
 type Show = 'all' | 'yours' | 'review';
 type Kind = 'self-review' | 'ready-to-share' | 'in-review' | 'open-prs';
+
+const RAIL_MIN = 160;
+const RAIL_MAX = 360;
+const RAIL_DEFAULT = 200;
+const RAIL_KEY = 'workspaces:rail-width';
+
+function clampRail(w: number): number {
+  return Math.min(RAIL_MAX, Math.max(RAIL_MIN, w));
+}
+
+/** Persisted, draggable width for the left filter rail (px, not %). */
+function useRailWidth() {
+  const [width, setWidth] = useState(() => {
+    const saved = Number(localStorage.getItem(RAIL_KEY));
+    return Number.isFinite(saved) && saved > 0 ? clampRail(saved) : RAIL_DEFAULT;
+  });
+  useEffect(() => {
+    localStorage.setItem(RAIL_KEY, String(width));
+  }, [width]);
+  return [width, setWidth] as const;
+}
 
 function slugFromRemote(url: string | null): string | null {
   if (!url) return null;
@@ -36,6 +57,30 @@ export function Workspaces() {
   const [show, setShow] = useState<Show>('all');
   const [kind, setKind] = useState<Kind | null>(null);
   const [query, setQuery] = useState('');
+  const [railWidth, setRailWidth] = useRailWidth();
+  const railRef = useRef<HTMLDivElement>(null);
+  const handleRef = useRef<HTMLButtonElement>(null);
+
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const left = railRef.current?.getBoundingClientRect().left ?? 0;
+    handleRef.current?.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    const onMove = (ev: PointerEvent) => setRailWidth(clampRail(ev.clientX - left));
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      handleRef.current?.classList.remove('dragging');
+      document.body.style.cursor = '';
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
+  const onResizeKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowLeft') setRailWidth((w) => clampRail(w - 16));
+    else if (e.key === 'ArrowRight') setRailWidth((w) => clampRail(w + 16));
+  };
 
   useEffect(() => {
     (async () => {
@@ -110,14 +155,15 @@ export function Workspaces() {
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           {/* Left filter rail */}
           <div
+            ref={railRef}
             style={{
-              width: 200,
-              flex: '0 0 200px',
-              borderRight: '1px solid var(--hairline)',
+              width: railWidth,
+              flex: `0 0 ${railWidth}px`,
               padding: '14px 10px',
               background: '#fbfaf8',
               display: 'flex',
               flexDirection: 'column',
+              minWidth: 0,
             }}
           >
             <div
@@ -210,21 +256,62 @@ export function Workspaces() {
             <div className="section-label" style={{ marginTop: 14, padding: '0 6px' }}>
               Repository
             </div>
-            <div style={{ padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div
+              style={{
+                padding: '4px 10px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                minWidth: 0,
+              }}
+            >
               <Icon name="folder" size={13} color="var(--gray-500)" />
-              <span style={{ fontSize: 12.5, fontWeight: 500 }}>
+              <span
+                style={{
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  minWidth: 0,
+                }}
+                title={repoSlug ?? (repoPath ? basename(repoPath) : undefined)}
+              >
                 {repoSlug ?? (repoPath ? basename(repoPath) : '—')}
               </span>
             </div>
             {repoPath && (
               <div
-                style={{ padding: '0 10px 4px 28px', color: 'var(--gray-500)', fontSize: 11 }}
+                style={{
+                  padding: '0 10px 4px 28px',
+                  color: 'var(--gray-500)',
+                  fontSize: 11,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
                 className="mono"
+                title={repoPath}
               >
                 {repoPath}
               </div>
             )}
           </div>
+
+          {/* Resizable divider */}
+          <button
+            type="button"
+            ref={handleRef}
+            className="rail-resize"
+            onPointerDown={startResize}
+            onKeyDown={onResizeKey}
+            aria-label="Resize sidebar"
+            aria-orientation="vertical"
+            role="separator"
+            aria-valuenow={railWidth}
+            aria-valuemin={RAIL_MIN}
+            aria-valuemax={RAIL_MAX}
+          />
 
           {/* Main */}
           <div
