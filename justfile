@@ -1,26 +1,29 @@
+mod backend
+mod client
+
+PRE_COMMIT_VERSION := "4.5.1"
+
 default:
     @just --list
 
-# Run the client app in dev mode
-dev:
-    cd client && just dev
+# Bootstrap the whole monorepo: backend, client, and the pre-commit hook
+[group('setup')]
+bootstrap:
+    just backend::bootstrap
+    just client::install
+    uv tool run pre-commit@{{PRE_COMMIT_VERSION}} install
 
-# Build the client
-build:
-    cd client && just build
+alias pc := pre-commit
 
-# Lint everything (TS + Rust)
-lint:
-    cd client && just lint
+# Run all pre-commit hooks against every file
+[group('qa')]
+pre-commit:
+    uv tool run pre-commit@{{PRE_COMMIT_VERSION}} run --all-files
 
-# Typecheck + cargo check
-check:
-    cd client && just check
-
-# Format everything
-fmt:
-    cd client && just fmt
-
-# Run tests
-test:
-    cd client && just test
+# Full local QA pipeline: pre-commit hooks + heavy checks + tests
+[group('qa')]
+verify:
+    just pre-commit
+    just client::clippy
+    just client::test
+    just backend::test

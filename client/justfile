@@ -13,10 +13,13 @@ build:
 install:
     bun install
 
-# Lint: Biome (TS) + cargo fmt --check + clippy
+# Lint: Biome (TS) + cargo fmt --check
 lint:
     bun run lint
     cd src-tauri && cargo fmt -- --check
+
+# Clippy (heavier; not on pre-commit, runs via root `just verify` + CI)
+clippy:
     cd src-tauri && cargo clippy --all-targets -- -D warnings
 
 # Format: Biome (TS) + cargo fmt
