@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { SignIn } from './screens/onboarding/SignIn';
-import { WorkspaceScaffold } from './screens/workspace/WorkspaceScaffold';
+import { Workspaces } from './screens/workspaces/Workspaces';
 import type { User } from './tauri';
 
 type View = 'signIn' | 'openRepo' | 'workspace';
@@ -26,5 +26,5 @@ export function App() {
     // Defensive: should be unreachable, but biome wants explicit null guard.
     return null;
   }
-  return <WorkspaceScaffold />;
+  return <Workspaces />;
 }
