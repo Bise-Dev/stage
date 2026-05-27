@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::Command;
 
 use git2::{BranchType, Repository};
 use serde::Serialize;
@@ -52,6 +53,58 @@ pub fn summary(repo_path: &Path) -> Result<RepoSummary, AppError> {
         branches_count,
         remote_url,
     })
+}
+
+#[derive(Serialize)]
+pub struct FetchOutcome {
+    pub remote: String,
+}
+
+/// `git fetch --prune` against the primary remote.
+///
+/// Shells out to the system `git` rather than libgit2's transport: the vendored
+/// libgit2 has no TLS/SSH transport ("unsupported URL protocol"), and the system
+/// git transparently uses the user's own credentials (ssh-agent, credential
+/// helpers, proxies). Stage holds no GitHub credentials of its own — this is a
+/// plain local git-transport op. We still use libgit2 to resolve the remote name.
+pub fn fetch(repo_path: &Path) -> Result<FetchOutcome, AppError> {
+    let remote_name = {
+        let repo = Repository::open(repo_path)?;
+        primary_remote(&repo)?
+    };
+
+    let output = Command::new("git")
+        .current_dir(repo_path)
+        .args(["fetch", "--prune", &remote_name])
+        .output()
+        .map_err(|e| AppError::Backend(format!("git_spawn_failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = stderr.trim();
+        return Err(AppError::Backend(if msg.is_empty() {
+            "git fetch failed".to_string()
+        } else {
+            msg.to_string()
+        }));
+    }
+
+    Ok(FetchOutcome {
+        remote: remote_name,
+    })
+}
+
+/// `origin` if present, otherwise the first configured remote.
+fn primary_remote(repo: &Repository) -> Result<String, AppError> {
+    if repo.find_remote("origin").is_ok() {
+        return Ok("origin".to_string());
+    }
+    repo.remotes()?
+        .iter()
+        .flatten()
+        .next()
+        .map(str::to_string)
+        .ok_or_else(|| AppError::Backend("no_remote_configured".into()))
 }
 
 fn default_branch_for(repo: &Repository) -> Option<String> {

@@ -32,7 +32,6 @@ Per the grill, unbuilt controls render enabled and log on click rather than bein
 
 | Control | Intended behavior | Why no-op |
 | --- | --- | --- |
-| **Fetch** (toolbar) | `git fetch` on the active repo | No fetch command; git access is read-only today (see `STACK.md` → "Git access: fetch later"). |
 | **New workspace** (toolbar) | The "Ready to share" gesture — create a workspace for the current branch | No backend `workspace_create`; gesture also depends on screens not yet built. |
 | **Self-Review** (branch row) | Open the Self-Review screen for that branch | Self-Review screen not built. |
 | **Review** (Open PR row) | Open the PR-anchored review surface | Storyline/review screens not built. |

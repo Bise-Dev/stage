@@ -7,6 +7,9 @@ export type RepoSummary = {
   branchesCount: number;
   remoteUrl: string | null;
 };
+export type FetchOutcome = {
+  remote: string;
+};
 
 export const setActiveRepo = (path: string) => invoke<RepoInfo>('set_active_repo', { path });
 
@@ -19,6 +22,8 @@ export const forgetRecentRepo = (path: string) => invoke<void>('forget_recent_re
 export const gitCurrentBranch = () => invoke<string>('git_current_branch');
 
 export const repoSummary = (path: string) => invoke<RepoSummary>('repo_summary', { path });
+
+export const gitFetch = () => invoke<FetchOutcome>('git_fetch');
 
 export const openInFinder = (path: string) => invoke<void>('open_in_finder', { path });
 

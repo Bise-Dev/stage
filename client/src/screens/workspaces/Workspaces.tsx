@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Avatar } from '../../components/Avatar';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
-import { getActiveRepo, githubPrs, openInFinder, repoSummary } from '../../tauri';
+import { getActiveRepo, gitFetch, githubPrs, openInFinder, repoSummary } from '../../tauri';
 import {
   type BranchRow,
   type ExternalPrRow,
@@ -58,8 +58,27 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
   const [kind, setKind] = useState<Kind | null>(null);
   const [query, setQuery] = useState('');
   const [railWidth, setRailWidth] = useRailWidth();
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const railRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<HTMLButtonElement>(null);
+
+  const runFetch = async () => {
+    setFetching(true);
+    setFetchError(null);
+    try {
+      await gitFetch();
+      // Fetch may have moved remote refs / changed branch count — refresh the rail.
+      if (repoPath) {
+        const sum = await repoSummary(repoPath);
+        setRepoSlug(slugFromRemote(sum.remoteUrl));
+      }
+    } catch (e) {
+      setFetchError(String(e));
+    } finally {
+      setFetching(false);
+    }
+  };
 
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -288,9 +307,12 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
               <button
                 type="button"
                 className="btn btn-lg"
-                onClick={() => console.info('workspaces_fetch_stub')}
+                onClick={runFetch}
+                disabled={fetching}
+                style={{ opacity: fetching ? 0.6 : 1 }}
               >
-                <Icon name="branch" size={12} color="var(--gray-700)" /> Fetch
+                <Icon name="branch" size={12} color="var(--gray-700)" />{' '}
+                {fetching ? 'Fetching…' : 'Fetch'}
               </button>
               <button
                 type="button"
@@ -300,6 +322,22 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
                 <Icon name="plus" size={12} color="#fff" /> New workspace
               </button>
             </div>
+
+            {fetchError && (
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: 'var(--red-d)',
+                  background: 'rgba(255,59,48,0.08)',
+                  border: '1px solid rgba(255,59,48,0.20)',
+                  borderRadius: 'var(--r-sm)',
+                  padding: '6px 10px',
+                  marginBottom: 10,
+                }}
+              >
+                Fetch failed: {fetchError}
+              </div>
+            )}
 
             <div
               style={{

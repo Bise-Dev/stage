@@ -81,6 +81,7 @@ pub fn run() {
             commands::forget_recent_repo,
             commands::git_current_branch,
             commands::repo_summary,
+            commands::git_fetch,
             commands::open_in_finder,
             commands::auth_sign_in,
             commands::auth_sign_in_cancel,

@@ -71,6 +71,20 @@ pub fn repo_summary(path: PathBuf) -> Result<git::RepoSummary, AppError> {
 }
 
 #[tauri::command]
+pub async fn git_fetch(state: State<'_, AppState>) -> Result<git::FetchOutcome, AppError> {
+    let path = state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| a.path.clone())
+        .ok_or(AppError::NoActiveRepo)?;
+    // git2 fetch is blocking I/O — keep it off the async runtime's threads.
+    tauri::async_runtime::spawn_blocking(move || git::fetch(&path))
+        .await
+        .map_err(|e| AppError::Backend(format!("fetch_join_error: {e}")))?
+}
+
+#[tauri::command]
 pub fn open_in_finder(path: PathBuf) -> Result<(), AppError> {
     tauri_plugin_opener::open_path(&path, None::<&str>)
         .map_err(|e| AppError::Backend(format!("open_in_finder_failed: {e}")))
