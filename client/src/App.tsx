@@ -39,5 +39,5 @@ export function App() {
     // Defensive: should be unreachable, but biome wants explicit null guard.
     return null;
   }
-  return <Workspaces onChangeRepo={changeRepo} />;
+  return <Workspaces user={user} onChangeRepo={changeRepo} />;
 }

@@ -92,6 +92,29 @@ pub fn local_branches(repo_path: &Path) -> Result<Vec<BranchInfo>, AppError> {
 }
 
 #[derive(Serialize)]
+pub struct DiffStats {
+    pub added: usize,
+    pub removed: usize,
+}
+
+/// Added/removed line counts for `head_ref` since it diverged from `base_ref`
+/// (diff of the merge-base tree → head tree), matching PR additions/deletions.
+pub fn diff_stats(repo_path: &Path, base_ref: &str, head_ref: &str) -> Result<DiffStats, AppError> {
+    let repo = Repository::open(repo_path)?;
+    let base_commit = repo.revparse_single(base_ref)?.peel_to_commit()?;
+    let head_commit = repo.revparse_single(head_ref)?.peel_to_commit()?;
+    let merge_base = repo.merge_base(base_commit.id(), head_commit.id())?;
+    let base_tree = repo.find_commit(merge_base)?.tree()?;
+    let head_tree = head_commit.tree()?;
+    let diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), None)?;
+    let stats = diff.stats()?;
+    Ok(DiffStats {
+        added: stats.insertions(),
+        removed: stats.deletions(),
+    })
+}
+
+#[derive(Serialize)]
 pub struct FetchOutcome {
     pub remote: String,
 }

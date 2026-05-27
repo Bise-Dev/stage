@@ -5,22 +5,21 @@ import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
 import {
   type BranchInfo,
+  type DiffStats,
+  type OverviewOpenPrRow,
+  type OverviewRow,
+  type OverviewWorkspaceRow,
+  type User,
+  type WorkspaceState,
   getActiveRepo,
+  gitDiffStats,
   gitFetch,
   gitLocalBranches,
-  githubPrs,
   openInFinder,
+  repoOverview,
   repoSummary,
 } from '../../tauri';
-import {
-  type ExternalPrRow,
-  STUB_WORKSPACES,
-  type WorkspaceRow,
-  type WorkspaceState,
-  YOU,
-  externalPrFromGithub,
-  relativeTimeFromEpoch,
-} from './data';
+import { relativeTime, relativeTimeFromEpoch } from './data';
 
 type Show = 'all' | 'yours' | 'review';
 type Kind = 'self-review' | 'ready-to-share' | 'in-review' | 'open-prs';
@@ -52,16 +51,15 @@ function slugFromRemote(url: string | null): string | null {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
-// Stub workspace buckets never change; branches + PRs arrive async.
-const yoursReadyToShare = STUB_WORKSPACES.filter((w) => w.author === YOU && !w.prNumber);
-const yoursInReview = STUB_WORKSPACES.filter((w) => w.author === YOU && w.prNumber);
-const reviewInReview = STUB_WORKSPACES.filter((w) => w.author !== YOU && w.prNumber);
-
-export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
+export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: () => void }) {
+  const me = user.github_login;
   const [repoSlug, setRepoSlug] = useState<string | null>(null);
   const [repoPath, setRepoPath] = useState<string | null>(null);
+  const [ghRepo, setGhRepo] = useState<{ owner: string; repo: string } | null>(null);
+  const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
-  const [externals, setExternals] = useState<ExternalPrRow[]>([]);
+  const [rows, setRows] = useState<OverviewRow[]>([]);
+  const [diffStats, setDiffStats] = useState<Record<string, DiffStats>>({});
   const [show, setShow] = useState<Show>('all');
   const [kind, setKind] = useState<Kind | null>(null);
   const [query, setQuery] = useState('');
@@ -79,7 +77,37 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
     }
   }, []);
 
-  // Initial load, and keep branches live as refs / the working tree change.
+  const loadOverview = useCallback(async (owner: string, repo: string) => {
+    try {
+      setRows(await repoOverview(owner, repo));
+    } catch (e) {
+      console.warn('workspaces_overview_failed', e);
+    }
+  }, []);
+
+  // Active repo → rail slug/path, default branch, and the GitHub overview.
+  useEffect(() => {
+    (async () => {
+      const repo = await getActiveRepo();
+      if (!repo) return;
+      setRepoPath(repo.path);
+      try {
+        const sum = await repoSummary(repo.path);
+        const slug = slugFromRemote(sum.remoteUrl);
+        setRepoSlug(slug);
+        setDefaultBranch(sum.defaultBranch);
+        if (slug) {
+          const [owner, name] = slug.split('/');
+          setGhRepo({ owner, repo: name });
+          loadOverview(owner, name);
+        }
+      } catch {
+        // Non-fatal: the rail just shows the folder name and no overview.
+      }
+    })();
+  }, [loadOverview]);
+
+  // Branches: initial + live on working-tree / ref changes.
   useEffect(() => {
     loadBranches();
     const unlisten = listen('repo-changed', () => loadBranches());
@@ -88,17 +116,52 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
     };
   }, [loadBranches]);
 
+  // Local diff stats for things checked out locally: branches (vs default
+  // branch) and pre-publish workspaces (head vs base). Published rows + Open PRs
+  // already carry GitHub additions/deletions.
+  useEffect(() => {
+    const targets: { base: string; head: string }[] = [];
+    if (defaultBranch) {
+      for (const b of branches) targets.push({ base: defaultBranch, head: b.name });
+    }
+    for (const r of rows) {
+      if (r.kind === 'workspace' && r.pr_number === null) {
+        targets.push({ base: r.base_ref, head: r.head_ref });
+      }
+    }
+    if (targets.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        targets.map(async (t) => {
+          try {
+            return [t.head, await gitDiffStats(t.base, t.head)] as const;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      if (cancelled) return;
+      const next: Record<string, DiffStats> = {};
+      for (const e of entries) if (e) next[e[0]] = e[1];
+      setDiffStats(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [branches, rows, defaultBranch]);
+
   const runFetch = async () => {
     setFetching(true);
     setFetchError(null);
     try {
       await gitFetch();
-      // Fetch may have moved refs / changed branch count — refresh rail + branches.
       if (repoPath) {
         const sum = await repoSummary(repoPath);
         setRepoSlug(slugFromRemote(sum.remoteUrl));
       }
       await loadBranches();
+      if (ghRepo) await loadOverview(ghRepo.owner, ghRepo.repo);
     } catch (e) {
       setFetchError(String(e));
     } finally {
@@ -127,65 +190,53 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
     else if (e.key === 'ArrowRight') setRailWidth((w) => clampRail(w + 16));
   };
 
-  useEffect(() => {
-    (async () => {
-      const repo = await getActiveRepo();
-      if (!repo) return;
-      setRepoPath(repo.path);
-      try {
-        const sum = await repoSummary(repo.path);
-        setRepoSlug(slugFromRemote(sum.remoteUrl));
-      } catch {
-        // Non-fatal: the rail just shows the folder name instead of a slug.
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const [authored, reviewing] = await Promise.all([
-          githubPrs('author'),
-          githubPrs('reviewer'),
-        ]);
-        setExternals([
-          ...authored.map((p) => externalPrFromGithub(p, 'author')),
-          ...reviewing.map((p) => externalPrFromGithub(p, 'reviewer')),
-        ]);
-      } catch (e) {
-        console.warn('workspaces_github_prs_failed', e);
-      }
-    })();
-  }, []);
+  // Split overview rows into buckets.
+  const workspaceRows = rows.filter((r): r is OverviewWorkspaceRow => r.kind === 'workspace');
+  const openPrRows = rows.filter((r): r is OverviewOpenPrRow => r.kind === 'open_pr');
+  const yoursReadyToShare = workspaceRows.filter(
+    (w) => w.pr_number === null && w.created_by.github_login === me,
+  );
+  const yoursInReview = workspaceRows.filter(
+    (w) => w.pr_number !== null && w.created_by.github_login === me,
+  );
+  const reviewInReview = workspaceRows.filter(
+    (w) => w.pr_number !== null && w.created_by.github_login !== me,
+  );
+  const openAuthor = openPrRows.filter((p) => p.role === 'author');
+  const openReviewer = openPrRows.filter((p) => p.role === 'reviewer');
 
   const q = query.trim().toLowerCase();
   const matchBranch = (b: BranchInfo) =>
     !q || b.name.toLowerCase().includes(q) || (b.lastCommit?.toLowerCase().includes(q) ?? false);
-  const matchWorkspace = (w: WorkspaceRow) =>
+  const matchWorkspace = (w: OverviewWorkspaceRow) =>
     !q ||
     w.title.toLowerCase().includes(q) ||
-    w.branch.toLowerCase().includes(q) ||
-    w.author.toLowerCase().includes(q) ||
-    (!!w.prNumber && `#${w.prNumber}`.includes(q));
-  const matchExternal = (p: ExternalPrRow) =>
+    w.head_ref.toLowerCase().includes(q) ||
+    w.created_by.github_login.toLowerCase().includes(q) ||
+    (w.pr_number !== null && `#${w.pr_number}`.includes(q));
+  const matchOpenPr = (p: OverviewOpenPrRow) =>
     !q ||
     p.title.toLowerCase().includes(q) ||
-    p.author.toLowerCase().includes(q) ||
-    `#${p.prNumber}`.includes(q);
+    (p.author.login?.toLowerCase().includes(q) ?? false) ||
+    (p.head_ref?.toLowerCase().includes(q) ?? false) ||
+    `#${p.number}`.includes(q);
 
-  const externalsAuthor = externals.filter((p) => p.role === 'author');
-  const externalsReviewer = externals.filter((p) => p.role === 'reviewer');
+  // Local diff for a pre-publish workspace (published rows use GitHub stats).
+  const wsStats = (w: OverviewWorkspaceRow): { added: number | null; removed: number | null } => {
+    if (w.pr_number !== null) return { added: w.added, removed: w.removed };
+    const d = diffStats[w.head_ref];
+    return d ? { added: d.added, removed: d.removed } : { added: null, removed: null };
+  };
 
-  // Counts (kind filter is independent of the rail counts, like the design).
   const kindCounts = {
     'self-review': branches.length,
-    'ready-to-share': STUB_WORKSPACES.filter((w) => !w.prNumber).length,
-    'in-review': STUB_WORKSPACES.filter((w) => w.prNumber).length,
-    'open-prs': externals.length,
+    'ready-to-share': workspaceRows.filter((w) => w.pr_number === null).length,
+    'in-review': workspaceRows.filter((w) => w.pr_number !== null).length,
+    'open-prs': openPrRows.length,
   };
   const yoursCount =
-    branches.length + yoursReadyToShare.length + yoursInReview.length + externalsAuthor.length;
-  const reviewCount = reviewInReview.length + externalsReviewer.length;
+    branches.length + yoursReadyToShare.length + yoursInReview.length + openAuthor.length;
+  const reviewCount = reviewInReview.length + openReviewer.length;
 
   const showKind = (k: Kind) => kind === null || kind === k;
   const toggleKind = (k: Kind) => setKind((cur) => (cur === k ? null : k));
@@ -376,7 +427,7 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
             >
               {showYours && (
                 <Column
-                  icon={<Avatar name="You" size="lg" />}
+                  icon={<Avatar name={user.display_name || me} size="lg" />}
                   title="Authored by you"
                   count={yoursCount}
                   tint="rgba(0,122,255,0.04)"
@@ -391,7 +442,7 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
                       count={branches.length}
                     >
                       {branches.filter(matchBranch).map((b) => (
-                        <BranchRowCompact key={b.name} b={b} />
+                        <BranchRowCompact key={b.name} b={b} stats={diffStats[b.name]} />
                       ))}
                     </Bucket>
                   )}
@@ -404,11 +455,7 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
                         count={yoursReadyToShare.length}
                       >
                         {yoursReadyToShare.filter(matchWorkspace).map((w) => (
-                          <WorkspaceRowCompact
-                            key={w.id}
-                            w={w}
-                            active={w.id === 'ws-eslint-bump'}
-                          />
+                          <WorkspaceRowCompact key={w.id} w={w} stats={wsStats(w)} />
                         ))}
                       </Bucket>
                     )}
@@ -420,19 +467,19 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
                       count={yoursInReview.length}
                     >
                       {yoursInReview.filter(matchWorkspace).map((w) => (
-                        <WorkspaceRowCompact key={w.id} w={w} />
+                        <WorkspaceRowCompact key={w.id} w={w} stats={wsStats(w)} />
                       ))}
                     </Bucket>
                   )}
-                  {showKind('open-prs') && externalsAuthor.filter(matchExternal).length > 0 && (
+                  {showKind('open-prs') && openAuthor.filter(matchOpenPr).length > 0 && (
                     <Bucket
                       color="var(--gray-400)"
                       title="Open PRs"
                       hint="on GitHub, no workspace"
-                      count={externalsAuthor.length}
+                      count={openAuthor.length}
                     >
-                      {externalsAuthor.filter(matchExternal).map((p) => (
-                        <ExternalRowCompact key={p.id} p={p} />
+                      {openAuthor.filter(matchOpenPr).map((p) => (
+                        <OpenPrRowCompact key={p.number} p={p} />
                       ))}
                     </Bucket>
                   )}
@@ -470,19 +517,19 @@ export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
                       count={reviewInReview.length}
                     >
                       {reviewInReview.filter(matchWorkspace).map((w) => (
-                        <WorkspaceRowCompact key={w.id} w={w} reviewing />
+                        <WorkspaceRowCompact key={w.id} w={w} stats={wsStats(w)} reviewing />
                       ))}
                     </Bucket>
                   )}
-                  {showKind('open-prs') && externalsReviewer.filter(matchExternal).length > 0 && (
+                  {showKind('open-prs') && openReviewer.filter(matchOpenPr).length > 0 && (
                     <Bucket
                       color="var(--gray-400)"
                       title="Open PRs"
                       hint="on GitHub, no workspace"
-                      count={externalsReviewer.length}
+                      count={openReviewer.length}
                     >
-                      {externalsReviewer.filter(matchExternal).map((p) => (
-                        <ExternalRowCompact key={p.id} p={p} reviewing />
+                      {openReviewer.filter(matchOpenPr).map((p) => (
+                        <OpenPrRowCompact key={p.number} p={p} reviewing />
                       ))}
                     </Bucket>
                   )}
@@ -591,7 +638,6 @@ function RepoMenu({
 
       {open && (
         <div
-          // biome-ignore lint/a11y/useSemanticElements: lightweight popover, not a native list
           role="menu"
           style={{
             position: 'absolute',
@@ -845,21 +891,31 @@ function Bucket({
   );
 }
 
-function rowShell(active?: boolean): React.CSSProperties {
+function DiffStat({ added, removed }: { added: number | null; removed: number | null }) {
+  if (added === null || removed === null) return null;
+  return (
+    <span>
+      <span style={{ color: 'var(--green-d)' }}>+{added}</span>{' '}
+      <span style={{ color: 'var(--red-d)' }}>−{removed}</span>
+    </span>
+  );
+}
+
+function rowShell(): React.CSSProperties {
   return {
     display: 'flex',
     alignItems: 'center',
     gap: 10,
     background: '#fff',
-    border: `1px solid ${active ? 'rgba(0,122,255,0.5)' : 'var(--hairline)'}`,
+    border: '1px solid var(--hairline)',
     borderRadius: 'var(--r-md)',
     padding: '8px 10px',
-    boxShadow: active ? '0 0 0 3px var(--blue-tint)' : 'var(--sh-1)',
+    boxShadow: 'var(--sh-1)',
     minWidth: 0,
   };
 }
 
-function BranchRowCompact({ b }: { b: BranchInfo }) {
+function BranchRowCompact({ b, stats }: { b: BranchInfo; stats?: DiffStats }) {
   return (
     <div style={rowShell()}>
       <Icon name="branch" size={12} color="var(--gray-500)" />
@@ -888,13 +944,17 @@ function BranchRowCompact({ b }: { b: BranchInfo }) {
             fontSize: 11,
             color: 'var(--gray-500)',
             marginTop: 1,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
             overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
           }}
         >
-          {b.lastCommit ? `${b.lastCommit} · ` : ''}
-          {relativeTimeFromEpoch(b.updatedAt)}
+          {stats && <DiffStat added={stats.added} removed={stats.removed} />}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {b.lastCommit ? `${b.lastCommit} · ` : ''}
+            {relativeTimeFromEpoch(b.updatedAt)}
+          </span>
         </div>
       </div>
       <button
@@ -910,26 +970,26 @@ function BranchRowCompact({ b }: { b: BranchInfo }) {
 
 const STATES: Record<WorkspaceState, { label: string; cls: string }> = {
   draft: { label: 'Draft', cls: '' },
-  'ready-to-share': { label: 'Ready to share', cls: 'badge-blue' },
-  'in-review': { label: 'In review', cls: 'badge-blue' },
-  reviewing: { label: 'Reviewing', cls: 'badge-purple' },
-  requested: { label: 'Changes requested', cls: 'badge-orange' },
+  ready_to_publish: { label: 'Ready to publish', cls: 'badge-blue' },
+  in_review: { label: 'In review', cls: 'badge-blue' },
+  changes_requested: { label: 'Changes requested', cls: 'badge-orange' },
   approved: { label: 'Approved', cls: 'badge-green' },
+  frozen: { label: 'Frozen', cls: '' },
 };
 
 function WorkspaceRowCompact({
   w,
-  active,
+  stats,
   reviewing,
 }: {
-  w: WorkspaceRow;
-  active?: boolean;
+  w: OverviewWorkspaceRow;
+  stats: { added: number | null; removed: number | null };
   reviewing?: boolean;
 }) {
   const st = STATES[w.state];
   return (
-    <div style={rowShell(active)}>
-      {reviewing && <Avatar name={w.author} size="sm" />}
+    <div style={rowShell()}>
+      {reviewing && <Avatar name={w.created_by.github_login} size="sm" />}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 1 }}>
           <span
@@ -942,11 +1002,11 @@ function WorkspaceRowCompact({
               flex: '0 1 auto',
             }}
           >
-            {w.title}
+            {w.title || w.head_ref}
           </span>
-          {w.prNumber && (
+          {w.pr_number !== null && (
             <span className="badge" style={{ background: 'rgba(0,0,0,0.06)', flex: '0 0 auto' }}>
-              #{w.prNumber}
+              #{w.pr_number}
             </span>
           )}
           <span className={`badge ${st.cls}`} style={{ flex: '0 0 auto' }}>
@@ -972,34 +1032,33 @@ function WorkspaceRowCompact({
               maxWidth: '40%',
             }}
           >
-            {w.branch}
+            {w.head_ref}
           </span>
-          <span>
-            <span style={{ color: 'var(--green-d)' }}>+{w.added}</span>{' '}
-            <span style={{ color: 'var(--red-d)' }}>−{w.removed}</span>
-          </span>
-          {w.storyline > 0 && (
+          <DiffStat added={stats.added} removed={stats.removed} />
+          {w.storyline_count > 0 && (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-              <Icon name="doc-stack" size={9} color="var(--gray-500)" /> {w.storyline}
+              <Icon name="doc-stack" size={9} color="var(--gray-500)" /> {w.storyline_count}
             </span>
           )}
-          {w.comments > 0 && (
+          {w.comment_count !== null && w.comment_count > 0 && (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-              <Icon name="comment-fill" size={9} color="var(--gray-400)" /> {w.comments}
+              <Icon name="comment-fill" size={9} color="var(--gray-400)" /> {w.comment_count}
             </span>
           )}
         </div>
       </div>
-      <div style={{ fontSize: 10.5, color: 'var(--gray-500)', flex: '0 0 auto' }}>{w.updated}</div>
+      <div style={{ fontSize: 10.5, color: 'var(--gray-500)', flex: '0 0 auto' }}>
+        {relativeTime(w.last_active_at)}
+      </div>
     </div>
   );
 }
 
-function ExternalRowCompact({ p, reviewing }: { p: ExternalPrRow; reviewing?: boolean }) {
+function OpenPrRowCompact({ p, reviewing }: { p: OverviewOpenPrRow; reviewing?: boolean }) {
   return (
     <div style={rowShell()}>
       {reviewing ? (
-        <Avatar name={p.author} size="sm" />
+        <Avatar name={p.author.login ?? '?'} size="sm" />
       ) : (
         <Icon name="gh" size={13} color="var(--gray-600)" />
       )}
@@ -1026,7 +1085,7 @@ function ExternalRowCompact({ p, reviewing }: { p: ExternalPrRow; reviewing?: bo
               gap: 3,
             }}
           >
-            <Icon name="gh" size={9} color="var(--gray-700)" /> #{p.prNumber}
+            <Icon name="gh" size={9} color="var(--gray-700)" /> #{p.number}
           </span>
         </div>
         <div
@@ -1039,15 +1098,27 @@ function ExternalRowCompact({ p, reviewing }: { p: ExternalPrRow; reviewing?: bo
             overflow: 'hidden',
           }}
         >
-          <span>{reviewing ? p.author : 'You'}</span>
-          <span>·</span>
-          <span>{p.updated}</span>
+          {p.head_ref && (
+            <span
+              className="mono"
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                maxWidth: '40%',
+              }}
+            >
+              {p.head_ref}
+            </span>
+          )}
+          <DiffStat added={p.added} removed={p.removed} />
+          {p.updated_at && <span>{relativeTime(p.updated_at)}</span>}
         </div>
       </div>
       <button
         type="button"
         className="btn"
-        onClick={() => console.info('workspaces_review_stub', p.id)}
+        onClick={() => console.info('workspaces_review_stub', p.number)}
       >
         <Icon name="play" size={10} color="var(--gray-700)" /> Review
       </button>

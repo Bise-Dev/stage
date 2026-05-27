@@ -5,6 +5,7 @@ mod auth;
 mod client;
 mod error;
 mod github;
+mod overview;
 mod types;
 
 pub use client::Client;

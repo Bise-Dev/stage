@@ -82,6 +82,32 @@ pub fn git_local_branches(state: State<'_, AppState>) -> Result<Vec<git::BranchI
 }
 
 #[tauri::command]
+pub fn git_diff_stats(
+    state: State<'_, AppState>,
+    base_ref: String,
+    head_ref: String,
+) -> Result<git::DiffStats, AppError> {
+    let path = state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| a.path.clone())
+        .ok_or(AppError::NoActiveRepo)?;
+    git::diff_stats(&path, &base_ref, &head_ref)
+}
+
+#[tauri::command]
+pub async fn repo_overview(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    repo: String,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let rows = state.api.repo_overview(&token, &owner, &repo).await?;
+    Ok(rows)
+}
+
+#[tauri::command]
 pub async fn git_fetch(state: State<'_, AppState>) -> Result<git::FetchOutcome, AppError> {
     let path = state
         .active

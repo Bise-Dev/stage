@@ -13,18 +13,24 @@ Two distinct categories:
 
 Implements the design's "1 · Workspaces" (`screens-v2-workspaces.jsx`). Decisions from the grill session on 2026-05-27.
 
-### Data sourcing
+### Data sourcing — all live
 
-| Bucket | Source today | Status |
+Every bucket is now backed by real data:
+
+| Bucket | Source | Notes |
 | --- | --- | --- |
-| **Self-Review** (branch, no workspace) | `gitLocalBranches` | **Live** — lists all local branches (name, current-HEAD marker, last-commit time), most-recent first, refreshed on `repo-changed`. Diff stats (`+/−`) and ahead/behind are not yet computed (next git op). |
-| **Ready to share** (workspace, no PR) | — | **Deferred** — needs a backend `workspace_list` call scoped to the active repo. Stubbed. |
-| **In review** (workspace + PR) | — | **Deferred** — same backend dependency as above. Stubbed. |
-| **Open PRs** (PR, no workspace) | `githubPrs(role)` | **Live**. |
+| **Self-Review** (branch, no workspace) | `gitLocalBranches` + `gitDiffStats` | All local branches (name, current-HEAD marker, last-commit summary/time, `+/−` vs the default branch), most-recent first, refreshed on `repo-changed`. |
+| **Ready to share** (workspace, no PR) | repo-overview aggregator + `gitDiffStats` | Pre-publish workspaces. State (Draft / Ready-to-publish) and storyline count are Stage-computed; `+/−` from a local diff of head vs base. |
+| **In review** (workspace + PR) | repo-overview aggregator | Published workspaces. State (In review / Changes requested / Approved / Frozen) from the PR review decision; `+/−` and comment count from the PR; split into your column vs the review column by `created_by`. |
+| **Open PRs** (PR, no workspace) | repo-overview aggregator | PRs you author/review with no workspace (`author`/`reviewer` role); branch + `+/−` from the PR. |
 
-Because no workspace-listing backend exists, **every real GitHub PR returned by `githubPrs` lands in the "Open PRs" bucket** (no workspace can be associated yet), and the Self-Review bucket lists *all* local branches regardless of whether a workspace exists (none can, yet). The Ready-to-share / In-review buckets are still populated only by stub data and will be empty against a real account until the backend lands.
+The overview is one repo-scoped call (`repo_overview`, see `docs/adr/0009`) that merges Stage workspaces with GitHub PR data server-side. Local branches stay client-side.
 
-Row fields with **no live source**: branch diff stats (`+added / −removed`) and ahead/behind (the Self-Review row shows just the last-commit summary + time for now); and for the stubbed workspace buckets — storyline step count, comment count, CI check status, reviewer avatars.
+### Still pending (smaller follow-ups)
+
+- **`Workspace.title` capture UI** — the field exists and is rendered, but nothing sets it yet (the "New workspace" / Ready-to-share flow is unbuilt), so rows fall back to the branch name.
+- **CI checks** — deliberately not surfaced (the compact row doesn't show them).
+- **GraphQL batch fan-out** — the aggregator uses parallel REST per PR for now (see `docs/ROADMAP.md`).
 
 ### Actions — visible and clickable, but no-op
 
@@ -32,7 +38,7 @@ Per the grill, unbuilt controls render enabled and log on click rather than bein
 
 | Control | Intended behavior | Why no-op |
 | --- | --- | --- |
-| **New workspace** (toolbar) | The "Ready to share" gesture — create a workspace for the current branch | No backend `workspace_create`; gesture also depends on screens not yet built. |
+| **New workspace** (toolbar) | The "Ready to share" gesture — create a workspace for the current branch | Backend `workspace_create` exists, but the title-capture + storyline-composition flow is unbuilt. |
 | **Self-Review** (branch row) | Open the Self-Review screen for that branch | Self-Review screen not built. |
 | **Review** (Open PR row) | Open the PR-anchored review surface | Storyline/review screens not built. |
 | **+ / search / kind filters** | — | These **do** work: client-side filtering over whatever rows are rendered. Not stubbed. |

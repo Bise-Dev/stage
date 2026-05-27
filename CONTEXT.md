@@ -28,6 +28,10 @@ Local Client  ⇄  Stage Backend  ⇄  GitHub
 A Stage-owned object that sits on top of a local branch and holds the information about that branch's review that does not belong in git or GitHub — primarily the storyline. Identified by a Stage-generated UUID; `(repo, branch)` is a unique but mutable lookup index. Created eagerly the moment the author decides to make their in-progress review shareable (a Self-Review on its own does not need a Workspace). Optionally linked to a GitHub PR via a `pr_number` field; the Workspace's identity does **not** shift to the PR, and it outlives the PR being merged or closed.
 _Avoid_: Review session, branch context, PR draft.
 
+**Workspace title**:
+The author's human-readable label for a Workspace, entered at **Ready to share** (when the Workspace is created) and stored on the Workspace. Independent of the GitHub PR title — it does **not** auto-sync after Publish. Distinct from the branch (`head_ref`), which is the machine identifier; the title is the human one.
+_Avoid_: "name" (that's the branch), "PR title".
+
 **Storyline**:
 The author's chosen narrative for how a reviewer should walk through the change — an ordered sequence of steps, each pointing at part of the diff and optionally carrying an introductory note from the author.
 _Avoid_: Tour, walkthrough, guide.
@@ -43,6 +47,10 @@ _Avoid_: "share" (overloaded), "publish" (that's the next step).
 **Ready to publish** (state, computed):
 The condition that gates the "Open PR" / "Push update" action: the Storyline has ≥1 step and every step has a non-empty intro. **Computed**, never stored — the moment the last intro is written, the workspace is ready-to-publish.
 _Avoid_: "complete", "done".
+
+**Workspace state** (derived, never stored):
+The single status shown per Workspace, computed from two owners. Pre-publish (no PR): **Draft** (Storyline not yet Ready-to-publish) or **Ready to publish**. Published (PR open): the GitHub review decision — **In review** (no decision yet), **Changes requested**, or **Approved**. PR closed/merged: **Frozen**. "Reviewing" is **not** a state — it describes your role/column, not the Workspace.
+_Avoid_: storing it; using "Ready to share" as a state (that's the creation gesture).
 
 **Publish** (verb):
 The action that opens or updates the github PR for this workspace. **Publish means PR creation, not branch push** — the branch must already exist on github before the Workspace was created (precondition for Ready-to-share). First publish creates the github PR (sets `pr_number` on the Workspace). Subsequent publishes push new review activity (storyline edits and any pending comments) against the same PR. Repeating publish is the normal lifecycle — the workspace is reusable across publish cycles.
