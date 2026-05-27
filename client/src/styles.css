@@ -110,27 +110,6 @@ body {
   border-bottom: 1px solid rgba(0, 0, 0, 0.13);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
 }
-.tl {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.tl-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  display: inline-block;
-  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.18);
-}
-.tl-r {
-  background: #ff5f57;
-}
-.tl-y {
-  background: #febc2e;
-}
-.tl-g {
-  background: #28c840;
-}
 .win-title {
   position: absolute;
   left: 50%;

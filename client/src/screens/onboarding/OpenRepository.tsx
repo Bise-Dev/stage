@@ -2,6 +2,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../../components/Icon';
+import { TitleBar } from '../../components/TitleBar';
 import {
   type RecentRepo,
   type RepoSummary,
@@ -129,206 +130,209 @@ export function OpenRepository({ onOpened, onBack }: Props) {
   }, [selectedPath, summaries]);
 
   return (
-    <div
-      className="flex h-full w-full overflow-hidden"
-      style={{ background: 'linear-gradient(180deg, #fbfaf8 0%, #f0eee9 100%)' }}
-    >
-      <WizardRail active="openRepo" />
+    <div className="flex flex-col h-full w-full">
+      <TitleBar title="Stage — Add a repository" />
+      <div
+        className="flex flex-1 overflow-hidden"
+        style={{ background: 'linear-gradient(180deg, #fbfaf8 0%, #f0eee9 100%)', minHeight: 0 }}
+      >
+        <WizardRail active="openRepo" />
 
-      <div className="flex flex-col flex-1 overflow-hidden" style={{ padding: '28px 36px' }}>
-        <div
-          style={{
-            fontSize: 22,
-            fontWeight: 700,
-            color: 'var(--gray-900)',
-            letterSpacing: '-0.02em',
-          }}
-        >
-          Open a local repository
-        </div>
-        <div
-          style={{
-            fontSize: 13,
-            color: 'var(--gray-500)',
-            marginTop: 4,
-            marginBottom: 18,
-            lineHeight: 1.5,
-          }}
-        >
-          Choose the codebase Stage should track. You can add more later.
-        </div>
-
-        <div
-          ref={dropZoneRef}
-          className="flex items-center"
-          style={{
-            border: dragOver ? '2px solid var(--blue)' : '2px dashed rgba(0,122,255,0.35)',
-            background: dragOver ? 'rgba(0,122,255,0.10)' : 'rgba(0,122,255,0.04)',
-            borderRadius: 'var(--r-lg)',
-            padding: '22px 24px',
-            gap: 18,
-            marginBottom: error ? 8 : 22,
-            transition: 'background 80ms ease, border-color 80ms ease',
-          }}
-        >
-          <div
-            className="flex items-center justify-center"
-            style={{
-              width: 56,
-              height: 56,
-              borderRadius: 12,
-              background: '#fff',
-              border: '1px solid rgba(0,122,255,0.25)',
-              flex: '0 0 56px',
-            }}
-          >
-            <Icon name="folder" size={24} color="var(--blue)" />
-          </div>
-          <div className="flex-1">
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--gray-900)' }}>
-              Drop a folder here
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--gray-600)', marginTop: 2 }}>
-              Any local git repository works. Stage reads from <span className="mono">.git</span> —
-              it doesn't modify your working tree.
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={pickFolder}
-            className="cursor-default"
-            style={{
-              height: 30,
-              padding: '0 14px',
-              borderRadius: 'var(--r-sm)',
-              background: 'var(--blue)',
-              border: '1px solid rgba(0,0,0,0.10)',
-              color: '#fff',
-              boxShadow: '0 1px 0 rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.25)',
-              fontSize: 13,
-              fontWeight: 600,
-              fontFamily: 'inherit',
-            }}
-          >
-            Choose folder…
-          </button>
-        </div>
-
-        {error && (
+        <div className="flex flex-col flex-1 overflow-hidden" style={{ padding: '28px 36px' }}>
           <div
             style={{
-              fontSize: 12,
-              color: 'var(--red-d)',
-              marginBottom: 14,
-              padding: '6px 10px',
-              background: 'rgba(255,59,48,0.08)',
-              border: '1px solid rgba(255,59,48,0.20)',
-              borderRadius: 'var(--r-sm)',
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-          <span
-            style={{
-              fontSize: 10.5,
+              fontSize: 22,
               fontWeight: 700,
-              letterSpacing: '0.08em',
-              color: 'var(--gray-500)',
-              textTransform: 'uppercase',
+              color: 'var(--gray-900)',
+              letterSpacing: '-0.02em',
             }}
           >
-            {recents.length === 0 ? 'No recent repositories' : `Recent · ${recents.length}`}
-          </span>
-        </div>
+            Open a local repository
+          </div>
+          <div
+            style={{
+              fontSize: 13,
+              color: 'var(--gray-500)',
+              marginTop: 4,
+              marginBottom: 18,
+              lineHeight: 1.5,
+            }}
+          >
+            Choose the codebase Stage should track. You can add more later.
+          </div>
 
-        <div className="flex flex-col flex-1 overflow-auto" style={{ gap: 6 }}>
-          {recents.length === 0 ? (
+          <div
+            ref={dropZoneRef}
+            className="flex items-center"
+            style={{
+              border: dragOver ? '2px solid var(--blue)' : '2px dashed rgba(0,122,255,0.35)',
+              background: dragOver ? 'rgba(0,122,255,0.10)' : 'rgba(0,122,255,0.04)',
+              borderRadius: 'var(--r-lg)',
+              padding: '22px 24px',
+              gap: 18,
+              marginBottom: error ? 8 : 22,
+              transition: 'background 80ms ease, border-color 80ms ease',
+            }}
+          >
             <div
-              className="flex items-center justify-center text-center"
+              className="flex items-center justify-center"
               style={{
-                flex: 1,
-                fontSize: 12.5,
-                color: 'var(--gray-500)',
-                padding: '24px 12px',
-                border: '1px dashed var(--hairline)',
-                borderRadius: 'var(--r-md)',
-                background: 'rgba(255,255,255,0.4)',
-                lineHeight: 1.5,
+                width: 56,
+                height: 56,
+                borderRadius: 12,
+                background: '#fff',
+                border: '1px solid rgba(0,122,255,0.25)',
+                flex: '0 0 56px',
               }}
             >
-              Drop a folder above or choose one to get started.
-              <br />
-              Repos you open will appear here next time.
+              <Icon name="folder" size={24} color="var(--blue)" />
             </div>
-          ) : (
-            recents.map((r) => (
-              <RepoRow
-                key={r.path}
-                path={r.path}
-                summary={summaries[r.path]}
-                selected={r.path === selectedPath}
-                onSelect={() => setSelectedPath(r.path)}
-                onActivate={() => tryOpen(r.path)}
-              />
-            ))
-          )}
-        </div>
-
-        <div
-          className="flex items-center"
-          style={{
-            gap: 10,
-            marginTop: 14,
-            paddingTop: 14,
-            borderTop: '1px solid var(--hairline)',
-          }}
-        >
-          <div className="flex-1" />
-          {onBack && (
+            <div className="flex-1">
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--gray-900)' }}>
+                Drop a folder here
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--gray-600)', marginTop: 2 }}>
+                Any local git repository works. Stage reads from <span className="mono">.git</span>{' '}
+                — it doesn't modify your working tree.
+              </div>
+            </div>
             <button
               type="button"
-              onClick={onBack}
+              onClick={pickFolder}
               className="cursor-default"
               style={{
-                height: 24,
-                padding: '0 10px',
+                height: 30,
+                padding: '0 14px',
                 borderRadius: 'var(--r-sm)',
-                background: '#fff',
-                border: '1px solid rgba(0,0,0,0.12)',
-                boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
-                color: 'var(--gray-800)',
-                fontSize: 12.5,
+                background: 'var(--blue)',
+                border: '1px solid rgba(0,0,0,0.10)',
+                color: '#fff',
+                boxShadow: '0 1px 0 rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.25)',
+                fontSize: 13,
+                fontWeight: 600,
+                fontFamily: 'inherit',
+              }}
+            >
+              Choose folder…
+            </button>
+          </div>
+
+          {error && (
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--red-d)',
+                marginBottom: 14,
+                padding: '6px 10px',
+                background: 'rgba(255,59,48,0.08)',
+                border: '1px solid rgba(255,59,48,0.20)',
+                borderRadius: 'var(--r-sm)',
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+            <span
+              style={{
+                fontSize: 10.5,
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                color: 'var(--gray-500)',
+                textTransform: 'uppercase',
+              }}
+            >
+              {recents.length === 0 ? 'No recent repositories' : `Recent · ${recents.length}`}
+            </span>
+          </div>
+
+          <div className="flex flex-col flex-1 overflow-auto" style={{ gap: 6 }}>
+            {recents.length === 0 ? (
+              <div
+                className="flex items-center justify-center text-center"
+                style={{
+                  flex: 1,
+                  fontSize: 12.5,
+                  color: 'var(--gray-500)',
+                  padding: '24px 12px',
+                  border: '1px dashed var(--hairline)',
+                  borderRadius: 'var(--r-md)',
+                  background: 'rgba(255,255,255,0.4)',
+                  lineHeight: 1.5,
+                }}
+              >
+                Drop a folder above or choose one to get started.
+                <br />
+                Repos you open will appear here next time.
+              </div>
+            ) : (
+              recents.map((r) => (
+                <RepoRow
+                  key={r.path}
+                  path={r.path}
+                  summary={summaries[r.path]}
+                  selected={r.path === selectedPath}
+                  onSelect={() => setSelectedPath(r.path)}
+                  onActivate={() => tryOpen(r.path)}
+                />
+              ))
+            )}
+          </div>
+
+          <div
+            className="flex items-center"
+            style={{
+              gap: 10,
+              marginTop: 14,
+              paddingTop: 14,
+              borderTop: '1px solid var(--hairline)',
+            }}
+          >
+            <div className="flex-1" />
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="cursor-default"
+                style={{
+                  height: 24,
+                  padding: '0 10px',
+                  borderRadius: 'var(--r-sm)',
+                  background: '#fff',
+                  border: '1px solid rgba(0,0,0,0.12)',
+                  boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
+                  color: 'var(--gray-800)',
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  fontFamily: 'inherit',
+                }}
+              >
+                Back
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={!selectedPath}
+              className="flex items-center gap-1.5 cursor-default disabled:opacity-50"
+              style={{
+                height: 30,
+                padding: '0 14px',
+                borderRadius: 'var(--r-sm)',
+                background: 'var(--blue)',
+                border: '1px solid rgba(0,0,0,0.10)',
+                color: '#fff',
+                boxShadow: '0 1px 0 rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.25)',
+                fontSize: 13,
                 fontWeight: 500,
                 fontFamily: 'inherit',
               }}
             >
-              Back
+              Open {selectedName && <strong style={{ marginLeft: 4 }}>{selectedName}</strong>}
+              <Icon name="chevron-right" size={11} color="#fff" />
             </button>
-          )}
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={!selectedPath}
-            className="flex items-center gap-1.5 cursor-default disabled:opacity-50"
-            style={{
-              height: 30,
-              padding: '0 14px',
-              borderRadius: 'var(--r-sm)',
-              background: 'var(--blue)',
-              border: '1px solid rgba(0,0,0,0.10)',
-              color: '#fff',
-              boxShadow: '0 1px 0 rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.25)',
-              fontSize: 13,
-              fontWeight: 500,
-              fontFamily: 'inherit',
-            }}
-          >
-            Open {selectedName && <strong style={{ marginLeft: 4 }}>{selectedName}</strong>}
-            <Icon name="chevron-right" size={11} color="#fff" />
-          </button>
+          </div>
         </div>
       </div>
     </div>
