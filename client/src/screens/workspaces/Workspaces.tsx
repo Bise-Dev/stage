@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Avatar } from '../../components/Avatar';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
-import { getActiveRepo, githubPrs, repoSummary } from '../../tauri';
+import { getActiveRepo, githubPrs, openInFinder, repoSummary } from '../../tauri';
 import {
   type BranchRow,
   type ExternalPrRow,
@@ -50,7 +50,7 @@ const yoursReadyToShare = STUB_WORKSPACES.filter((w) => w.author === YOU && !w.p
 const yoursInReview = STUB_WORKSPACES.filter((w) => w.author === YOU && w.prNumber);
 const reviewInReview = STUB_WORKSPACES.filter((w) => w.author !== YOU && w.prNumber);
 
-export function Workspaces() {
+export function Workspaces({ onChangeRepo }: { onChangeRepo: () => void }) {
   const [repoSlug, setRepoSlug] = useState<string | null>(null);
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [externals, setExternals] = useState<ExternalPrRow[]>([]);
@@ -166,27 +166,6 @@ export function Workspaces() {
               minWidth: 0,
             }}
           >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '0 6px 8px',
-              }}
-            >
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--gray-700)' }}>
-                Workspaces
-              </div>
-              <button
-                type="button"
-                onClick={() => console.info('workspaces_new_stub', 'rail-plus')}
-                style={{ background: 'none', border: 'none', padding: 0, cursor: 'default' }}
-                aria-label="New workspace"
-              >
-                <Icon name="plus" size={13} color="var(--gray-500)" />
-              </button>
-            </div>
-
             <div className="section-label" style={{ padding: '0 6px' }}>
               Show
             </div>
@@ -256,46 +235,7 @@ export function Workspaces() {
             <div className="section-label" style={{ marginTop: 14, padding: '0 6px' }}>
               Repository
             </div>
-            <div
-              style={{
-                padding: '4px 10px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                minWidth: 0,
-              }}
-            >
-              <Icon name="folder" size={13} color="var(--gray-500)" />
-              <span
-                style={{
-                  fontSize: 12.5,
-                  fontWeight: 500,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  minWidth: 0,
-                }}
-                title={repoSlug ?? (repoPath ? basename(repoPath) : undefined)}
-              >
-                {repoSlug ?? (repoPath ? basename(repoPath) : '—')}
-              </span>
-            </div>
-            {repoPath && (
-              <div
-                style={{
-                  padding: '0 10px 4px 28px',
-                  color: 'var(--gray-500)',
-                  fontSize: 11,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-                className="mono"
-                title={repoPath}
-              >
-                {repoPath}
-              </div>
-            )}
+            <RepoMenu slug={repoSlug} path={repoPath} onChangeRepo={onChangeRepo} />
           </div>
 
           {/* Resizable divider */}
@@ -495,6 +435,169 @@ export function Workspaces() {
 function basename(path: string): string {
   const parts = path.replace(/\/+$/, '').split('/');
   return parts[parts.length - 1] || path;
+}
+
+function RepoMenu({
+  slug,
+  path,
+  onChangeRepo,
+}: {
+  slug: string | null;
+  path: string | null;
+  onChangeRepo: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const label = slug ?? (path ? basename(path) : '—');
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          width: '100%',
+          textAlign: 'left',
+          background: open ? 'rgba(0,0,0,0.05)' : 'none',
+          border: 'none',
+          borderRadius: 5,
+          padding: '4px 10px',
+          cursor: 'default',
+          fontFamily: 'inherit',
+          minWidth: 0,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <Icon name="folder" size={13} color="var(--gray-500)" />
+          <span
+            style={{
+              flex: 1,
+              fontSize: 12.5,
+              fontWeight: 500,
+              color: 'var(--gray-800)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+            title={path ?? undefined}
+          >
+            {label}
+          </span>
+          <span style={{ display: 'flex', color: 'var(--gray-400)', flex: '0 0 auto' }}>
+            <Icon name="chevron-right" size={11} />
+          </span>
+        </div>
+        {path && (
+          <div
+            className="mono"
+            style={{
+              paddingLeft: 19,
+              marginTop: 1,
+              color: 'var(--gray-500)',
+              fontSize: 11,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {path}
+          </div>
+        )}
+      </button>
+
+      {open && (
+        <div
+          // biome-ignore lint/a11y/useSemanticElements: lightweight popover, not a native list
+          role="menu"
+          style={{
+            position: 'absolute',
+            bottom: '100%',
+            left: 0,
+            right: 0,
+            marginBottom: 6,
+            background: '#fff',
+            border: '1px solid var(--hairline)',
+            borderRadius: 'var(--r-md)',
+            boxShadow: 'var(--sh-pop)',
+            padding: 4,
+            zIndex: 20,
+          }}
+        >
+          <MenuItem
+            onClick={() => {
+              setOpen(false);
+              onChangeRepo();
+            }}
+          >
+            Change repository…
+          </MenuItem>
+          <MenuItem
+            disabled={!path}
+            onClick={() => {
+              setOpen(false);
+              if (path) openInFinder(path).catch((e) => console.warn('open_in_finder_failed', e));
+            }}
+          >
+            Reveal in Finder
+          </MenuItem>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({
+  children,
+  onClick,
+  disabled,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        display: 'block',
+        width: '100%',
+        textAlign: 'left',
+        background: 'none',
+        border: 'none',
+        borderRadius: 5,
+        padding: '6px 8px',
+        fontFamily: 'inherit',
+        fontSize: 12.5,
+        color: disabled ? 'var(--gray-400)' : 'var(--gray-800)',
+        cursor: 'default',
+      }}
+    >
+      {children}
+    </button>
+  );
 }
 
 function FilterRow({

@@ -20,6 +20,8 @@ export const gitCurrentBranch = () => invoke<string>('git_current_branch');
 
 export const repoSummary = (path: string) => invoke<RepoSummary>('repo_summary', { path });
 
+export const openInFinder = (path: string) => invoke<void>('open_in_finder', { path });
+
 // --- Auth types ---
 export type User = {
   id: number;

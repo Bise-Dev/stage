@@ -71,6 +71,12 @@ pub fn repo_summary(path: PathBuf) -> Result<git::RepoSummary, AppError> {
 }
 
 #[tauri::command]
+pub fn open_in_finder(path: PathBuf) -> Result<(), AppError> {
+    tauri_plugin_opener::open_path(&path, None::<&str>)
+        .map_err(|e| AppError::Backend(format!("open_in_finder_failed: {e}")))
+}
+
+#[tauri::command]
 pub async fn auth_sign_in(state: tauri::State<'_, AppState>) -> Result<api::User, AppError> {
     // Reject a second concurrent sign-in.
     {
