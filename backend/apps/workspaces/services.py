@@ -58,16 +58,18 @@ def storyline_replace(
         )
 
     StorylineFile.objects.filter(storyline=s).delete()
-    StorylineFile.objects.bulk_create([
-        StorylineFile(
-            storyline=s,
-            diff_file_path=f["diff_file_path"],
-            order_index=f.get("order_index", idx),
-            title=f.get("title", ""),
-            intro_text=f.get("intro_text", ""),
-        )
-        for idx, f in enumerate(files)
-    ])
+    StorylineFile.objects.bulk_create(
+        [
+            StorylineFile(
+                storyline=s,
+                diff_file_path=f["diff_file_path"],
+                order_index=f.get("order_index", idx),
+                title=f.get("title", ""),
+                intro_text=f.get("intro_text", ""),
+            )
+            for idx, f in enumerate(files)
+        ]
+    )
 
     s.etag = _new_etag()
     s.updated_by = user
@@ -128,7 +130,10 @@ def intro_comment_create(
     if parent is not None and parent.parent_id is not None:
         raise ApplicationError("depth_exceeded", status=400)
     return IntroComment.objects.create(
-        storyline_file=storyline_file, user=user, body=body, parent=parent,
+        storyline_file=storyline_file,
+        user=user,
+        body=body,
+        parent=parent,
     )
 
 
@@ -175,7 +180,9 @@ def intro_comment_unresolve(*, comment: IntroComment, creator: User) -> IntroCom
     return comment
 
 
-def _apply_pr_warnings(gateway, o: str, r: str, n: int, reviewers: list[str], labels: list[str]) -> list[str]:
+def _apply_pr_warnings(
+    gateway, o: str, r: str, n: int, reviewers: list[str], labels: list[str]
+) -> list[str]:
     warnings: list[str] = []
     if reviewers:
         try:

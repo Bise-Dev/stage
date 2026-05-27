@@ -14,16 +14,25 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 git2 = { version = "0.19", default-features = false }
 notify = "6"
 notify-debouncer-mini = "0.4"
-thiserror = "1"
+thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 parking_lot = "0.12"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "net", "io-util"] }
+base64ct = { version = "1", features = ["alloc"] }
+sha2 = "0.10"
+rand = "0.8"
+
+[dev-dependencies]
+wiremock = "0.6"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

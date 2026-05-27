@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rest_framework.test import APIClient
 
+from apps.identity.factories import GitHubIdentityFactory
 from apps.identity.services import session_issue
 from apps.users.factories import UserFactory
 from apps.users.models import User
@@ -12,6 +13,7 @@ from apps.users.models import User
 @pytest.fixture
 def authed_client(db) -> tuple[APIClient, User]:
     user = cast(User, UserFactory())
+    GitHubIdentityFactory(user=user)
     raw, _ = session_issue(user=user)
     client = APIClient()
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {raw}")
@@ -28,7 +30,7 @@ def _make_mock_gw() -> MagicMock:
 @pytest.mark.django_db
 def test_pr_detail(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.get_pr.return_value = {"number": 1}
@@ -41,7 +43,7 @@ def test_pr_detail(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_files(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.list_pr_files.return_value = [{"filename": "a.py"}]
@@ -54,7 +56,7 @@ def test_pr_files(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_file_diff(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.get_file_diff.return_value = "@@ -1 +1 @@"
@@ -67,7 +69,7 @@ def test_pr_file_diff(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_file_diff_404_when_none(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.get_file_diff.return_value = None
@@ -78,7 +80,7 @@ def test_pr_file_diff_404_when_none(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_file_comments(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.list_review_comments.return_value = [
@@ -96,7 +98,7 @@ def test_pr_file_comments(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_comments(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.list_issue_comments.return_value = [{"id": 10}]
@@ -111,7 +113,7 @@ def test_pr_comments(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_reviews(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.list_reviews.return_value = [{"id": 5, "state": "APPROVED"}]
@@ -124,7 +126,7 @@ def test_pr_reviews(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_checks(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.get_pr.return_value = {"number": 1, "head": {"sha": "abc123"}}

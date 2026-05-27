@@ -6,7 +6,9 @@ class PullRequestCommentCreateInputSerializer(serializers.Serializer):
     body = serializers.CharField()
     path = serializers.CharField(required=False, default=None, allow_null=True)
     line = serializers.IntegerField(required=False, default=None, allow_null=True)
-    side = serializers.ChoiceField(choices=["LEFT", "RIGHT"], required=False, default=None, allow_null=True)
+    side = serializers.ChoiceField(
+        choices=["LEFT", "RIGHT"], required=False, default=None, allow_null=True
+    )
     commit_id = serializers.CharField(required=False, default=None, allow_null=True)
     in_reply_to = serializers.IntegerField(required=False, default=None, allow_null=True)
 

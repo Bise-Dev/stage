@@ -3,12 +3,22 @@ from typing import Any
 import httpx
 import structlog
 
-from apps.github_proxy.exceptions import GithubConflict, GithubError, GithubForbidden, GithubNotFound
+from apps.github_proxy.exceptions import (
+    GithubConflict,
+    GithubError,
+    GithubForbidden,
+    GithubNotFound,
+)
 from config.settings.env_schemas import env
 
 logger = structlog.get_logger(__name__)
 
-_STATUS_TO_EXC = {404: GithubNotFound, 403: GithubForbidden, 409: GithubConflict, 412: GithubConflict}
+_STATUS_TO_EXC = {
+    404: GithubNotFound,
+    403: GithubForbidden,
+    409: GithubConflict,
+    412: GithubConflict,
+}
 
 
 class GithubGateway:
@@ -41,7 +51,9 @@ class GithubGateway:
             msg = body.get("message", resp.text)
         except Exception:
             body, msg = {}, resp.text
-        logger.warning("github_error", method=method, path=path, status=resp.status_code, message=msg)
+        logger.warning(
+            "github_error", method=method, path=path, status=resp.status_code, message=msg
+        )
         cls = _STATUS_TO_EXC.get(resp.status_code, GithubError)
         raise cls(resp.status_code, msg, body)
 
@@ -70,7 +82,9 @@ class GithubGateway:
         return self._request("GET", f"/repos/{o}/{r}/commits/{head_sha}/check-runs").json()
 
     def list_workflow_runs(self, o: str, r: str, head_sha: str) -> dict:
-        return self._request("GET", f"/repos/{o}/{r}/actions/runs", params={"head_sha": head_sha}).json()
+        return self._request(
+            "GET", f"/repos/{o}/{r}/actions/runs", params={"head_sha": head_sha}
+        ).json()
 
     def list_open_pulls(self, repo_owner: str, repo_name: str, *, head: str) -> list[dict]:
         params = {"state": "open", "head": f"{repo_owner}:{head}"}
@@ -80,7 +94,9 @@ class GithubGateway:
         return self._request("GET", "/search/issues", params={"q": query}).json()
 
     def post_issue_comment(self, o: str, r: str, n: int, *, body: str) -> dict:
-        return self._request("POST", f"/repos/{o}/{r}/issues/{n}/comments", json={"body": body}).json()
+        return self._request(
+            "POST", f"/repos/{o}/{r}/issues/{n}/comments", json={"body": body}
+        ).json()
 
     def post_review_comment(
         self,
@@ -98,10 +114,18 @@ class GithubGateway:
         if in_reply_to is not None:
             payload: dict[str, Any] = {"body": body, "in_reply_to": in_reply_to}
         else:
-            payload = {"body": body, "path": path, "line": line, "side": side, "commit_id": commit_id}
+            payload = {
+                "body": body,
+                "path": path,
+                "line": line,
+                "side": side,
+                "commit_id": commit_id,
+            }
         return self._request("POST", f"/repos/{o}/{r}/pulls/{n}/comments", json=payload).json()
 
-    def post_review(self, o: str, r: str, n: int, *, body: str, event: str, comments: list[dict]) -> dict:
+    def post_review(
+        self, o: str, r: str, n: int, *, body: str, event: str, comments: list[dict]
+    ) -> dict:
         return self._request(
             "POST",
             f"/repos/{o}/{r}/pulls/{n}/reviews",
@@ -112,7 +136,9 @@ class GithubGateway:
         return self._request("PATCH", f"/repos/{o}/{r}/pulls/{n}", json=fields).json()
 
     def merge_pr(self, o: str, r: str, n: int, *, method: str) -> dict:
-        return self._request("PUT", f"/repos/{o}/{r}/pulls/{n}/merge", json={"merge_method": method}).json()
+        return self._request(
+            "PUT", f"/repos/{o}/{r}/pulls/{n}/merge", json={"merge_method": method}
+        ).json()
 
     def create_pull(
         self, o: str, r: str, *, title: str, body: str, base: str, head: str, draft: bool = False
@@ -129,21 +155,48 @@ class GithubGateway:
         ).json()
 
     def add_labels(self, o: str, r: str, n: int, *, labels: list[str]) -> list[dict]:
-        return self._request("POST", f"/repos/{o}/{r}/issues/{n}/labels", json={"labels": labels}).json()
+        return self._request(
+            "POST", f"/repos/{o}/{r}/issues/{n}/labels", json={"labels": labels}
+        ).json()
 
     def edit_issue_comment(self, o: str, r: str, comment_id: int, body: str) -> dict:
-        return self._request("PATCH", f"/repos/{o}/{r}/issues/comments/{comment_id}", json={"body": body}).json()
+        return self._request(
+            "PATCH", f"/repos/{o}/{r}/issues/comments/{comment_id}", json={"body": body}
+        ).json()
 
     def delete_issue_comment(self, o: str, r: str, comment_id: int) -> None:
         self._request("DELETE", f"/repos/{o}/{r}/issues/comments/{comment_id}")
 
     def edit_review_comment(self, o: str, r: str, comment_id: int, body: str) -> dict:
-        return self._request("PATCH", f"/repos/{o}/{r}/pulls/comments/{comment_id}", json={"body": body}).json()
+        return self._request(
+            "PATCH", f"/repos/{o}/{r}/pulls/comments/{comment_id}", json={"body": body}
+        ).json()
 
     def delete_review_comment(self, o: str, r: str, comment_id: int) -> None:
         self._request("DELETE", f"/repos/{o}/{r}/pulls/comments/{comment_id}")
 
     def react_to_comment(self, o: str, r: str, kind: str, comment_id: int, content: str) -> dict:
         return self._request(
-            "POST", f"/repos/{o}/{r}/{kind}/comments/{comment_id}/reactions", json={"content": content}
+            "POST",
+            f"/repos/{o}/{r}/{kind}/comments/{comment_id}/reactions",
+            json={"content": content},
         ).json()
+
+
+# Late imports: keep identity-layer deps out of module top so this module is
+# importable without the identity app. The factory lives here (not at top) by
+# design — see spec §3.6 (bot-mode seam). The aliases avoid public surface.
+from apps.core.exceptions import ApplicationError as _ApplicationError  # noqa: E402
+from apps.identity.services import github_identity_ensure_fresh as _ensure_fresh  # noqa: E402
+from apps.users.models import User as _User  # noqa: E402
+
+
+def make_user_gateway(user: "_User") -> "GithubGateway":
+    """Build a GithubGateway for user. Transparently refreshes near-expired tokens."""
+    try:
+        # Django generates the reverse OneToOne accessor at runtime; pyrefly can't see it.
+        identity = user.github_identity  # pyrefly: ignore[missing-attribute]
+    except _User.github_identity.RelatedObjectDoesNotExist:  # pyrefly: ignore[missing-attribute] — same: runtime-generated descriptor
+        raise _ApplicationError("github_reauth_required", status=401) from None
+    identity = _ensure_fresh(identity=identity)
+    return GithubGateway(token=identity.access_token)

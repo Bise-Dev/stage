@@ -33,7 +33,9 @@ def test_workspace_lookup_miss() -> None:
 
 @pytest.mark.django_db
 def test_workspace_get_raises_when_missing() -> None:
-    from apps.workspaces.models import Workspace as _W
     import uuid
+
+    from apps.workspaces.models import Workspace as _W
+
     with pytest.raises(_W.DoesNotExist):
         workspace_get(workspace_id=uuid.uuid4())

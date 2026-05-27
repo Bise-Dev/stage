@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rest_framework.test import APIClient
 
+from apps.identity.factories import GitHubIdentityFactory
 from apps.identity.services import session_issue
 from apps.users.factories import UserFactory
 from apps.users.models import User
@@ -12,6 +13,7 @@ from apps.users.models import User
 @pytest.fixture
 def authed_client(db) -> tuple[APIClient, User]:
     user = cast(User, UserFactory())
+    GitHubIdentityFactory(user=user)
     raw, _ = session_issue(user=user)
     client = APIClient()
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {raw}")
@@ -31,7 +33,7 @@ def _make_mock_gw() -> MagicMock:
 @pytest.mark.django_db
 def test_pr_comment_create_issue(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.post_issue_comment.return_value = {"id": 1, "body": "hello"}
@@ -47,7 +49,7 @@ def test_pr_comment_create_issue(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_comment_create_review(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.post_review_comment.return_value = {"id": 2}
@@ -73,7 +75,7 @@ def test_pr_comment_create_review(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_comment_create_review_reply(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.post_review_comment.return_value = {"id": 3}
@@ -99,7 +101,7 @@ def test_pr_comment_create_review_reply(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_comment_create_review_missing_fields(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway"):
+    with patch("apps.github_proxy.apis.make_user_gateway"):
         resp = client.post(
             "/api/v1/repos/o/r/pulls/1/comments/create/",
             {"kind": "review", "body": "note"},
@@ -114,7 +116,7 @@ def test_pr_comment_create_review_missing_fields(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_review_create(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.post_review.return_value = {"id": 10}
@@ -144,7 +146,7 @@ def test_pr_review_create(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_action_close(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.patch_pr.return_value = {"number": 1, "state": "closed"}
@@ -156,7 +158,7 @@ def test_pr_action_close(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_action_reopen(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.patch_pr.return_value = {"number": 1, "state": "open"}
@@ -168,7 +170,7 @@ def test_pr_action_reopen(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_action_toggle_draft(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.get_pr.return_value = {"number": 1, "draft": False}
@@ -182,7 +184,7 @@ def test_pr_action_toggle_draft(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_action_merge(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.merge_pr.return_value = {"merged": True}
@@ -194,7 +196,7 @@ def test_pr_action_merge(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_action_merge_squash(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway") as gw_factory:
+    with patch("apps.github_proxy.apis.make_user_gateway") as gw_factory:
         mock_gw = _make_mock_gw()
         gw_factory.return_value = mock_gw
         mock_gw.merge_pr.return_value = {"merged": True}
@@ -210,6 +212,6 @@ def test_pr_action_merge_squash(authed_client) -> None:
 @pytest.mark.django_db
 def test_pr_action_unknown(authed_client) -> None:
     client, _ = authed_client
-    with patch("apps.github_proxy.apis._gateway"):
+    with patch("apps.github_proxy.apis.make_user_gateway"):
         resp = client.post("/api/v1/repos/o/r/pulls/1/actions/fly/", format="json")
     assert resp.status_code == 400

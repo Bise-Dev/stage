@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rest_framework.test import APIClient
 
+from apps.identity.factories import GitHubIdentityFactory
 from apps.identity.services import session_issue
 from apps.users.factories import UserFactory
 from apps.users.models import User
@@ -32,6 +33,7 @@ def _gw_mock() -> MagicMock:
 @pytest.fixture
 def authed_client(db) -> tuple[APIClient, User]:
     user = cast(User, UserFactory())
+    GitHubIdentityFactory(user=user)
     raw, _ = session_issue(user=user)
     client = APIClient()
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {raw}")
@@ -44,7 +46,7 @@ def test_open_pr_api_201(authed_client) -> None:
     ws = cast(Workspace, WorkspaceFactory(created_by=user, pr_number=None))
     gw = _gw_mock()
 
-    with patch("apps.workspaces.apis._gateway", return_value=gw):
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=gw):
         resp = client.post(
             f"/api/v1/workspaces/{ws.id}/open-pr/",
             {"title": "My PR", "body": "desc", "reviewers": [], "labels": [], "draft": False},
@@ -64,7 +66,7 @@ def test_open_pr_api_non_creator_403(authed_client) -> None:
     ws = cast(Workspace, WorkspaceFactory(pr_number=None))
     gw = _gw_mock()
 
-    with patch("apps.workspaces.apis._gateway", return_value=gw):
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=gw):
         resp = client.post(
             f"/api/v1/workspaces/{ws.id}/open-pr/",
             {"title": "t"},
@@ -80,7 +82,7 @@ def test_reopen_pr_api_200(authed_client) -> None:
     ws = cast(Workspace, WorkspaceFactory(created_by=user, pr_number=7))
     gw = _gw_mock()
 
-    with patch("apps.workspaces.apis._gateway", return_value=gw):
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=gw):
         resp = client.post(f"/api/v1/workspaces/{ws.id}/reopen-pr/")
 
     assert resp.status_code == 200
@@ -94,7 +96,7 @@ def test_pull_request_open_adopts_existing_pr(authed_client) -> None:
     gw = _gw_mock()
     gw.list_open_pulls.return_value = [_EXISTING_PR]
 
-    with patch("apps.workspaces.apis._gateway", return_value=gw):
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=gw):
         resp = client.post(
             f"/api/v1/workspaces/{ws.id}/open-pr/",
             {"title": "My PR", "body": "desc", "reviewers": [], "labels": [], "draft": False},
@@ -117,7 +119,7 @@ def test_pull_request_open_creates_when_no_existing_pr(authed_client) -> None:
     gw = _gw_mock()
     # list_open_pulls already returns [] from _gw_mock
 
-    with patch("apps.workspaces.apis._gateway", return_value=gw):
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=gw):
         resp = client.post(
             f"/api/v1/workspaces/{ws.id}/open-pr/",
             {"title": "My PR", "body": "desc", "reviewers": [], "labels": [], "draft": False},
@@ -139,7 +141,7 @@ def test_pull_request_open_adopt_then_apply_reviewers(authed_client) -> None:
     gw = _gw_mock()
     gw.list_open_pulls.return_value = [_EXISTING_PR]
 
-    with patch("apps.workspaces.apis._gateway", return_value=gw):
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=gw):
         resp = client.post(
             f"/api/v1/workspaces/{ws.id}/open-pr/",
             {"title": "t", "body": "", "reviewers": ["alice", "bob"], "labels": [], "draft": False},

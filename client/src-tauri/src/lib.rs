@@ -1,7 +1,8 @@
-mod backend;
+pub mod api;
 mod commands;
 mod errors;
 mod git;
+pub mod oauth;
 mod recents;
 mod state;
 mod watcher;
@@ -26,6 +27,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -34,9 +36,41 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
 
             let recents = RecentsStore::open(&data_dir)?;
+
+            let backend_url = app
+                .config()
+                .plugins
+                .0
+                .get("stage")
+                .and_then(|v| v.get("backendUrl"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("http://localhost:8000")
+                .to_string();
+
+            let github_app_client_id = app
+                .config()
+                .plugins
+                .0
+                .get("stage")
+                .and_then(|v| v.get("githubAppClientId"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    std::io::Error::other(
+                        "plugins.stage.githubAppClientId not set in tauri.conf.json",
+                    )
+                })?
+                .to_string();
+
+            let api_client = api::Client::new(&backend_url)
+                .map_err(|e| std::io::Error::other(format!("api client: {e}")))?;
+
             app.manage(AppState {
                 active: Mutex::new(None),
                 recents: Arc::new(recents),
+                api: api_client,
+                auth: Mutex::new(None),
+                auth_in_flight: Mutex::new(None),
+                github_app_client_id,
             });
             Ok(())
         })
@@ -47,6 +81,11 @@ pub fn run() {
             commands::forget_recent_repo,
             commands::git_current_branch,
             commands::repo_summary,
+            commands::auth_sign_in,
+            commands::auth_sign_in_cancel,
+            commands::auth_me,
+            commands::auth_logout,
+            commands::github_prs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -19,3 +19,36 @@ export const forgetRecentRepo = (path: string) => invoke<void>('forget_recent_re
 export const gitCurrentBranch = () => invoke<string>('git_current_branch');
 
 export const repoSummary = (path: string) => invoke<RepoSummary>('repo_summary', { path });
+
+// --- Auth types ---
+export type User = {
+  id: number;
+  github_login: string;
+  display_name: string;
+  avatar_url: string;
+};
+
+// --- GitHub PR types ---
+export type GithubUserRef = {
+  login: string;
+  avatar_url: string | null;
+};
+
+export type GithubPrSearchItem = {
+  number: number;
+  title: string;
+  html_url: string;
+  repository_url: string;
+  updated_at: string;
+  user: GithubUserRef;
+};
+
+// --- Auth wrappers ---
+export const authSignIn = () => invoke<User>('auth_sign_in');
+export const authSignInCancel = () => invoke<void>('auth_sign_in_cancel');
+export const authMe = () => invoke<User>('auth_me');
+export const authLogout = () => invoke<void>('auth_logout');
+
+// --- GitHub proxy ---
+export const githubPrs = (role: 'author' | 'reviewer') =>
+  invoke<GithubPrSearchItem[]>('github_prs', { role });

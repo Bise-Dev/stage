@@ -7,10 +7,13 @@ from apps.workspaces.models import IntroComment, StorylineFile, Workspace
 
 
 def intro_comment_thread(
-    *, storyline_file: StorylineFile, include_resolved: bool = False,
+    *,
+    storyline_file: StorylineFile,
+    include_resolved: bool = False,
 ) -> list[dict]:
     qs = IntroComment.objects.select_related("user", "resolved_by").filter(
-        storyline_file=storyline_file, deleted_at__isnull=True,
+        storyline_file=storyline_file,
+        deleted_at__isnull=True,
     )
     if not include_resolved:
         qs = qs.filter(resolved_at__isnull=True)
@@ -56,7 +59,9 @@ def storyline_read(*, workspace: Workspace, gateway) -> tuple[dict, str]:
     head_sha = None
     stale_paths: set[str] = set()
     if workspace.pr_number:
-        pr_files = gateway.list_pr_files(workspace.repo_owner, workspace.repo_name, workspace.pr_number)
+        pr_files = gateway.list_pr_files(
+            workspace.repo_owner, workspace.repo_name, workspace.pr_number
+        )
         valid = {f["filename"] for f in pr_files}
         for f in files:
             if f.diff_file_path not in valid:
@@ -99,6 +104,7 @@ def workspaces_existing_for_prs(*, prs: list[tuple[str, str, int]]) -> set[tuple
     if not prs:
         return set()
     from django.db.models import Q
+
     q = Q()
     for owner, name, n in prs:
         q |= Q(repo_owner=owner, repo_name=name, pr_number=n)
