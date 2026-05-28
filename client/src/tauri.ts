@@ -87,6 +87,8 @@ export const repoOverview = (owner: string, repo: string) =>
 
 export const openInFinder = (path: string) => invoke<void>('open_in_finder', { path });
 
+export const openUrl = (url: string) => invoke<void>('open_url', { url });
+
 // --- Auth types ---
 export type User = {
   id: number;

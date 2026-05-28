@@ -40,7 +40,7 @@ Per the grill, unbuilt controls render enabled and log on click rather than bein
 | --- | --- | --- |
 | **New workspace** (toolbar) | The "Ready to share" gesture — create a workspace for the current branch | Backend `workspace_create` exists, but the title-capture + storyline-composition flow is unbuilt. |
 | **Self-Review** (branch row) | Open the Self-Review screen for that branch | Self-Review screen not built. |
-| **Review** (Open PR row) | Open the PR-anchored review surface | Storyline/review screens not built. |
+| **Review** (Open PR row) | Eventually open the PR-anchored review surface inside Stage | Storyline/review screens not built; for now opens the PR's `html_url` in the system browser via `open_url`. |
 | **+ / search / kind filters** | — | These **do** work: client-side filtering over whatever rows are rendered. Not stubbed. |
 
 ### Deliberately omitted (by design — keep absent)

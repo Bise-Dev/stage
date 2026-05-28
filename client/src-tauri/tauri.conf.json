@@ -34,7 +34,7 @@
   "plugins": {
     "stage": {
       "backendUrl": "http://localhost:8000",
-      "githubAppClientId": "Iv23lia8DszUjCr9rW7X"
+      "githubAppClientId": "Iv23liDWVBHjBxUVEpgD"
     }
   }
 }

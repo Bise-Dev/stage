@@ -16,6 +16,7 @@ import {
   gitFetch,
   gitLocalBranches,
   openInFinder,
+  openUrl,
   repoOverview,
   repoSummary,
 } from '../../tauri';
@@ -1118,7 +1119,8 @@ function OpenPrRowCompact({ p, reviewing }: { p: OverviewOpenPrRow; reviewing?: 
       <button
         type="button"
         className="btn"
-        onClick={() => console.info('workspaces_review_stub', p.number)}
+        onClick={() => openUrl(p.html_url).catch((e) => console.warn('open_url_failed', e))}
+        title={p.html_url}
       >
         <Icon name="play" size={10} color="var(--gray-700)" /> Review
       </button>
