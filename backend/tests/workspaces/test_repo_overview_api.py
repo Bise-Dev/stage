@@ -156,3 +156,87 @@ def test_workspace_in_other_repo_excluded(authed_client) -> None:
         rows = _overview(client, ws)
     assert len(rows) == 1
     assert rows[0]["repo_name"] == ws.repo_name
+
+
+# ── Error path: fail loud, never silent (see CLAUDE.md "Error handling") ─────
+
+
+@pytest.mark.django_db
+def test_published_pr_detail_failure_returns_502(authed_client) -> None:
+    """Published workspace + PR detail fetch fails → hard 502, message names
+    the offending PR. A merged PR otherwise risks showing as "in review"."""
+    import httpx
+
+    client, user = authed_client
+    ws = cast(Workspace, WorkspaceFactory(created_by=user, pr_number=482))
+    gw = _gw()
+    gw.get_pr.side_effect = httpx.ReadTimeout("upstream timed out")
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=gw):
+        resp = client.get(f"/api/v1/repos/{ws.repo_owner}/{ws.repo_name}/overview/")
+    assert resp.status_code == 502, resp.content
+    body = resp.json()
+    assert "#482" in body["message"]
+    assert body["extra"]["pr_number"] == 482
+
+
+@pytest.mark.django_db
+def test_published_reviews_failure_returns_502(authed_client) -> None:
+    """Open PR whose reviews list fails → 502, since approved/changes-requested
+    can't be told apart from "no decision yet"."""
+    import httpx
+
+    client, user = authed_client
+    ws = cast(Workspace, WorkspaceFactory(created_by=user, pr_number=479))
+    gw = _gw()  # get_pr returns open PR; list_reviews errors out.
+    gw.list_reviews.side_effect = httpx.ReadTimeout("upstream timed out")
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=gw):
+        resp = client.get(f"/api/v1/repos/{ws.repo_owner}/{ws.repo_name}/overview/")
+    assert resp.status_code == 502, resp.content
+    body = resp.json()
+    assert "#479" in body["message"]
+    assert "review" in body["message"].lower()
+
+
+@pytest.mark.django_db
+def test_open_pr_detail_failure_returns_502(authed_client) -> None:
+    """Open-PR enrichment is held to the same bar: if get_pr fails for an
+    open PR row, fail the whole request — no half-rendered rows."""
+    import httpx
+
+    client, user = authed_client
+    ws = cast(Workspace, WorkspaceFactory(created_by=user, pr_number=None))
+    search_items = [
+        {
+            "number": 99,
+            "repository_url": f"https://api.github.com/repos/{ws.repo_owner}/{ws.repo_name}",
+            "title": "Open PR here",
+            "html_url": "https://github.com/x/pull/99",
+            "updated_at": "2026-05-26T12:00:00Z",
+            "user": {"login": "ghuser", "avatar_url": None},
+        },
+    ]
+    gw = _gw(search_items=search_items)
+    gw.get_pr.side_effect = httpx.ReadTimeout("upstream timed out")
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=gw):
+        resp = client.get(f"/api/v1/repos/{ws.repo_owner}/{ws.repo_name}/overview/")
+    assert resp.status_code == 502, resp.content
+    body = resp.json()
+    assert "#99" in body["message"]
+
+
+@pytest.mark.django_db
+def test_search_failure_returns_502(authed_client) -> None:
+    """search_issues transport error → 502 with the failing role in extra."""
+    import httpx
+
+    client, user = authed_client
+    ws = cast(Workspace, WorkspaceFactory(created_by=user, pr_number=None))
+    gw = _gw()
+    gw.search_issues.side_effect = httpx.ConnectError("network down")
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=gw):
+        resp = client.get(f"/api/v1/repos/{ws.repo_owner}/{ws.repo_name}/overview/")
+    assert resp.status_code == 502, resp.content
+    body = resp.json()
+    # First failing role wins — `author` is queried before `reviewer`.
+    assert body["extra"]["role"] == "author"
+    assert "PR" in body["message"]

@@ -5,7 +5,7 @@ import structlog
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Q, QuerySet
 
-from apps.github_proxy.exceptions import GithubError
+from apps.core.exceptions import ApplicationError
 from apps.users.models import User
 from apps.workspaces.models import IntroComment, StorylineFile, Workspace
 
@@ -169,13 +169,33 @@ def _workspace_state(
 ) -> str:
     if workspace.pr_number is None:
         return "ready_to_publish" if ready else "draft"
-    if pr is not None and (pr.get("merged") or pr.get("state") == "closed"):
+    # Published workspace: we need PR detail to tell merged/closed (→ Frozen)
+    # apart from open (→ review decision). If either piece is missing, refuse
+    # to guess — returning a default would silently misreport (e.g. a merged
+    # PR shown as "In review"). The screen fails with a clear 502 instead.
+    if pr is None:
+        raise ApplicationError(
+            "Couldn't load PR details from GitHub — workspace state unavailable.",
+            extra={"workspace_id": str(workspace.id), "pr_number": workspace.pr_number},
+            status=502,
+        )
+    if pr.get("merged") or pr.get("state") == "closed":
         return "frozen"
-    return _review_decision(reviews or [])
+    if reviews is None:
+        raise ApplicationError(
+            "Couldn't load PR reviews from GitHub — workspace state unavailable.",
+            extra={"workspace_id": str(workspace.id), "pr_number": workspace.pr_number},
+            status=502,
+        )
+    return _review_decision(reviews)
 
 
 def _open_prs_for_repo(*, user: User, repo_owner: str, repo_name: str, gateway) -> list[dict]:
-    """User's open PRs in this repo that have no Workspace, tagged author|reviewer."""
+    """User's open PRs in this repo that have no Workspace, tagged author|reviewer.
+
+    Fails loudly (502) if GitHub search is unreachable — see CLAUDE.md
+    "Error handling": no silent fallbacks, no partial-success warnings.
+    """
     login = getattr(user, "github_login", None)
     if not login:
         return []
@@ -185,7 +205,16 @@ def _open_prs_for_repo(*, user: User, repo_owner: str, repo_name: str, gateway) 
         ("author", f"is:pr is:open author:{login}"),
         ("reviewer", f"is:pr is:open review-requested:{login}"),
     ):
-        for item in gateway.search_issues(query).get("items", []):
+        try:
+            items = gateway.search_issues(query).get("items", [])
+        except Exception as exc:
+            logger.exception("overview_search_failed", role=role)
+            raise ApplicationError(
+                f"Couldn't load your {role} open PRs from GitHub.",
+                extra={"role": role, "cause": str(exc)},
+                status=502,
+            ) from exc
+        for item in items:
             parts = item["repository_url"].split("/repos/", 1)[1].split("/")
             if parts[0] != repo_owner or parts[1] != repo_name:
                 continue
@@ -210,7 +239,13 @@ def _open_prs_for_repo(*, user: User, repo_owner: str, repo_name: str, gateway) 
 def _fetch_pr_details(
     *, gateway, repo_owner: str, repo_name: str, with_reviews: set[int], detail_only: set[int]
 ) -> dict[int, dict]:
-    """Fan out get_pr (+ list_reviews where needed) in parallel. Pure HTTP — no ORM."""
+    """Fan out get_pr (+ list_reviews where needed) in parallel. Pure HTTP — no ORM.
+
+    Any per-PR failure (transport error, malformed response, 4xx/5xx) is
+    logged and re-raised as an ApplicationError(502) — see CLAUDE.md
+    "Error handling": one bad call fails the whole request rather than
+    silently rendering a row with missing data.
+    """
     needs_reviews = {n: (n in with_reviews) for n in (with_reviews | detail_only)}
     if not needs_reviews:
         return {}
@@ -219,26 +254,44 @@ def _fetch_pr_details(
         entry: dict = {"pr": None, "reviews": None}
         try:
             entry["pr"] = gateway.get_pr(repo_owner, repo_name, number)
-        except GithubError:
-            logger.warning("overview_pr_fetch_failed", number=number)
+        except Exception as exc:
+            logger.exception("overview_pr_fetch_failed", number=number)
+            raise ApplicationError(
+                f"Couldn't load PR #{number} from GitHub.",
+                extra={"pr_number": number, "cause": str(exc)},
+                status=502,
+            ) from exc
         if need_reviews:
             try:
                 entry["reviews"] = gateway.list_reviews(repo_owner, repo_name, number)
-            except GithubError:
-                logger.warning("overview_pr_reviews_failed", number=number)
+            except Exception as exc:
+                logger.exception("overview_pr_reviews_failed", number=number)
+                raise ApplicationError(
+                    f"Couldn't load reviews for PR #{number} from GitHub.",
+                    extra={"pr_number": number, "cause": str(exc)},
+                    status=502,
+                ) from exc
         return number, entry
 
     results: dict[int, dict] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
         futures = [ex.submit(fetch, n, nr) for n, nr in needs_reviews.items()]
         for fut in concurrent.futures.as_completed(futures):
+            # Any ApplicationError raised inside `fetch` propagates here and
+            # unwinds the request. The executor's __exit__ waits for in-flight
+            # work; we surface the first failure clearly to the user.
             number, entry = fut.result()
             results[number] = entry
     return results
 
 
 def repo_overview(*, user: User, repo_owner: str, repo_name: str, gateway) -> list[dict]:
-    """Unified Workspace + Open-PR rows for one repo (see docs/adr/0009)."""
+    """Unified Workspace + Open-PR rows for one repo (see docs/adr/0009).
+
+    Fails loudly on any GitHub error (see CLAUDE.md "Error handling"). The
+    caller gets a complete list of rows or a clear 502 — never a half-built
+    overview with missing/misleading fields.
+    """
     workspaces = list(
         workspace_list(user=user)
         .filter(repo_owner=repo_owner, repo_name=repo_name)

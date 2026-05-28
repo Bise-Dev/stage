@@ -68,17 +68,35 @@ pub struct BranchInfo {
 }
 
 /// All local branches, most-recently-committed first.
+///
+/// Per the project's fail-loud convention (CLAUDE.md "Error handling"): if
+/// any single ref is unreadable, the whole call fails with a message that
+/// names the offending branch — preferable to silently dropping a row the
+/// user can't see is missing.
 pub fn local_branches(repo_path: &Path) -> Result<Vec<BranchInfo>, AppError> {
     let repo = Repository::open(repo_path)?;
     let mut out = Vec::new();
 
     for entry in repo.branches(Some(BranchType::Local))? {
-        let (branch, _) = entry?;
-        let Some(name) = branch.name()?.map(str::to_string) else {
-            continue; // non-UTF-8 branch name — skip rather than fail the whole list
+        let (branch, _) = entry.map_err(|e| {
+            AppError::Backend(format!("local_branches: branch iterator failed: {e}"))
+        })?;
+        let raw_name = branch.name().map_err(|e| {
+            AppError::Backend(format!("local_branches: unreadable branch name: {e}"))
+        })?;
+        let Some(name) = raw_name.map(str::to_string) else {
+            // Non-UTF-8 ref name — the webview can't render it; fail loud
+            // rather than quietly hide branches the user has on disk.
+            return Err(AppError::Backend(
+                "local_branches: non-UTF-8 branch name in repository".into(),
+            ));
         };
         let is_head = branch.is_head();
-        let commit = branch.get().peel_to_commit()?;
+        let commit = branch.get().peel_to_commit().map_err(|e| {
+            AppError::Backend(format!(
+                "local_branches: branch '{name}' has unreadable commit: {e}"
+            ))
+        })?;
         out.push(BranchInfo {
             name,
             is_head,

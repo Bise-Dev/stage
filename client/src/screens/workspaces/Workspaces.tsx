@@ -60,6 +60,8 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
   const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [rows, setRows] = useState<OverviewRow[]>([]);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [branchesError, setBranchesError] = useState<string | null>(null);
   const [diffStats, setDiffStats] = useState<Record<string, DiffStats>>({});
   const [show, setShow] = useState<Show>('all');
   const [kind, setKind] = useState<Kind | null>(null);
@@ -73,16 +75,34 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
   const loadBranches = useCallback(async () => {
     try {
       setBranches(await gitLocalBranches());
+      setBranchesError(null);
     } catch (e) {
+      // Fail loud (see CLAUDE.md "Error handling"): the Rust side names the
+      // offending ref, surface that to the user in a red banner instead of
+      // silently rendering an empty Self-Review bucket.
       console.warn('workspaces_branches_failed', e);
+      const msg =
+        typeof e === 'object' && e !== null && 'message' in e
+          ? String((e as { message: unknown }).message)
+          : String(e);
+      setBranchesError(msg);
     }
   }, []);
 
   const loadOverview = useCallback(async (owner: string, repo: string) => {
     try {
       setRows(await repoOverview(owner, repo));
+      setOverviewError(null);
     } catch (e) {
+      // Any failure here is a hard fail per the project's error-handling
+      // convention (see CLAUDE.md "Error handling"): no silent fallbacks, no
+      // half-rendered overviews. Surface the API's message verbatim.
       console.warn('workspaces_overview_failed', e);
+      const msg =
+        typeof e === 'object' && e !== null && 'message' in e
+          ? String((e as { message: unknown }).message)
+          : String(e);
+      setOverviewError(msg);
     }
   }, []);
 
@@ -117,13 +137,21 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
     };
   }, [loadBranches]);
 
-  // Local diff stats for things checked out locally: branches (vs default
-  // branch) and pre-publish workspaces (head vs base). Published rows + Open PRs
-  // already carry GitHub additions/deletions.
+  // Local diff stats for things checked out locally: Self-Review branches
+  // (vs default branch) and pre-publish workspaces (head vs base). Published
+  // rows + Open PRs already carry GitHub additions/deletions. Branches that
+  // already have a Workspace are excluded here — they're rendered by the
+  // workspace target instead. Sharing diffStats[head_ref] between the two
+  // would race the writes when base differs (default branch vs workspace base).
   useEffect(() => {
+    const wsHeads = new Set(
+      rows.filter((r): r is OverviewWorkspaceRow => r.kind === 'workspace').map((r) => r.head_ref),
+    );
     const targets: { base: string; head: string }[] = [];
     if (defaultBranch) {
-      for (const b of branches) targets.push({ base: defaultBranch, head: b.name });
+      for (const b of branches) {
+        if (!wsHeads.has(b.name)) targets.push({ base: defaultBranch, head: b.name });
+      }
     }
     for (const r of rows) {
       if (r.kind === 'workspace' && r.pr_number === null) {
@@ -153,18 +181,25 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
   }, [branches, rows, defaultBranch]);
 
   const runFetch = async () => {
+    // Each step routes its failure to its own red banner so the user can
+    // tell what actually broke (see CLAUDE.md "Error handling"). gitFetch
+    // and repoSummary share the toolbar's fetchError slot; loadBranches /
+    // loadOverview set their own dedicated banners.
     setFetching(true);
     setFetchError(null);
     try {
-      await gitFetch();
-      if (repoPath) {
-        const sum = await repoSummary(repoPath);
-        setRepoSlug(slugFromRemote(sum.remoteUrl));
+      try {
+        await gitFetch();
+        if (repoPath) {
+          const sum = await repoSummary(repoPath);
+          setRepoSlug(slugFromRemote(sum.remoteUrl));
+        }
+      } catch (e) {
+        setFetchError(String(e));
+        return;
       }
       await loadBranches();
       if (ghRepo) await loadOverview(ghRepo.owner, ghRepo.repo);
-    } catch (e) {
-      setFetchError(String(e));
     } finally {
       setFetching(false);
     }
@@ -194,6 +229,11 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
   // Split overview rows into buckets.
   const workspaceRows = rows.filter((r): r is OverviewWorkspaceRow => r.kind === 'workspace');
   const openPrRows = rows.filter((r): r is OverviewOpenPrRow => r.kind === 'open_pr');
+  // Self-Review = "branch, no workspace" (see docs/NOT-IMPLEMENTED.md). Drop
+  // any branch that already has a Workspace — otherwise it would render in
+  // both Self-Review and Ready-to-share/In-review.
+  const workspaceHeadRefs = new Set(workspaceRows.map((w) => w.head_ref));
+  const selfReviewBranches = branches.filter((b) => !workspaceHeadRefs.has(b.name));
   const yoursReadyToShare = workspaceRows.filter(
     (w) => w.pr_number === null && w.created_by.github_login === me,
   );
@@ -230,13 +270,13 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
   };
 
   const kindCounts = {
-    'self-review': branches.length,
+    'self-review': selfReviewBranches.length,
     'ready-to-share': workspaceRows.filter((w) => w.pr_number === null).length,
     'in-review': workspaceRows.filter((w) => w.pr_number !== null).length,
     'open-prs': openPrRows.length,
   };
   const yoursCount =
-    branches.length + yoursReadyToShare.length + yoursInReview.length + openAuthor.length;
+    selfReviewBranches.length + yoursReadyToShare.length + yoursInReview.length + openAuthor.length;
   const reviewCount = reviewInReview.length + openReviewer.length;
 
   const showKind = (k: Kind) => kind === null || kind === k;
@@ -417,6 +457,38 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
               </div>
             )}
 
+            {overviewError && (
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: 'var(--red-d)',
+                  background: 'rgba(255,59,48,0.08)',
+                  border: '1px solid rgba(255,59,48,0.20)',
+                  borderRadius: 'var(--r-sm)',
+                  padding: '6px 10px',
+                  marginBottom: 10,
+                }}
+              >
+                Couldn't load workspaces overview: {overviewError}
+              </div>
+            )}
+
+            {branchesError && (
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: 'var(--red-d)',
+                  background: 'rgba(255,59,48,0.08)',
+                  border: '1px solid rgba(255,59,48,0.20)',
+                  borderRadius: 'var(--r-sm)',
+                  padding: '6px 10px',
+                  marginBottom: 10,
+                }}
+              >
+                Couldn't list local branches: {branchesError}
+              </div>
+            )}
+
             <div
               style={{
                 display: 'grid',
@@ -435,14 +507,14 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
                   border="rgba(0,122,255,0.16)"
                   accent="var(--blue)"
                 >
-                  {showKind('self-review') && branches.filter(matchBranch).length > 0 && (
+                  {showKind('self-review') && selfReviewBranches.filter(matchBranch).length > 0 && (
                     <Bucket
                       color="var(--orange)"
                       title="Self-Review"
                       hint="no workspace"
-                      count={branches.length}
+                      count={selfReviewBranches.length}
                     >
-                      {branches.filter(matchBranch).map((b) => (
+                      {selfReviewBranches.filter(matchBranch).map((b) => (
                         <BranchRowCompact key={b.name} b={b} stats={diffStats[b.name]} />
                       ))}
                     </Bucket>

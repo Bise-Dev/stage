@@ -91,7 +91,59 @@ class GithubGateway:
         return self._request("GET", f"/repos/{repo_owner}/{repo_name}/pulls", params=params).json()
 
     def search_issues(self, query: str) -> dict:
-        return self._request("GET", "/search/issues", params={"q": query}).json()
+        """Run `/search/issues` and return every matching item.
+
+        GitHub paginates search at up to 100/page and caps total fetchable
+        results at 1000 (10 pages). We iterate until exhausted; per the
+        fail-loud convention (CLAUDE.md "Error handling") any sign of
+        incompleteness is raised, not silently truncated:
+
+        - ``incomplete_results: true`` from upstream → raise (search timed
+          out partway through).
+        - ``total_count`` exceeds what we could fetch → raise (caller's
+          query is too broad to enumerate via search).
+        """
+        per_page = 100
+        max_pages = 10  # GitHub's hard cap on /search/issues pagination.
+        all_items: list[dict] = []
+        total_count = 0
+        for page in range(1, max_pages + 1):
+            resp = self._request(
+                "GET",
+                "/search/issues",
+                params={"q": query, "per_page": per_page, "page": page},
+            ).json()
+            if resp.get("incomplete_results"):
+                raise GithubError(
+                    502,
+                    "github_search_incomplete",
+                    {"query": query, "page": page},
+                )
+            page_items = resp.get("items", [])
+            all_items.extend(page_items)
+            total_count = resp.get("total_count", len(all_items))
+            if len(page_items) < per_page:
+                break
+        else:
+            # Loop finished without `break` — we filled all max_pages and the
+            # last page was still full. If GitHub says there are more matches
+            # beyond what we fetched, the caller is operating on truncated
+            # data — refuse rather than render a partial list.
+            if total_count > len(all_items):
+                raise GithubError(
+                    502,
+                    "github_search_truncated",
+                    {
+                        "query": query,
+                        "total_count": total_count,
+                        "fetched": len(all_items),
+                    },
+                )
+        return {
+            "total_count": total_count,
+            "incomplete_results": False,
+            "items": all_items,
+        }
 
     def post_issue_comment(self, o: str, r: str, n: int, *, body: str) -> dict:
         return self._request(
