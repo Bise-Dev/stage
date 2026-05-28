@@ -14,6 +14,7 @@ class WorkspaceOutputSerializer(serializers.ModelSerializer):
             "repo_name",
             "head_ref",
             "base_ref",
+            "title",
             "pr_number",
             "pr_opened_at",
             "created_by",

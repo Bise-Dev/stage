@@ -32,7 +32,8 @@ Implementation choices for the local client. Open to revision; not in CONTEXT.md
 - Roll our own thin wrapper around `@git-diff-view`'s per-line slot API. Existing libraries render diffs fine but model "comments anchored to a line range + threaded replies + draft state" poorly. We own this surface.
 
 ## Git access
-- **`git2-rs`** (libgit2) in the Rust side, exposed to the webview via narrow Tauri commands. Read-only diff/branch/blob/log operations for now; fetch later.
+- **`git2-rs`** (libgit2) in the Rust side, exposed to the webview via narrow Tauri commands, for read-only diff/branch/blob/log/remote operations. Writes (commit/push) stay out of scope.
+- **Network git (`fetch`) shells out to the system `git` binary**, not libgit2. The vendored libgit2 build has no TLS/SSH transport ("unsupported URL protocol"), and the system git transparently uses the user's own credentials (ssh-agent, credential helpers, proxies). Stage holds no GitHub credentials of its own — fetch is a plain local git-transport op. Deliberate split from the git2-rs-for-everything line; revisit if we ever want a libgit2 build with bundled TLS.
 
 ## File watching
 - **`notify` + `notify-debouncer-mini`** in the Rust side — fires events when the working tree or refs change so the Self-Review view stays live without manual refresh.

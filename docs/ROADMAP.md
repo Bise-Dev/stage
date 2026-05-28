@@ -13,6 +13,16 @@ Forward-looking goals that we are deliberately *not* building yet, but are aimin
 - GitHub webhook ingress (smee.io for dev; public URL for prod) so PR-side state changes propagate without a client refresh.
 - Per-route conditional ETag cache on github read endpoints to reduce rate-limit pressure.
 
+## Workspaces-overview aggregation: GraphQL batch fan-out
+
+**Today (POC):** The repo-scoped overview endpoint (see `docs/adr/0009-workspaces-overview-aggregation-endpoint.md`) enriches each PR-backed row by fanning out **parallel REST calls** through `GithubGateway` (review decision, additions/deletions, review-comment count), behind a short-TTL `(user, repo)` cache. This is N+1 GitHub calls per load — fine for POC-sized PR counts.
+
+**Goal:** Replace the per-PR REST fan-out with a **single GitHub GraphQL query** that fetches `reviewDecision`, `additions`, `deletions`, and `comments.totalCount` for all the repo's relevant PRs at once. Cuts a screen load from N round-trips to one.
+
+**Why we're not doing it now:** GraphQL is a new gateway capability (query + auth + response mapping + tests) and the REST fan-out is adequate at POC scale. Revisit when a repo's open-PR/workspace count makes the N+1 latency or rate-limit pressure bite.
+
+**Implication for today's design:** Keep the per-PR enrichment behind a single function in the aggregator selector so the REST fan-out can be swapped for one GraphQL call without touching the endpoint's response shape.
+
 ## Transactional outbox for github-coupled writes
 
 **Today (POC):** `pull_request_open` will land an **idempotent open** patch (look up by `head_ref` before creating, adopt an existing PR if found) — this closes the only currently-known stuck-state where a github write succeeds but the DB write fails afterward. See `docs/design.md` § 6 + § 14.

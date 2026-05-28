@@ -68,3 +68,205 @@ body {
   font-family: var(--font-mono);
   letter-spacing: 0;
 }
+
+/* ─── Shared app chrome & primitives (ported from design tokens.css) ───
+   Used by the Workspaces screen and future review screens. Onboarding
+   predates these and inlines its own equivalents; not refactored here. */
+
+.stage {
+  height: 100%;
+  width: 100%;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--gray-800);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
+  user-select: none;
+}
+.stage * {
+  box-sizing: border-box;
+}
+
+.win {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--gray-75);
+  position: relative;
+  overflow: hidden;
+}
+
+/* macOS title bar with traffic lights */
+.win-titlebar {
+  height: 36px;
+  flex: 0 0 36px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  position: relative;
+  background: linear-gradient(180deg, #f1efec 0%, #e6e4e0 100%);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.13);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+.win-title {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-700);
+  letter-spacing: -0.01em;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  color: var(--gray-800);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: default;
+  white-space: nowrap;
+}
+.btn-primary {
+  background: var(--blue);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.btn-lg {
+  height: 30px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+/* Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--gray-700);
+  background: rgba(0, 0, 0, 0.06);
+}
+.badge-blue {
+  background: var(--blue-tint);
+  color: var(--blue-press);
+}
+.badge-green {
+  background: rgba(52, 199, 89, 0.14);
+  color: var(--green-d);
+}
+.badge-orange {
+  background: rgba(255, 149, 0, 0.14);
+  color: #b56500;
+}
+.badge-purple {
+  background: rgba(175, 82, 222, 0.14);
+  color: #7b2cab;
+}
+
+/* Avatar */
+.avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.01em;
+  flex: 0 0 auto;
+}
+.avatar.sm {
+  width: 18px;
+  height: 18px;
+  font-size: 9px;
+}
+.avatar.lg {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+}
+
+/* Inputs */
+.input {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.02);
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--gray-800);
+  width: 100%;
+}
+.input.lg {
+  height: 30px;
+  font-size: 13px;
+}
+
+/* Section label */
+.section-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  padding: 0 12px;
+  margin-bottom: 4px;
+}
+
+/* Draggable vertical divider for resizable rails */
+.rail-resize {
+  flex: 0 0 6px;
+  align-self: stretch;
+  position: relative;
+  cursor: col-resize;
+  background: none;
+  border: none;
+  padding: 0;
+}
+.rail-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--hairline);
+  transition: background 80ms ease, width 80ms ease;
+}
+.rail-resize:hover::after,
+.rail-resize.dragging::after {
+  background: var(--blue);
+  width: 2px;
+}
+
+/* Hide scrollbars within the app frame */
+.stage ::-webkit-scrollbar {
+  display: none;
+}
+.stage * {
+  scrollbar-width: none;
+}

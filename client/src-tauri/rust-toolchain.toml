@@ -1,0 +1,7 @@
+# Pin the Rust toolchain so local `cargo` and CI (`dtolnay/rust-toolchain`)
+# install and use the same version — otherwise newer clippy lints surface on
+# CI that don't trigger locally, and vice versa. Bump when CI's stable would
+# otherwise drift ahead; keep components in sync with `.github/workflows/`.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

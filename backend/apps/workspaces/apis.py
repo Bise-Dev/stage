@@ -1,6 +1,7 @@
 import uuid
 from typing import cast
 
+from django.core.cache import cache
 from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -12,6 +13,7 @@ from apps.users.models import User
 from apps.workspaces.models import IntroComment, StorylineFile, Workspace
 from apps.workspaces.selectors import (
     intro_comment_thread,
+    repo_overview,
     storyline_read,
     workspace_get,
     workspace_list,
@@ -51,6 +53,25 @@ class WorkspaceListApi(APIView):
         serializer.is_valid(raise_exception=True)
         ws = workspace_create(creator=cast(User, request.user), **serializer.validated_data)
         return Response(WorkspaceOutputSerializer(ws).data, status=status.HTTP_201_CREATED)
+
+
+class RepoOverviewApi(APIView):
+    """Unified Workspace + Open-PR overview for one repo (see docs/adr/0009).
+
+    Short-TTL cached per (user, repo) since each call fans out to GitHub.
+    """
+
+    def get(self, request: Request, owner: str, repo: str) -> Response:
+        cache_key = f"overview:{request.user.pk}:{owner}/{repo}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+        with make_user_gateway(cast(User, request.user)) as g:
+            rows = repo_overview(
+                user=cast(User, request.user), repo_owner=owner, repo_name=repo, gateway=g
+            )
+        cache.set(cache_key, rows, timeout=30)
+        return Response(rows)
 
 
 class WorkspaceLookupApi(APIView):

@@ -71,6 +71,69 @@ pub fn repo_summary(path: PathBuf) -> Result<git::RepoSummary, AppError> {
 }
 
 #[tauri::command]
+pub fn git_local_branches(state: State<'_, AppState>) -> Result<Vec<git::BranchInfo>, AppError> {
+    let path = state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| a.path.clone())
+        .ok_or(AppError::NoActiveRepo)?;
+    git::local_branches(&path)
+}
+
+#[tauri::command]
+pub fn git_diff_stats(
+    state: State<'_, AppState>,
+    base_ref: String,
+    head_ref: String,
+) -> Result<git::DiffStats, AppError> {
+    let path = state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| a.path.clone())
+        .ok_or(AppError::NoActiveRepo)?;
+    git::diff_stats(&path, &base_ref, &head_ref)
+}
+
+#[tauri::command]
+pub async fn repo_overview(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    repo: String,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let rows = state.api.repo_overview(&token, &owner, &repo).await?;
+    Ok(rows)
+}
+
+#[tauri::command]
+pub async fn git_fetch(state: State<'_, AppState>) -> Result<git::FetchOutcome, AppError> {
+    let path = state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| a.path.clone())
+        .ok_or(AppError::NoActiveRepo)?;
+    // git2 fetch is blocking I/O — keep it off the async runtime's threads.
+    tauri::async_runtime::spawn_blocking(move || git::fetch(&path))
+        .await
+        .map_err(|e| AppError::Backend(format!("fetch_join_error: {e}")))?
+}
+
+#[tauri::command]
+pub fn open_in_finder(path: PathBuf) -> Result<(), AppError> {
+    tauri_plugin_opener::open_path(&path, None::<&str>)
+        .map_err(|e| AppError::Backend(format!("open_in_finder_failed: {e}")))
+}
+
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), AppError> {
+    tauri_plugin_opener::open_url(&url, None::<&str>)
+        .map_err(|e| AppError::Backend(format!("open_url_failed: {e}")))
+}
+
+#[tauri::command]
 pub async fn auth_sign_in(state: tauri::State<'_, AppState>) -> Result<api::User, AppError> {
     // Reject a second concurrent sign-in.
     {

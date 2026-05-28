@@ -6,3 +6,4 @@ class WorkspaceCreateInputSerializer(serializers.Serializer):
     repo_name = serializers.CharField(max_length=255)
     head_ref = serializers.CharField(max_length=255)
     base_ref = serializers.CharField(max_length=255, required=False, default="main")
+    title = serializers.CharField(max_length=255, required=False, default="", allow_blank=True)

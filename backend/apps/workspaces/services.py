@@ -88,6 +88,7 @@ def workspace_create(
     repo_name: str,
     head_ref: str,
     base_ref: str,
+    title: str = "",
 ) -> Workspace:
     try:
         ws = Workspace.objects.create(
@@ -96,6 +97,7 @@ def workspace_create(
             repo_name=repo_name,
             head_ref=head_ref,
             base_ref=base_ref,
+            title=title,
         )
     except (IntegrityError, DjangoValidationError) as exc:
         raise ApplicationError(

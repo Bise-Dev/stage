@@ -8,6 +8,7 @@ from apps.workspaces.apis import (
     IntroCommentUnresolveApi,
     OpenPrApi,
     ReopenPrApi,
+    RepoOverviewApi,
     StorylineDetailApi,
     StorylineFileDetailApi,
     WorkspaceDetailApi,
@@ -18,6 +19,11 @@ from apps.workspaces.apis import (
 app_name = "workspaces"
 
 urlpatterns = [
+    path(
+        "repos/<str:owner>/<str:repo>/overview/",
+        RepoOverviewApi.as_view(),
+        name="repo-overview",
+    ),
     path("workspaces/", WorkspaceListApi.as_view(), name="list"),
     path("workspaces/lookup/", WorkspaceLookupApi.as_view(), name="lookup"),
     path("workspaces/<uuid:workspace_id>/", WorkspaceDetailApi.as_view(), name="detail"),

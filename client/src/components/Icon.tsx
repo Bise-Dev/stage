@@ -1,4 +1,17 @@
-type IconName = 'gh' | 'folder' | 'chevron-right' | 'chevron-left' | 'check' | 'arrow-right';
+type IconName =
+  | 'gh'
+  | 'folder'
+  | 'chevron-right'
+  | 'chevron-left'
+  | 'check'
+  | 'arrow-right'
+  | 'plus'
+  | 'branch'
+  | 'play'
+  | 'doc-stack'
+  | 'search'
+  | 'eye'
+  | 'comment-fill';
 
 interface IconProps {
   name: IconName;
@@ -93,6 +106,103 @@ export function Icon({ name, size = 14, color = 'currentColor', className }: Ico
           aria-hidden="true"
         >
           <path d="M2.5 7h9M8 3.5L11.5 7 8 10.5" />
+        </svg>
+      );
+    case 'plus':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <path d="M7 2v10M2 7h10" />
+        </svg>
+      );
+    case 'branch':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <circle cx="3.5" cy="3" r="1.4" />
+          <circle cx="3.5" cy="11" r="1.4" />
+          <circle cx="10.5" cy="3" r="1.4" />
+          <path d="M3.5 4.4v5.2M10.5 4.4v1.6a2 2 0 0 1-2 2H5.5" />
+        </svg>
+      );
+    case 'search':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <circle cx="6" cy="6" r="4" />
+          <path d="M9.2 9.2L12 12" />
+        </svg>
+      );
+    case 'eye':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <path d="M1 7s2-4 6-4 6 4 6 4-2 4-6 4-6-4-6-4z" />
+          <circle cx="7" cy="7" r="1.6" />
+        </svg>
+      );
+    case 'doc-stack':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <rect x="3" y="3" width="8" height="9" rx="1.2" />
+          <path d="M5 1.5h6a1 1 0 0 1 1 1V10" />
+        </svg>
+      );
+    case 'play':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          fill={color}
+          className={className}
+          aria-hidden="true"
+        >
+          <path d="M4 3v8l7-4z" />
+        </svg>
+      );
+    case 'comment-fill':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          fill={color}
+          className={className}
+          aria-hidden="true"
+        >
+          <path d="M2 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H6l-3 2v-2H4a2 2 0 0 1-2-2z" />
         </svg>
       );
   }

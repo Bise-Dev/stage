@@ -28,6 +28,8 @@ Stage authenticates against GitHub via a **GitHub App** (not an OAuth App). One 
 
 Never commit secrets. Use `.env` (gitignored) for local dev; secret manager for prod.
 
+Update tauri.conf.json as well with the `Client ID`
+
 ## Installing on a repo
 
 1. App settings → sidebar → **Install App**.

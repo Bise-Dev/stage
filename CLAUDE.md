@@ -18,6 +18,24 @@ just verify           # pre-commit + clippy + cargo test + pytest
 
 A change isn't complete until at least the relevant linters and typecheckers pass. If pre-commit modifies files (auto-fix), stage them and re-run. If pyrefly/tsc/clippy report errors, fix them — don't suppress unless you have a specific reason and document it inline.
 
+## Error handling
+
+**Fail loud. No silent fallbacks. No partial-success payloads.** When something goes wrong, two things must happen — both, every time:
+
+1. **Log it** with the full traceback and structured context. In Python: `logger.exception("event_name", **kwargs)` (never bare `except: pass`, never `logger.warning` for an actual failure). In Rust: `tracing::error!(err = %e, …)`. In the webview: `console.warn(...)` is fine for visibility, but it does **not** count as user-facing.
+2. **Surface it to the user** with a clear message. In the backend: `raise ApplicationError("Couldn't <do thing> — <why>.", extra={...}, status=...)` (see [backend Errors](#errors)) — the custom handler turns it into `{"message": ..., "extra": ...}`. In the client: catch the SDK rejection and render the API's message in a red banner; don't shorten or rewrite it.
+
+**Explicitly banned:**
+
+- Default-on-error (`return None`, `return []`, `return "unknown"`) that hides the failure.
+- Best-effort warnings collected alongside data (`{"rows": [...], "warnings": [...]}`) — if one piece failed, the whole response fails. The user should never have to wonder whether a row is real or a fallback.
+- Catching an exception only to log and continue. Logging is half the job; the other half is the raise.
+- Wrapping a raise in a generic message that drops the cause. Pass the real cause through `extra={"cause": str(exc)}` and chain with `raise … from exc`.
+
+**Why:** in a tool that brokers credentials and renders state copied from GitHub, "partial" data is a bug-magnet — the user trusts what they see. A loud failure is recoverable; a quietly wrong row isn't. See `backend/apps/workspaces/selectors.py::repo_overview` for the canonical shape: every GitHub call site logs + raises `ApplicationError(status=502)` on any exception.
+
+The one exception (rare and must be documented inline): work that is genuinely fire-and-forget and cannot affect anything the user sees — e.g. emitting a metric, warming a cache after the response has been sent. Even then: `logger.exception(...)`; the silent part is the user-facing side, not the log.
+
 ## Backend (`backend/`)
 
 The Django app follows an opinionated structural baseline derived from the [HackSoft Django Styleguide](https://github.com/HackSoftware/Django-Styleguide), with documented deviations. The full rationale is in [docs/adr/0005-backend-architecture-and-styleguide-baseline.md](./docs/adr/0005-backend-architecture-and-styleguide-baseline.md). All paths in this section are relative to `backend/`.

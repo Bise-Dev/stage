@@ -9,6 +9,7 @@ class Workspace(BaseModel):
     repo_name = models.CharField(max_length=255)
     head_ref = models.CharField(max_length=255)
     base_ref = models.CharField(max_length=255)
+    title = models.CharField(max_length=255, blank=True, default="")
     pr_number = models.IntegerField(null=True, blank=True)
     pr_opened_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(
