@@ -1,6 +1,8 @@
 from typing import cast
+from unittest.mock import MagicMock, patch
 
 import pytest
+from django.core.cache import cache
 from rest_framework.test import APIClient
 
 from apps.identity.services import session_issue
@@ -134,3 +136,41 @@ def test_workspace_patch_local_phase_creator_only(authed_client) -> None:
 
     resp = client_b.patch(f"/api/v1/workspaces/{ws_a.id}/", {"head_ref": "feat/z"}, format="json")
     assert resp.status_code == 403
+
+
+def _gw_empty() -> MagicMock:
+    """A gateway whose searches return nothing — enough for an overview that
+    contains only pre-publish (draft) workspaces, which never fan out to GitHub."""
+    gw = MagicMock()
+    gw.__enter__ = lambda s: s
+    gw.__exit__ = MagicMock(return_value=False)
+    gw.search_issues.return_value = {"items": []}
+    gw.get_pr.return_value = {"state": "open", "head": {"ref": "feat/x"}}
+    gw.list_reviews.return_value = []
+    return gw
+
+
+@pytest.mark.django_db
+def test_workspace_create_invalidates_overview_cache(authed_client) -> None:
+    """Creating a workspace must bust the cached overview for that (user, repo)
+    so the new row is visible immediately, not after the 30s TTL."""
+    client, _ = authed_client
+    cache.clear()  # LocMemCache persists across tests in-process; isolate this one.
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=_gw_empty()):
+        # Prime the per-(user, repo) overview cache: no workspaces yet.
+        primed = client.get("/api/v1/repos/o/r/overview/")
+        assert primed.status_code == 200, primed.content
+        assert primed.json() == []
+
+        created = client.post(
+            "/api/v1/workspaces/",
+            {"repo_owner": "o", "repo_name": "r", "head_ref": "feat/x", "base_ref": "main"},
+            format="json",
+        )
+        assert created.status_code == 201, created.content
+
+        # Must reflect the new workspace right away (cache invalidated on create).
+        after = client.get("/api/v1/repos/o/r/overview/")
+    assert after.status_code == 200, after.content
+    rows = after.json()
+    assert any(r["kind"] == "workspace" and r["head_ref"] == "feat/x" for r in rows), rows

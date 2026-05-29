@@ -52,6 +52,13 @@ class WorkspaceListApi(APIView):
         serializer = WorkspaceCreateInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         ws = workspace_create(creator=cast(User, request.user), **serializer.validated_data)
+        # The overview is cached per (user, repo) for 30s (see RepoOverviewApi).
+        # Bust it so the new workspace shows up immediately. Key format MUST
+        # match RepoOverviewApi.get exactly.
+        cache.delete(
+            f"overview:{request.user.pk}:"
+            f"{serializer.validated_data['repo_owner']}/{serializer.validated_data['repo_name']}"
+        )
         return Response(WorkspaceOutputSerializer(ws).data, status=status.HTTP_201_CREATED)
 
 
