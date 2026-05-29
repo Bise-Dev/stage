@@ -210,6 +210,30 @@ pub async fn auth_logout(state: tauri::State<'_, AppState>) -> Result<(), AppErr
 }
 
 #[tauri::command]
+pub async fn workspace_create(
+    state: tauri::State<'_, AppState>,
+    repo_owner: String,
+    repo_name: String,
+    head_ref: String,
+    base_ref: String,
+    title: String,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let ws = state
+        .api
+        .workspace_create(
+            &token,
+            &repo_owner,
+            &repo_name,
+            &head_ref,
+            &base_ref,
+            &title,
+        )
+        .await?;
+    Ok(ws)
+}
+
+#[tauri::command]
 pub async fn github_prs(
     state: tauri::State<'_, AppState>,
     role: String,
