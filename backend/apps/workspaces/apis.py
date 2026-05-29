@@ -43,6 +43,12 @@ from apps.workspaces.services import (
 )
 
 
+def _overview_cache_key(user_pk: int | None, owner: str, repo: str) -> str:
+    """Cache key for RepoOverviewApi, shared with the create/delete handlers
+    that must bust it. Single source of truth so the three sites can't drift."""
+    return f"overview:{user_pk}:{owner}/{repo}"
+
+
 class WorkspaceListApi(APIView):
     def get(self, request: Request) -> Response:
         qs = workspace_list(user=cast(User, request.user))
@@ -53,11 +59,13 @@ class WorkspaceListApi(APIView):
         serializer.is_valid(raise_exception=True)
         ws = workspace_create(creator=cast(User, request.user), **serializer.validated_data)
         # The overview is cached per (user, repo) for 30s (see RepoOverviewApi).
-        # Bust it so the new workspace shows up immediately. Key format MUST
-        # match RepoOverviewApi.get exactly.
+        # Bust it so the new workspace shows up immediately.
         cache.delete(
-            f"overview:{request.user.pk}:"
-            f"{serializer.validated_data['repo_owner']}/{serializer.validated_data['repo_name']}"
+            _overview_cache_key(
+                request.user.pk,
+                serializer.validated_data["repo_owner"],
+                serializer.validated_data["repo_name"],
+            )
         )
         return Response(WorkspaceOutputSerializer(ws).data, status=status.HTTP_201_CREATED)
 
@@ -69,7 +77,7 @@ class RepoOverviewApi(APIView):
     """
 
     def get(self, request: Request, owner: str, repo: str) -> Response:
-        cache_key = f"overview:{request.user.pk}:{owner}/{repo}"
+        cache_key = _overview_cache_key(request.user.pk, owner, repo)
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached)
