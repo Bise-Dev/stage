@@ -20,6 +20,7 @@ import {
   repoOverview,
   repoSummary,
   workspaceCreate,
+  workspaceDelete,
 } from '../../tauri';
 import { relativeTime, relativeTimeFromEpoch } from './data';
 
@@ -78,6 +79,7 @@ export function Workspaces({
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [newWsOpen, setNewWsOpen] = useState(false);
   const [newWsBranch, setNewWsBranch] = useState<string | undefined>(undefined);
+  const [revertTarget, setRevertTarget] = useState<OverviewWorkspaceRow | null>(null);
 
   const openNewWorkspace = useCallback((branch?: string) => {
     setNewWsBranch(branch);
@@ -559,7 +561,12 @@ export function Workspaces({
                         count={yoursReadyToShare.length}
                       >
                         {yoursReadyToShare.filter(matchWorkspace).map((w) => (
-                          <WorkspaceRowCompact key={w.id} w={w} stats={wsStats(w)} />
+                          <WorkspaceRowCompact
+                            key={w.id}
+                            w={w}
+                            stats={wsStats(w)}
+                            onBackToSelfReview={ghRepo ? (ws) => setRevertTarget(ws) : undefined}
+                          />
                         ))}
                       </Bucket>
                     )}
@@ -650,6 +657,24 @@ export function Workspaces({
             prefillBranch={newWsBranch}
             onClose={() => setNewWsOpen(false)}
             onCreated={() => loadOverview(ghRepo.owner, ghRepo.repo)}
+          />
+        )}
+        {revertTarget && ghRepo && (
+          <ConfirmDialog
+            title="Discard this workspace?"
+            body={
+              <>
+                The storyline and title are removed. The branch{' '}
+                <span className="mono">{revertTarget.head_ref}</span> is kept and returns to
+                Self-Review.
+              </>
+            }
+            confirmLabel="Discard"
+            onConfirm={async () => {
+              await workspaceDelete(revertTarget.id);
+              loadOverview(ghRepo.owner, ghRepo.repo);
+            }}
+            onClose={() => setRevertTarget(null)}
           />
         )}
       </div>
@@ -1141,10 +1166,12 @@ function WorkspaceRowCompact({
   w,
   stats,
   reviewing,
+  onBackToSelfReview,
 }: {
   w: OverviewWorkspaceRow;
   stats: { added: number | null; removed: number | null };
   reviewing?: boolean;
+  onBackToSelfReview?: (w: OverviewWorkspaceRow) => void;
 }) {
   const st = STATES[w.state];
   return (
@@ -1217,6 +1244,17 @@ function WorkspaceRowCompact({
       <div style={{ fontSize: 10.5, color: 'var(--gray-500)', flex: '0 0 auto' }}>
         {relativeTime(w.last_active_at)}
       </div>
+      {onBackToSelfReview && (
+        <button
+          type="button"
+          className="btn"
+          onClick={() => onBackToSelfReview(w)}
+          title="Discard this workspace and return the branch to Self-Review"
+          style={{ flex: '0 0 auto' }}
+        >
+          <Icon name="chevron-left" size={10} color="var(--gray-700)" /> Back to Self-Review
+        </button>
+      )}
     </div>
   );
 }
@@ -1488,6 +1526,122 @@ function NewWorkspaceModal({
             style={{ opacity: submitting ? 0.6 : 1 }}
           >
             {submitting ? 'Creating…' : 'Create'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  onConfirm,
+  onClose,
+}: {
+  title: string;
+  body: ReactNode;
+  confirmLabel: string;
+  onConfirm: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const confirm = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onConfirm();
+      onClose();
+    } catch (e) {
+      console.warn('confirm_action_failed', e);
+      const msg =
+        typeof e === 'object' && e !== null && 'message' in e
+          ? String((e as { message: unknown }).message)
+          : String(e);
+      setError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: POC overlay modal; a styled div with role="dialog" matches the existing NewWorkspaceModal/RepoMenu pattern rather than a native <dialog>.
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.28)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 50,
+      }}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        style={{
+          width: 380,
+          background: '#fff',
+          borderRadius: 'var(--r-lg)',
+          boxShadow: 'var(--sh-pop)',
+          padding: 18,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 15,
+            fontWeight: 700,
+            color: 'var(--gray-900)',
+            marginBottom: 8,
+          }}
+        >
+          {title}
+        </div>
+        <div
+          style={{
+            fontSize: 12.5,
+            color: 'var(--gray-700)',
+            lineHeight: 1.5,
+            marginBottom: 14,
+          }}
+        >
+          {body}
+        </div>
+        {error && (
+          <div
+            style={{
+              fontSize: 11.5,
+              color: 'var(--red-d)',
+              background: 'rgba(255,59,48,0.08)',
+              border: '1px solid rgba(255,59,48,0.20)',
+              borderRadius: 'var(--r-sm)',
+              padding: '6px 10px',
+              marginBottom: 8,
+            }}
+          >
+            {error}
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button type="button" className="btn" onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={confirm}
+            disabled={submitting}
+            style={{ opacity: submitting ? 0.6 : 1 }}
+          >
+            {submitting ? 'Working…' : confirmLabel}
           </button>
         </div>
       </div>
