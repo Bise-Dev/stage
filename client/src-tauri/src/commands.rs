@@ -234,6 +234,16 @@ pub async fn workspace_create(
 }
 
 #[tauri::command]
+pub async fn workspace_delete(
+    state: tauri::State<'_, AppState>,
+    workspace_id: String,
+) -> Result<(), AppError> {
+    let token = state.require_token()?;
+    state.api.workspace_delete(&token, &workspace_id).await?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn github_prs(
     state: tauri::State<'_, AppState>,
     role: String,

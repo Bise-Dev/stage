@@ -85,6 +85,7 @@ pub fn run() {
             commands::git_diff_stats,
             commands::repo_overview,
             commands::workspace_create,
+            commands::workspace_delete,
             commands::git_fetch,
             commands::open_in_finder,
             commands::open_url,
