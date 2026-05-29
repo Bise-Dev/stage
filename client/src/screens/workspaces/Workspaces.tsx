@@ -19,6 +19,7 @@ import {
   openUrl,
   repoOverview,
   repoSummary,
+  workspaceCreate,
 } from '../../tauri';
 import { relativeTime, relativeTimeFromEpoch } from './data';
 
@@ -52,7 +53,13 @@ function slugFromRemote(url: string | null): string | null {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
-export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: () => void }) {
+export function Workspaces({
+  user,
+  onChangeRepo,
+}: {
+  user: User;
+  onChangeRepo: () => void;
+}) {
   const me = user.github_login;
   const [repoSlug, setRepoSlug] = useState<string | null>(null);
   const [repoPath, setRepoPath] = useState<string | null>(null);
@@ -69,6 +76,14 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
   const [railWidth, setRailWidth] = useRailWidth();
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [newWsOpen, setNewWsOpen] = useState(false);
+  const [newWsBranch, setNewWsBranch] = useState<string | undefined>(undefined);
+
+  const openNewWorkspace = useCallback((branch?: string) => {
+    setNewWsBranch(branch);
+    setNewWsOpen(true);
+  }, []);
+
   const railRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<HTMLButtonElement>(null);
 
@@ -400,7 +415,14 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
               flexDirection: 'column',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                marginBottom: 12,
+              }}
+            >
               <div style={{ flex: 1, position: 'relative' }}>
                 <div
                   style={{
@@ -435,7 +457,11 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
               <button
                 type="button"
                 className="btn btn-primary btn-lg"
-                onClick={() => console.info('workspaces_new_stub', 'toolbar')}
+                onClick={() => openNewWorkspace()}
+                disabled={!ghRepo}
+                title={
+                  ghRepo ? undefined : 'Open a repo with a GitHub remote to create a workspace'
+                }
               >
                 <Icon name="plus" size={12} color="#fff" /> New workspace
               </button>
@@ -515,7 +541,12 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
                       count={selfReviewBranches.length}
                     >
                       {selfReviewBranches.filter(matchBranch).map((b) => (
-                        <BranchRowCompact key={b.name} b={b} stats={diffStats[b.name]} />
+                        <BranchRowCompact
+                          key={b.name}
+                          b={b}
+                          stats={diffStats[b.name]}
+                          onReadyToShare={ghRepo ? openNewWorkspace : undefined}
+                        />
                       ))}
                     </Bucket>
                   )}
@@ -611,6 +642,16 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
             </div>
           </div>
         </div>
+        {newWsOpen && ghRepo && (
+          <NewWorkspaceModal
+            branches={selfReviewBranches}
+            defaultBranch={defaultBranch}
+            ghRepo={ghRepo}
+            prefillBranch={newWsBranch}
+            onClose={() => setNewWsOpen(false)}
+            onCreated={() => loadOverview(ghRepo.owner, ghRepo.repo)}
+          />
+        )}
       </div>
     </div>
   );
@@ -687,7 +728,13 @@ function RepoMenu({
           >
             {label}
           </span>
-          <span style={{ display: 'flex', color: 'var(--gray-400)', flex: '0 0 auto' }}>
+          <span
+            style={{
+              display: 'flex',
+              color: 'var(--gray-400)',
+              flex: '0 0 auto',
+            }}
+          >
             <Icon name="chevron-right" size={11} />
           </span>
         </div>
@@ -821,7 +868,15 @@ function FilterRow({
       }}
     >
       {dot && (
-        <span style={{ width: 7, height: 7, borderRadius: 4, background: dot, flex: '0 0 7px' }} />
+        <span
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: 4,
+            background: dot,
+            flex: '0 0 7px',
+          }}
+        />
       )}
       {icon && <span style={{ color: 'var(--gray-500)', display: 'flex' }}>{icon}</span>}
       {!dot && !icon && <span style={{ width: 7, height: 7, flex: '0 0 7px' }} />}
@@ -838,7 +893,14 @@ function FilterRow({
       {sub && (
         <span style={{ fontSize: 10.5, color: 'var(--gray-400)', fontWeight: 500 }}>{sub}</span>
       )}
-      <span style={{ color: 'var(--gray-500)', fontSize: 11.5, fontWeight: 500, marginLeft: 4 }}>
+      <span
+        style={{
+          color: 'var(--gray-500)',
+          fontSize: 11.5,
+          fontWeight: 500,
+          marginLeft: 4,
+        }}
+      >
         {count}
       </span>
     </button>
@@ -964,7 +1026,13 @@ function Bucket({
   );
 }
 
-function DiffStat({ added, removed }: { added: number | null; removed: number | null }) {
+function DiffStat({
+  added,
+  removed,
+}: {
+  added: number | null;
+  removed: number | null;
+}) {
   if (added === null || removed === null) return null;
   return (
     <span>
@@ -988,7 +1056,15 @@ function rowShell(): React.CSSProperties {
   };
 }
 
-function BranchRowCompact({ b, stats }: { b: BranchInfo; stats?: DiffStats }) {
+function BranchRowCompact({
+  b,
+  stats,
+  onReadyToShare,
+}: {
+  b: BranchInfo;
+  stats?: DiffStats;
+  onReadyToShare?: (branch: string) => void;
+}) {
   return (
     <div style={rowShell()}>
       <Icon name="branch" size={12} color="var(--gray-500)" />
@@ -1024,7 +1100,13 @@ function BranchRowCompact({ b, stats }: { b: BranchInfo; stats?: DiffStats }) {
           }}
         >
           {stats && <DiffStat added={stats.added} removed={stats.removed} />}
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
             {b.lastCommit ? `${b.lastCommit} · ` : ''}
             {relativeTimeFromEpoch(b.updatedAt)}
           </span>
@@ -1037,6 +1119,11 @@ function BranchRowCompact({ b, stats }: { b: BranchInfo; stats?: DiffStats }) {
       >
         <Icon name="play" size={10} color="var(--gray-700)" /> Self-Review
       </button>
+      {onReadyToShare && (
+        <button type="button" className="btn btn-primary" onClick={() => onReadyToShare(b.name)}>
+          <Icon name="plus" size={10} color="#fff" /> Ready to share
+        </button>
+      )}
     </div>
   );
 }
@@ -1064,7 +1151,14 @@ function WorkspaceRowCompact({
     <div style={rowShell()}>
       {reviewing && <Avatar name={w.created_by.github_login} size="sm" />}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 1 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            marginBottom: 1,
+          }}
+        >
           <span
             style={{
               fontSize: 12.5,
@@ -1127,7 +1221,13 @@ function WorkspaceRowCompact({
   );
 }
 
-function OpenPrRowCompact({ p, reviewing }: { p: OverviewOpenPrRow; reviewing?: boolean }) {
+function OpenPrRowCompact({
+  p,
+  reviewing,
+}: {
+  p: OverviewOpenPrRow;
+  reviewing?: boolean;
+}) {
   return (
     <div style={rowShell()}>
       {reviewing ? (
@@ -1136,7 +1236,14 @@ function OpenPrRowCompact({ p, reviewing }: { p: OverviewOpenPrRow; reviewing?: 
         <Icon name="gh" size={13} color="var(--gray-600)" />
       )}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 1 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            marginBottom: 1,
+          }}
+        >
           <span
             style={{
               fontSize: 12.5,
@@ -1196,6 +1303,194 @@ function OpenPrRowCompact({ p, reviewing }: { p: OverviewOpenPrRow; reviewing?: 
       >
         <Icon name="play" size={10} color="var(--gray-700)" /> Review
       </button>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    // biome-ignore lint/a11y/noLabelWithoutControl: the control is passed in via {children} (select/input), which Biome can't statically associate.
+    <label style={{ display: 'block', marginBottom: 10 }}>
+      <div
+        style={{
+          fontSize: 11.5,
+          fontWeight: 600,
+          color: 'var(--gray-600)',
+          marginBottom: 4,
+        }}
+      >
+        {label}
+      </div>
+      {children}
+    </label>
+  );
+}
+
+function NewWorkspaceModal({
+  branches,
+  defaultBranch,
+  ghRepo,
+  prefillBranch,
+  onClose,
+  onCreated,
+}: {
+  branches: BranchInfo[];
+  defaultBranch: string | null;
+  ghRepo: { owner: string; repo: string };
+  prefillBranch?: string;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [headRef, setHeadRef] = useState(prefillBranch ?? branches[0]?.name ?? '');
+  const [baseRef, setBaseRef] = useState(defaultBranch ?? 'main');
+  const [title, setTitle] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!headRef) {
+      setError('Pick a branch to share.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await workspaceCreate({
+        repoOwner: ghRepo.owner,
+        repoName: ghRepo.repo,
+        headRef,
+        baseRef: baseRef.trim() || 'main',
+        title: title.trim(),
+      });
+      onCreated();
+      onClose();
+    } catch (e) {
+      // Fail loud (CLAUDE.md "Error handling"): surface the backend message
+      // verbatim in the modal; never close on a swallowed error.
+      console.warn('workspace_create_failed', e);
+      const msg =
+        typeof e === 'object' && e !== null && 'message' in e
+          ? String((e as { message: unknown }).message)
+          : String(e);
+      setError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: POC overlay modal; a styled div with role="dialog" matches the existing RepoMenu pattern rather than a native <dialog>.
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="New workspace"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.28)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 50,
+      }}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        style={{
+          width: 420,
+          background: '#fff',
+          borderRadius: 'var(--r-lg)',
+          boxShadow: 'var(--sh-pop)',
+          padding: 18,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 15,
+            fontWeight: 700,
+            color: 'var(--gray-900)',
+            marginBottom: 14,
+          }}
+        >
+          New workspace
+        </div>
+
+        <Field label="Branch">
+          <select
+            className="input"
+            value={headRef}
+            onChange={(e) => setHeadRef(e.target.value)}
+            style={{ width: '100%' }}
+          >
+            {branches.length === 0 && <option value="">No branches without a workspace</option>}
+            {branches.map((b) => (
+              <option key={b.name} value={b.name}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Base">
+          <input
+            className="input"
+            value={baseRef}
+            onChange={(e) => setBaseRef(e.target.value)}
+            placeholder="main"
+            style={{ width: '100%' }}
+          />
+        </Field>
+
+        <Field label="Title (optional)">
+          <input
+            className="input"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder={headRef || 'Workspace title'}
+            style={{ width: '100%' }}
+          />
+        </Field>
+
+        {error && (
+          <div
+            style={{
+              fontSize: 11.5,
+              color: 'var(--red-d)',
+              background: 'rgba(255,59,48,0.08)',
+              border: '1px solid rgba(255,59,48,0.20)',
+              borderRadius: 'var(--r-sm)',
+              padding: '6px 10px',
+              marginBottom: 8,
+            }}
+          >
+            Couldn't create workspace: {error}
+          </div>
+        )}
+
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: 8,
+            marginTop: 14,
+          }}
+        >
+          <button type="button" className="btn" onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={submit}
+            disabled={submitting || !headRef}
+            style={{ opacity: submitting ? 0.6 : 1 }}
+          >
+            {submitting ? 'Creating…' : 'Create'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
