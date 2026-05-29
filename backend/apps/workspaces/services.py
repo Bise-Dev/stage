@@ -258,6 +258,19 @@ def pull_request_reopen(*, workspace: Workspace, creator: User, gateway) -> dict
 
 
 @transaction.atomic
+def workspace_delete(*, workspace: Workspace, user: User) -> None:
+    if user.pk != workspace.created_by_id:
+        raise ApplicationError("creator_only", status=403)
+    if workspace.pr_number is not None:
+        raise ApplicationError(
+            "Can't discard a published workspace; close its PR on GitHub instead",
+            extra={"workspace_id": str(workspace.id), "pr_number": workspace.pr_number},
+            status=409,
+        )
+    workspace.delete()
+
+
+@transaction.atomic
 def workspace_update_local_phase(
     *,
     workspace: Workspace,

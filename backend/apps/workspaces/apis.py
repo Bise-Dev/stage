@@ -39,6 +39,7 @@ from apps.workspaces.services import (
     pull_request_reopen,
     storyline_replace,
     workspace_create,
+    workspace_delete,
     workspace_update_local_phase,
 )
 
@@ -137,6 +138,16 @@ class WorkspaceDetailApi(APIView):
             workspace=ws, user=cast(User, request.user), **serializer.validated_data
         )
         return Response(WorkspaceOutputSerializer(updated).data)
+
+    def delete(self, request: Request, workspace_id: uuid.UUID) -> Response:
+        ws = self._get_workspace(workspace_id)
+        # Preserve pre-publish privacy: a non-creator must not learn the
+        # workspace exists (same 404 rule as GET).
+        if ws.pr_number is None and request.user.pk != ws.created_by_id:
+            raise ApplicationError("Not found", status=404)
+        workspace_delete(workspace=ws, user=cast(User, request.user))
+        cache.delete(_overview_cache_key(request.user.pk, ws.repo_owner, ws.repo_name))
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class StorylineDetailApi(APIView):

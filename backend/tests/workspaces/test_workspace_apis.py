@@ -1,3 +1,4 @@
+import uuid
 from typing import cast
 from unittest.mock import MagicMock, patch
 
@@ -9,7 +10,7 @@ from apps.identity.services import session_issue
 from apps.users.factories import UserFactory
 from apps.users.models import User
 from apps.workspaces.factories import WorkspaceFactory
-from apps.workspaces.models import Workspace
+from apps.workspaces.models import Storyline, Workspace
 
 
 @pytest.fixture
@@ -174,3 +175,68 @@ def test_workspace_create_invalidates_overview_cache(authed_client) -> None:
     assert after.status_code == 200, after.content
     rows = after.json()
     assert any(r["kind"] == "workspace" and r["head_ref"] == "feat/x" for r in rows), rows
+
+
+@pytest.mark.django_db
+def test_workspace_delete_pre_publish_204(authed_client) -> None:
+    client, user = authed_client
+    ws = cast(Workspace, WorkspaceFactory(created_by=user, pr_number=None))
+    Storyline.objects.create(workspace=ws, etag="e", updated_by=user)
+    resp = client.delete(f"/api/v1/workspaces/{ws.id}/")
+    assert resp.status_code == 204, resp.content
+    assert not Workspace.objects.filter(pk=ws.id).exists()
+    assert not Storyline.objects.filter(workspace_id=ws.id).exists()
+
+
+@pytest.mark.django_db
+def test_workspace_delete_invalidates_overview_cache(authed_client) -> None:
+    client, user = authed_client
+    ws = cast(Workspace, WorkspaceFactory(created_by=user, pr_number=None))
+    cache.clear()
+    with patch("apps.workspaces.apis.make_user_gateway", return_value=_gw_empty()):
+        primed = client.get(f"/api/v1/repos/{ws.repo_owner}/{ws.repo_name}/overview/")
+        assert primed.status_code == 200, primed.content
+        assert any(r["kind"] == "workspace" and r["id"] == str(ws.id) for r in primed.json())
+
+        deleted = client.delete(f"/api/v1/workspaces/{ws.id}/")
+        assert deleted.status_code == 204, deleted.content
+
+        after = client.get(f"/api/v1/repos/{ws.repo_owner}/{ws.repo_name}/overview/")
+    assert after.status_code == 200, after.content
+    assert all(r.get("id") != str(ws.id) for r in after.json())
+
+
+@pytest.mark.django_db
+def test_workspace_delete_published_409(authed_client) -> None:
+    client, user = authed_client
+    ws = cast(Workspace, WorkspaceFactory(created_by=user, pr_number=42))
+    resp = client.delete(f"/api/v1/workspaces/{ws.id}/")
+    assert resp.status_code == 409, resp.content
+    assert Workspace.objects.filter(pk=ws.id).exists()
+
+
+@pytest.mark.django_db
+def test_workspace_delete_non_creator_pre_publish_404(authed_client) -> None:
+    client_b, _user_b = authed_client
+    user_a = cast(User, UserFactory())
+    ws_a = cast(Workspace, WorkspaceFactory(created_by=user_a, pr_number=None))
+    resp = client_b.delete(f"/api/v1/workspaces/{ws_a.id}/")
+    assert resp.status_code == 404, resp.content
+    assert Workspace.objects.filter(pk=ws_a.id).exists()
+
+
+@pytest.mark.django_db
+def test_workspace_delete_non_creator_published_403(authed_client) -> None:
+    client_b, _user_b = authed_client
+    user_a = cast(User, UserFactory())
+    ws_a = cast(Workspace, WorkspaceFactory(created_by=user_a, pr_number=11))
+    resp = client_b.delete(f"/api/v1/workspaces/{ws_a.id}/")
+    assert resp.status_code == 403, resp.content
+    assert Workspace.objects.filter(pk=ws_a.id).exists()
+
+
+@pytest.mark.django_db
+def test_workspace_delete_unknown_404(authed_client) -> None:
+    client, _ = authed_client
+    resp = client.delete(f"/api/v1/workspaces/{uuid.uuid4()}/")
+    assert resp.status_code == 404, resp.content
