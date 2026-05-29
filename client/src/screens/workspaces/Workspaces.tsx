@@ -672,7 +672,7 @@ export function Workspaces({
             confirmLabel="Discard"
             onConfirm={async () => {
               await workspaceDelete(revertTarget.id);
-              loadOverview(ghRepo.owner, ghRepo.repo);
+              await loadOverview(ghRepo.owner, ghRepo.repo);
             }}
             onClose={() => setRevertTarget(null)}
           />
