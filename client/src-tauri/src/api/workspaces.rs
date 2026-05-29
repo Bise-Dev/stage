@@ -35,6 +35,21 @@ impl Client {
         }
         resp.json().await.map_err(|e| Self::json_err(status, e))
     }
+
+    /// Delete a pre-publish Stage workspace. DELETE /api/v1/workspaces/{id}/.
+    /// Returns () — the backend replies 204 with no body, so nothing is parsed.
+    pub async fn workspace_delete(&self, token: &str, workspace_id: &str) -> Result<(), Error> {
+        let url = self
+            .base_url
+            .join(&format!("api/v1/workspaces/{workspace_id}/"))
+            .unwrap();
+        let resp = self.http.delete(url).bearer_auth(token).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -95,6 +110,54 @@ mod tests {
             } => {
                 assert_eq!(status.as_u16(), 409);
                 assert!(message.contains("already exists"), "message was: {message}");
+            }
+            other => panic!("expected Unexpected 409, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_delete_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path(
+                "/api/v1/workspaces/11111111-1111-1111-1111-111111111111/",
+            ))
+            .and(header_exists("authorization"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        client
+            .workspace_delete("stg_abc", "11111111-1111-1111-1111-111111111111")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn workspace_delete_published_409() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path(
+                "/api/v1/workspaces/22222222-2222-2222-2222-222222222222/",
+            ))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "message": "Can't discard a published workspace; close its PR on GitHub instead",
+                "extra": { "pr_number": 42 }
+            })))
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let err = client
+            .workspace_delete("stg_abc", "22222222-2222-2222-2222-222222222222")
+            .await
+            .unwrap_err();
+        match err {
+            Error::Unexpected {
+                status, message, ..
+            } => {
+                assert_eq!(status.as_u16(), 409);
+                assert!(message.contains("published"), "message was: {message}");
             }
             other => panic!("expected Unexpected 409, got {other:?}"),
         }
