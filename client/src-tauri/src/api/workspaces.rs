@@ -94,8 +94,8 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/api/v1/workspaces/"))
             .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
-                "message": "Workspace already exists for that repo + head_ref",
-                "extra": { "head_ref": "feat/x" }
+                "message": "A workspace already exists for that branch in this repo.",
+                "extra": { "code": "workspace_exists", "head_ref": "feat/x" }
             })))
             .mount(&server)
             .await;

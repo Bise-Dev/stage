@@ -44,8 +44,9 @@ def storyline_replace(
         pr = gateway.get_pr(workspace.repo_owner, workspace.repo_name, workspace.pr_number)
         if pr.get("state") == "closed":
             raise ApplicationError(
-                "workspace_frozen",
-                extra={"workspace_id": str(workspace.id)},
+                "This workspace is frozen — its GitHub PR is closed or merged. "
+                "Reopen the PR on GitHub to make changes again.",
+                extra={"code": "workspace_frozen", "workspace_id": str(workspace.id)},
                 status=409,
             )
 
@@ -101,8 +102,13 @@ def workspace_create(
         )
     except (IntegrityError, DjangoValidationError) as exc:
         raise ApplicationError(
-            "Workspace already exists for that repo + head_ref",
-            extra={"repo_owner": repo_owner, "repo_name": repo_name, "head_ref": head_ref},
+            "A workspace already exists for that branch in this repo.",
+            extra={
+                "code": "workspace_exists",
+                "repo_owner": repo_owner,
+                "repo_name": repo_name,
+                "head_ref": head_ref,
+            },
             status=409,
         ) from exc
     storyline_create(workspace=ws, author=creator)
@@ -113,7 +119,12 @@ def _assert_not_frozen(workspace: Workspace, gateway) -> None:
     if workspace.pr_number is not None:
         pr = gateway.get_pr(workspace.repo_owner, workspace.repo_name, workspace.pr_number)
         if pr.get("state") == "closed":
-            raise ApplicationError("workspace_frozen", status=409)
+            raise ApplicationError(
+                "This workspace is frozen — its GitHub PR is closed or merged. "
+                "Reopen the PR on GitHub to make changes again.",
+                extra={"code": "workspace_frozen", "workspace_id": str(workspace.id)},
+                status=409,
+            )
 
 
 @transaction.atomic
@@ -260,11 +271,20 @@ def pull_request_reopen(*, workspace: Workspace, creator: User, gateway) -> dict
 @transaction.atomic
 def workspace_delete(*, workspace: Workspace, user: User) -> None:
     if user.pk != workspace.created_by_id:
-        raise ApplicationError("creator_only", status=403)
+        raise ApplicationError(
+            "Only the workspace's creator can discard it.",
+            extra={"code": "creator_only", "workspace_id": str(workspace.id)},
+            status=403,
+        )
     if workspace.pr_number is not None:
         raise ApplicationError(
-            "Can't discard a published workspace; close its PR on GitHub instead",
-            extra={"workspace_id": str(workspace.id), "pr_number": workspace.pr_number},
+            f"This workspace is published (PR #{workspace.pr_number}) — Stage keeps it "
+            "for the record. Discard only applies to pre-publish drafts.",
+            extra={
+                "code": "workspace_published",
+                "workspace_id": str(workspace.id),
+                "pr_number": workspace.pr_number,
+            },
             status=409,
         )
     workspace.delete()

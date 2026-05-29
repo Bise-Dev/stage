@@ -248,9 +248,13 @@ export function Workspaces({
   const openPrRows = rows.filter((r): r is OverviewOpenPrRow => r.kind === 'open_pr');
   // Self-Review = "branch, no workspace" (see docs/NOT-IMPLEMENTED.md). Drop
   // any branch that already has a Workspace — otherwise it would render in
-  // both Self-Review and Ready-to-share/In-review.
+  // both Self-Review and Ready-to-share/In-review. Also drop the default branch:
+  // you don't self-review it against itself, and sharing it would create a
+  // degenerate head==base workspace that Publish can't open a PR for.
   const workspaceHeadRefs = new Set(workspaceRows.map((w) => w.head_ref));
-  const selfReviewBranches = branches.filter((b) => !workspaceHeadRefs.has(b.name));
+  const selfReviewBranches = branches.filter(
+    (b) => !workspaceHeadRefs.has(b.name) && b.name !== defaultBranch,
+  );
   const yoursReadyToShare = workspaceRows.filter(
     (w) => w.pr_number === null && w.created_by.github_login === me,
   );
@@ -1377,7 +1381,7 @@ function NewWorkspaceModal({
   ghRepo: { owner: string; repo: string };
   prefillBranch?: string;
   onClose: () => void;
-  onCreated: () => void;
+  onCreated: () => void | Promise<void>;
 }) {
   const [headRef, setHeadRef] = useState(prefillBranch ?? branches[0]?.name ?? '');
   const [baseRef, setBaseRef] = useState(defaultBranch ?? 'main');
@@ -1400,7 +1404,9 @@ function NewWorkspaceModal({
         baseRef: baseRef.trim() || 'main',
         title: title.trim(),
       });
-      onCreated();
+      // Await the refresh so the modal closes only once the new row is in the
+      // list (symmetric with discard); no floating promise.
+      await onCreated();
       onClose();
     } catch (e) {
       // Fail loud (CLAUDE.md "Error handling"): surface the backend message

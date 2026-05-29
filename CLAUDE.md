@@ -73,8 +73,15 @@ Raise `apps.core.exceptions.ApplicationError(message, extra={}, status=400)` fro
 from apps.core.exceptions import ApplicationError
 
 if item.status == ItemStatus.ARCHIVED:
-    raise ApplicationError("Item is already archived", extra={"item_id": str(item.id)})
+    raise ApplicationError(
+        "This item is already archived.",
+        extra={"code": "item_archived", "item_id": str(item.id)},
+    )
 ```
+
+**`message` is human, `extra["code"]` is the machine handle.** `message` is a complete, user-facing sentence the client renders verbatim in its error banner (see the [Error handling](#error-handling) fail-loud rule). The stable programmatic identifier goes in `extra["code"]` (snake_case) — that's what client logic branches on, never the message text. Do **not** put a bare code token in `message` (e.g. `ApplicationError("workspace_frozen", ...)`): the user would see `workspace_frozen` in the banner.
+
+Some pre-existing call sites still use the old code-as-message shape; migrate them to this convention whenever you touch them.
 
 ### Settings
 

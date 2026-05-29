@@ -50,7 +50,7 @@ def test_storyline_replace_rejects_frozen(author_ws) -> None:
             workspace=ws, user=user, files=[], if_match=ws.storyline.etag, gateway=gateway
         )
     assert exc.value.status == 409
-    assert exc.value.message == "workspace_frozen"
+    assert exc.value.extra["code"] == "workspace_frozen"
 
 
 def test_storyline_replace_swaps_files_and_returns_new_etag(author_ws) -> None:

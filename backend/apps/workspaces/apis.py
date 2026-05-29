@@ -50,6 +50,14 @@ def _overview_cache_key(user_pk: int | None, owner: str, repo: str) -> str:
     return f"overview:{user_pk}:{owner}/{repo}"
 
 
+def _assert_pre_publish_visible(ws: Workspace, user_pk: int | None) -> None:
+    """A pre-publish workspace is creator-private: a non-creator must not learn
+    it exists (404, not 403). Shared by the GET / storyline / delete handlers so
+    the privacy predicate can't drift across the three sites."""
+    if ws.pr_number is None and user_pk != ws.created_by_id:
+        raise ApplicationError("Not found", status=404)
+
+
 class WorkspaceListApi(APIView):
     def get(self, request: Request) -> Response:
         qs = workspace_list(user=cast(User, request.user))
@@ -126,8 +134,7 @@ class WorkspaceDetailApi(APIView):
 
     def get(self, request: Request, workspace_id: uuid.UUID) -> Response:
         ws = self._get_workspace(workspace_id)
-        if ws.pr_number is None and request.user.pk != ws.created_by_id:
-            raise ApplicationError("Not found", status=404)
+        _assert_pre_publish_visible(ws, request.user.pk)
         return Response(WorkspaceOutputSerializer(ws).data)
 
     def patch(self, request: Request, workspace_id: uuid.UUID) -> Response:
@@ -141,10 +148,7 @@ class WorkspaceDetailApi(APIView):
 
     def delete(self, request: Request, workspace_id: uuid.UUID) -> Response:
         ws = self._get_workspace(workspace_id)
-        # Preserve pre-publish privacy: a non-creator must not learn the
-        # workspace exists (same 404 rule as GET).
-        if ws.pr_number is None and request.user.pk != ws.created_by_id:
-            raise ApplicationError("Not found", status=404)
+        _assert_pre_publish_visible(ws, request.user.pk)
         workspace_delete(workspace=ws, user=cast(User, request.user))
         cache.delete(_overview_cache_key(request.user.pk, ws.repo_owner, ws.repo_name))
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -153,8 +157,7 @@ class WorkspaceDetailApi(APIView):
 class StorylineDetailApi(APIView):
     def get(self, request: Request, workspace_id: uuid.UUID) -> Response:
         ws = workspace_get(workspace_id=workspace_id)
-        if ws.pr_number is None and request.user.pk != ws.created_by_id:
-            raise ApplicationError("Not found", status=404)
+        _assert_pre_publish_visible(ws, request.user.pk)
         with make_user_gateway(cast(User, request.user)) as g:
             data, etag = storyline_read(workspace=ws, gateway=g)
         response = Response(data)

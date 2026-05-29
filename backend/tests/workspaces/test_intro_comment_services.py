@@ -89,7 +89,7 @@ def test_intro_comment_create_frozen_workspace(setup) -> None:
     with pytest.raises(ApplicationError) as exc:
         intro_comment_create(storyline_file=sf, user=creator, body="hi", gateway=gw)
     assert exc.value.status == 409
-    assert "workspace_frozen" in str(exc.value)
+    assert exc.value.extra["code"] == "workspace_frozen"
 
 
 @pytest.mark.django_db
