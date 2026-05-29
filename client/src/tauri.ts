@@ -135,3 +135,6 @@ export type WorkspaceCreateInput = {
 // re-fetches the overview instead (see docs/adr/0009 + the create-workspace spec).
 export const workspaceCreate = (input: WorkspaceCreateInput) =>
   invoke<unknown>('workspace_create', input);
+
+export const workspaceDelete = (workspaceId: string) =>
+  invoke<void>('workspace_delete', { workspaceId });
