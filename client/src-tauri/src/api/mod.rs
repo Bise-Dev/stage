@@ -7,6 +7,7 @@ mod error;
 mod github;
 mod overview;
 mod types;
+mod workspaces;
 
 pub use client::Client;
 pub use error::Error;
