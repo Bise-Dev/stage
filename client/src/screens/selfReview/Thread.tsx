@@ -108,12 +108,12 @@ export function Thread({
             aria-label="reply"
             style={{
               fontSize: 12,
-              fontWeight: 700,
               color: 'var(--gray-400)',
               marginRight: 6,
+              lineHeight: 1,
             }}
           >
-            *
+            •
           </span>
           {r.body}
         </div>
