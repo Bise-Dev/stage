@@ -8,12 +8,15 @@ import { useEffect, useRef, useState } from 'react';
 export function Composer({
   placeholder,
   initialBody,
+  label,
   onSave,
   onCancel,
   autoFocus,
 }: {
   placeholder?: string;
   initialBody?: string;
+  /** Small header above the textarea — e.g. `L8` or `L8–L19`. Optional. */
+  label?: string;
   onSave: (body: string) => void;
   onCancel: () => void;
   autoFocus?: boolean;
@@ -46,6 +49,22 @@ export function Composer({
         margin: '6px 0',
       }}
     >
+      {label && (
+        <div
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10.5,
+            fontWeight: 600,
+            color: 'var(--blue-press)',
+            letterSpacing: 0.04,
+            marginBottom: 4,
+            paddingBottom: 4,
+            borderBottom: '1px solid var(--hairline-2)',
+          }}
+        >
+          {label}
+        </div>
+      )}
       <textarea
         ref={taRef}
         value={body}

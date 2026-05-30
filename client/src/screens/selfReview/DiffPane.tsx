@@ -371,12 +371,12 @@ function FileBlock({
               ? pending.start
               : Math.min(lineNumber, fromLineNumber ?? lineNumber);
             const end = useRange ? pending.end : Math.max(lineNumber, fromLineNumber ?? lineNumber);
+            const rangeLabel = start === end ? `L${start}` : `L${start}–L${end}`;
             return (
               <div style={{ padding: '4px 12px' }}>
                 <Composer
-                  placeholder={
-                    start === end ? `Comment on L${start}` : `Comment on L${start}–${end}`
-                  }
+                  label={rangeLabel}
+                  placeholder="Leave a comment…"
                   onSave={(b) => {
                     onSaveLineComment(
                       {
