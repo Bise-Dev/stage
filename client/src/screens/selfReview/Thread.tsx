@@ -104,7 +104,17 @@ export function Thread({
             whiteSpace: 'pre-wrap',
           }}
         >
-          <span style={{ fontSize: 10.5, color: 'var(--gray-500)', marginRight: 6 }}>reply</span>
+          <span
+            aria-label="reply"
+            style={{
+              fontSize: 12,
+              fontWeight: 700,
+              color: 'var(--gray-400)',
+              marginRight: 6,
+            }}
+          >
+            *
+          </span>
           {r.body}
         </div>
       ))}
