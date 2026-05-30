@@ -1,6 +1,6 @@
 import { DiffModeEnum, DiffViewWithMultiSelect, SplitSide } from '@git-diff-view/react';
 import '@git-diff-view/react/styles/diff-view.css';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Icon } from '../../components/Icon';
 import type { SelfReviewFileChange } from '../../tauri';
 import { Composer } from './Composer';
@@ -31,7 +31,6 @@ export function DiffPane({
   onToggleViewed,
   comments,
   composer,
-  onStartLineComment,
   onStartFileComment,
   onStartReply,
   onSaveComposer,
@@ -47,7 +46,6 @@ export function DiffPane({
   onToggleViewed(): void;
   comments: Comment[];
   composer: ComposerTarget | null;
-  onStartLineComment(anchor: LineAnchor): void;
   onStartFileComment(filePath: string): void;
   onStartReply(parentId: string): void;
   onSaveComposer(body: string): void;
@@ -91,7 +89,6 @@ export function DiffPane({
           onToggleViewed={onToggleViewed}
           comments={comments}
           composer={composer}
-          onStartLineComment={onStartLineComment}
           onStartFileComment={onStartFileComment}
           onStartReply={onStartReply}
           onSaveComposer={onSaveComposer}
@@ -111,7 +108,6 @@ function FileBlock({
   onToggleViewed,
   comments,
   composer,
-  onStartLineComment,
   onStartFileComment,
   onStartReply,
   onSaveComposer,
@@ -125,7 +121,6 @@ function FileBlock({
   onToggleViewed(): void;
   comments: Comment[];
   composer: ComposerTarget | null;
-  onStartLineComment(anchor: LineAnchor): void;
   onStartFileComment(filePath: string): void;
   onStartReply(parentId: string): void;
   onSaveComposer(body: string): void;
@@ -171,6 +166,58 @@ function FileBlock({
 
   // The library passes us its SplitSide enum; map to our 'left'|'right'.
   const sideToOurs = (s: SplitSide): Side => (s === SplitSide.old ? 'left' : 'right');
+
+  // The library's widget store, captured via `onCreateUseWidgetHook` so we
+  // can programmatically open the widget slot from `onMultiSelectComplete`
+  // (the user expects drag-release → composer; out of the box the library
+  // only opens via clicking "+" after the drag, which costs a second click).
+  // Type loosely — `createDiffWidgetStore`'s return type isn't exported.
+  type WidgetHook = {
+    getReadonlyState: () => { setWidget: (arg: { side?: SplitSide; lineNumber?: number }) => void };
+  };
+  const widgetHookRef = useRef<WidgetHook | null>(null);
+
+  /**
+   * Bypass the library's `onMultiSelectComplete` path. The wrapper filters
+   * results when `result.lines.length === 0`, and the manager produces
+   * empty `lines` for our DiffFile because we don't pass `newFile.content`
+   * (the line-number→line-data lookup needs it). Instead we listen for
+   * mouseup ourselves, pull the *range* directly from the manager via the
+   * imperative ref — which is populated correctly — and open the widget
+   * slot at the end line.
+   *
+   * `pendingRangeRef` carries the range hint into `renderWidgetLine`
+   * because the library's `multiResultRef` also stays empty (same filter).
+   */
+  type DvRef = {
+    getSelectionResult: () => {
+      range: { side: 'old' | 'new'; startLineNumber: number; endLineNumber: number };
+      lines: unknown[];
+    } | null;
+    clearSelection?: () => void;
+  };
+  const dvRef = useRef<DvRef | null>(null);
+  const pendingRangeRef = useRef<{
+    side: SplitSide;
+    start: number;
+    end: number;
+    filePath: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const onUp = () => {
+      const result = dvRef.current?.getSelectionResult?.();
+      if (!result?.range) return;
+      const { side: rawSide, startLineNumber, endLineNumber } = result.range;
+      const side = rawSide === 'old' ? SplitSide.old : SplitSide.new;
+      const start = Math.min(startLineNumber, endLineNumber);
+      const end = Math.max(startLineNumber, endLineNumber);
+      pendingRangeRef.current = { side, start, end, filePath: file.path };
+      widgetHookRef.current?.getReadonlyState().setWidget({ side, lineNumber: end });
+    };
+    document.addEventListener('mouseup', onUp);
+    return () => document.removeEventListener('mouseup', onUp);
+  }, [file.path]);
 
   return (
     <div
@@ -286,6 +333,8 @@ function FileBlock({
           need to add one ourselves. */}
       {file.patch && !file.isBinary && !file.isTruncated ? (
         <DiffViewWithMultiSelect
+          // biome-ignore lint/suspicious/noExplicitAny: ref shape isn't exported as a usable name
+          ref={dvRef as unknown as React.Ref<any>}
           data={diffData}
           diffViewMode={viewMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
           diffViewHighlight
@@ -294,39 +343,34 @@ function FileBlock({
           // table-wrapper` width — the measurement lags the first paint, so
           // the widget row appears empty until the next resize event.
           diffViewWrap
-          // The library's widget slot is opened *only* by clicking the "+"
-          // icon — that's the path that calls its internal `setWidget(...)`.
-          // Drag-selection captures a range, but the user still clicks the
-          // "+" on the end line to open the composer; the library then
-          // enriches `onAddWidgetClick` with `fromLineNumber` from the cached
-          // selection. Disabling the "+" leaves no entry point at all, so we
-          // keep it on (revising Q10-H — the library's contract requires it).
-          diffViewAddWidget
+          // No "+" gutter icon: it sits at `left-[100%] translate-x-[-50%]`,
+          // straddling the line-number / code boundary — exactly where the
+          // user wants to start a drag. Its onMouseDown calls
+          // e.stopPropagation(), so the multi-select manager underneath
+          // never sees the pointerdown and the drag never starts. Instead
+          // every entry goes through the multi-select pipeline:
+          // `onMultiSelectComplete` fires on mouseup for both a single-line
+          // click (start === end) and a real drag, and we programmatically
+          // open the widget via the captured store hook below. GitHub's
+          // model, end-to-end uniform.
+          diffViewAddWidget={false}
           extendData={extendData}
           enableMultiSelect
-          onAddWidgetClick={({ lineNumber, fromLineNumber, side }) => {
-            const ourSide = sideToOurs(side);
-            const start = Math.min(lineNumber, fromLineNumber ?? lineNumber);
-            const end = Math.max(lineNumber, fromLineNumber ?? lineNumber);
-            onStartLineComment({
-              kind: 'line',
-              filePath: file.path,
-              side: ourSide,
-              lineStart: start,
-              lineEnd: end,
-            });
+          onCreateUseWidgetHook={(hook) => {
+            widgetHookRef.current = hook as unknown as WidgetHook;
           }}
           renderWidgetLine={({ lineNumber, fromLineNumber, side, onClose }) => {
-            // The library is the source of truth for "is the widget slot open
-            // at this line". We don't gate on React state here — the library
-            // updates its widget store synchronously (reactivity-store) and
-            // calls us *before* our setComposer flush lands, so any React
-            // guard would return null on the first call and never re-render
-            // (the library only re-renders this slot when widgetLineNumber
-            // changes, not when our state catches up).
+            // Prefer the range from our document-mouseup listener
+            // (`pendingRangeRef`) since the library's internal range cache
+            // gets cleared by its empty-lines filter. Fall back to the
+            // library's lineNumber/fromLineNumber for any other path.
             const ourSide = sideToOurs(side);
-            const start = Math.min(lineNumber, fromLineNumber ?? lineNumber);
-            const end = Math.max(lineNumber, fromLineNumber ?? lineNumber);
+            const pending = pendingRangeRef.current;
+            const useRange = pending && pending.side === side && pending.filePath === file.path;
+            const start = useRange
+              ? pending.start
+              : Math.min(lineNumber, fromLineNumber ?? lineNumber);
+            const end = useRange ? pending.end : Math.max(lineNumber, fromLineNumber ?? lineNumber);
             return (
               <div style={{ padding: '4px 12px' }}>
                 <Composer
@@ -344,10 +388,12 @@ function FileBlock({
                       },
                       b,
                     );
+                    pendingRangeRef.current = null;
                     onClose();
                   }}
                   onCancel={() => {
                     onCancelComposer();
+                    pendingRangeRef.current = null;
                     onClose();
                   }}
                   autoFocus

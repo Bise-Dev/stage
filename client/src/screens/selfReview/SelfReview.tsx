@@ -51,7 +51,6 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
   const {
     comments,
     composer,
-    startLineComment,
     startFileComment,
     startReply,
     saveCurrent,
@@ -254,7 +253,6 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
               onToggleViewed={() => selectedFile && toggleViewed(selectedFile.path)}
               comments={selectedFile ? commentsForSelected : []}
               composer={composer}
-              onStartLineComment={startLineComment}
               onStartFileComment={startFileComment}
               onStartReply={startReply}
               onSaveComposer={saveCurrent}
