@@ -268,104 +268,112 @@ function FileBlock({
       )}
 
       {/* The diff itself — only when there's a patch to render */}
+      {/* `.diff-tailwindcss-wrapper` scopes every tailwind utility in the
+          library's bundled CSS (~230 selectors). Without it the `+` button
+          is permanently visible (invisible utility never activates), the
+          widget row that opens on click has no positioning so it renders
+          empty, and the multi-select highlight has no styling. The library
+          expects the host to provide this wrapper. */}
       {file.patch && !file.isBinary && !file.isTruncated ? (
-        <DiffViewWithMultiSelect
-          data={{
-            oldFile: { fileName: file.oldPath ?? file.path },
-            newFile: { fileName: file.path },
-            hunks: [file.patch],
-          }}
-          diffViewMode={viewMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
-          diffViewHighlight
-          // Bypass the library's width-based widget gating. Without this it
-          // gates "render the widget content" on a measured `.unified-diff-
-          // table-wrapper` width — the measurement lags the first paint, so
-          // the widget row appears empty until the next resize event.
-          diffViewWrap
-          // The library's widget slot is opened *only* by clicking the "+"
-          // icon — that's the path that calls its internal `setWidget(...)`.
-          // Drag-selection captures a range, but the user still clicks the
-          // "+" on the end line to open the composer; the library then
-          // enriches `onAddWidgetClick` with `fromLineNumber` from the cached
-          // selection. Disabling the "+" leaves no entry point at all, so we
-          // keep it on (revising Q10-H — the library's contract requires it).
-          diffViewAddWidget
-          extendData={extendData}
-          enableMultiSelect
-          onAddWidgetClick={({ lineNumber, fromLineNumber, side }) => {
-            const ourSide = sideToOurs(side);
-            const start = Math.min(lineNumber, fromLineNumber ?? lineNumber);
-            const end = Math.max(lineNumber, fromLineNumber ?? lineNumber);
-            onStartLineComment({
-              kind: 'line',
-              filePath: file.path,
-              side: ourSide,
-              lineStart: start,
-              lineEnd: end,
-            });
-          }}
-          renderWidgetLine={({ lineNumber, fromLineNumber, side, onClose }) => {
-            // The library is the source of truth for "is the widget slot open
-            // at this line". We don't gate on React state here — the library
-            // updates its widget store synchronously (reactivity-store) and
-            // calls us *before* our setComposer flush lands, so any React
-            // guard would return null on the first call and never re-render
-            // (the library only re-renders this slot when widgetLineNumber
-            // changes, not when our state catches up).
-            const ourSide = sideToOurs(side);
-            const start = Math.min(lineNumber, fromLineNumber ?? lineNumber);
-            const end = Math.max(lineNumber, fromLineNumber ?? lineNumber);
-            return (
-              <div style={{ padding: '4px 12px' }}>
-                <Composer
-                  placeholder={
-                    start === end ? `Comment on L${start}` : `Comment on L${start}–${end}`
-                  }
-                  onSave={(b) => {
-                    onSaveLineComment(
-                      {
-                        kind: 'line',
-                        filePath: file.path,
-                        side: ourSide,
-                        lineStart: start,
-                        lineEnd: end,
-                      },
-                      b,
-                    );
-                    onClose();
-                  }}
-                  onCancel={() => {
-                    onCancelComposer();
-                    onClose();
-                  }}
-                  autoFocus
-                />
-              </div>
-            );
-          }}
-          renderExtendLine={({ data }) => {
-            const ids: string[] = data?.commentIds ?? [];
-            const threads = ids
-              .map((id) => lineComments.find((c) => c.id === id))
-              .filter((c): c is Comment => Boolean(c));
-            if (threads.length === 0) return null;
-            return (
-              <div style={{ padding: '4px 12px' }}>
-                {threads.map((c) => (
-                  <Thread
-                    key={c.id}
-                    comment={c}
-                    composer={composer}
-                    onStartReply={onStartReply}
-                    onSaveComposer={onSaveComposer}
-                    onCancelComposer={onCancelComposer}
-                    onDelete={onDeleteComment}
+        <div className="diff-tailwindcss-wrapper">
+          <DiffViewWithMultiSelect
+            data={{
+              oldFile: { fileName: file.oldPath ?? file.path },
+              newFile: { fileName: file.path },
+              hunks: [file.patch],
+            }}
+            diffViewMode={viewMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
+            diffViewHighlight
+            // Bypass the library's width-based widget gating. Without this it
+            // gates "render the widget content" on a measured `.unified-diff-
+            // table-wrapper` width — the measurement lags the first paint, so
+            // the widget row appears empty until the next resize event.
+            diffViewWrap
+            // The library's widget slot is opened *only* by clicking the "+"
+            // icon — that's the path that calls its internal `setWidget(...)`.
+            // Drag-selection captures a range, but the user still clicks the
+            // "+" on the end line to open the composer; the library then
+            // enriches `onAddWidgetClick` with `fromLineNumber` from the cached
+            // selection. Disabling the "+" leaves no entry point at all, so we
+            // keep it on (revising Q10-H — the library's contract requires it).
+            diffViewAddWidget
+            extendData={extendData}
+            enableMultiSelect
+            onAddWidgetClick={({ lineNumber, fromLineNumber, side }) => {
+              const ourSide = sideToOurs(side);
+              const start = Math.min(lineNumber, fromLineNumber ?? lineNumber);
+              const end = Math.max(lineNumber, fromLineNumber ?? lineNumber);
+              onStartLineComment({
+                kind: 'line',
+                filePath: file.path,
+                side: ourSide,
+                lineStart: start,
+                lineEnd: end,
+              });
+            }}
+            renderWidgetLine={({ lineNumber, fromLineNumber, side, onClose }) => {
+              // The library is the source of truth for "is the widget slot open
+              // at this line". We don't gate on React state here — the library
+              // updates its widget store synchronously (reactivity-store) and
+              // calls us *before* our setComposer flush lands, so any React
+              // guard would return null on the first call and never re-render
+              // (the library only re-renders this slot when widgetLineNumber
+              // changes, not when our state catches up).
+              const ourSide = sideToOurs(side);
+              const start = Math.min(lineNumber, fromLineNumber ?? lineNumber);
+              const end = Math.max(lineNumber, fromLineNumber ?? lineNumber);
+              return (
+                <div style={{ padding: '4px 12px' }}>
+                  <Composer
+                    placeholder={
+                      start === end ? `Comment on L${start}` : `Comment on L${start}–${end}`
+                    }
+                    onSave={(b) => {
+                      onSaveLineComment(
+                        {
+                          kind: 'line',
+                          filePath: file.path,
+                          side: ourSide,
+                          lineStart: start,
+                          lineEnd: end,
+                        },
+                        b,
+                      );
+                      onClose();
+                    }}
+                    onCancel={() => {
+                      onCancelComposer();
+                      onClose();
+                    }}
+                    autoFocus
                   />
-                ))}
-              </div>
-            );
-          }}
-        />
+                </div>
+              );
+            }}
+            renderExtendLine={({ data }) => {
+              const ids: string[] = data?.commentIds ?? [];
+              const threads = ids
+                .map((id) => lineComments.find((c) => c.id === id))
+                .filter((c): c is Comment => Boolean(c));
+              if (threads.length === 0) return null;
+              return (
+                <div style={{ padding: '4px 12px' }}>
+                  {threads.map((c) => (
+                    <Thread
+                      key={c.id}
+                      comment={c}
+                      composer={composer}
+                      onStartReply={onStartReply}
+                      onSaveComposer={onSaveComposer}
+                      onCancelComposer={onCancelComposer}
+                      onDelete={onDeleteComment}
+                    />
+                  ))}
+                </div>
+              );
+            }}
+          />
+        </div>
       ) : (
         <div
           style={{
