@@ -52,7 +52,15 @@ function slugFromRemote(url: string | null): string | null {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
-export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: () => void }) {
+export function Workspaces({
+  user,
+  onChangeRepo,
+  onStartSelfReview,
+}: {
+  user: User;
+  onChangeRepo: () => void;
+  onStartSelfReview: () => void;
+}) {
   const me = user.github_login;
   const [repoSlug, setRepoSlug] = useState<string | null>(null);
   const [repoPath, setRepoPath] = useState<string | null>(null);
@@ -515,7 +523,12 @@ export function Workspaces({ user, onChangeRepo }: { user: User; onChangeRepo: (
                       count={selfReviewBranches.length}
                     >
                       {selfReviewBranches.filter(matchBranch).map((b) => (
-                        <BranchRowCompact key={b.name} b={b} stats={diffStats[b.name]} />
+                        <BranchRowCompact
+                          key={b.name}
+                          b={b}
+                          stats={diffStats[b.name]}
+                          onStartSelfReview={onStartSelfReview}
+                        />
                       ))}
                     </Bucket>
                   )}
@@ -988,7 +1001,15 @@ function rowShell(): React.CSSProperties {
   };
 }
 
-function BranchRowCompact({ b, stats }: { b: BranchInfo; stats?: DiffStats }) {
+function BranchRowCompact({
+  b,
+  stats,
+  onStartSelfReview,
+}: {
+  b: BranchInfo;
+  stats?: DiffStats;
+  onStartSelfReview: () => void;
+}) {
   return (
     <div style={rowShell()}>
       <Icon name="branch" size={12} color="var(--gray-500)" />
@@ -1030,13 +1051,14 @@ function BranchRowCompact({ b, stats }: { b: BranchInfo; stats?: DiffStats }) {
           </span>
         </div>
       </div>
-      <button
-        type="button"
-        className="btn"
-        onClick={() => console.info('workspaces_self_review_stub', b.name)}
-      >
-        <Icon name="play" size={10} color="var(--gray-700)" /> Self-Review
-      </button>
+      {/* Q6: Self-Review only on the currently-checked-out branch. The diff
+          fundamentally describes the working tree of HEAD; we don't want a
+          button that pretends to work on non-current branches. */}
+      {b.isHead && (
+        <button type="button" className="btn" onClick={onStartSelfReview}>
+          <Icon name="play" size={10} color="var(--gray-700)" /> Self-Review
+        </button>
+      )}
     </div>
   );
 }
