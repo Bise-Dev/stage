@@ -150,6 +150,42 @@ body {
   padding: 0 14px;
   font-size: 13px;
 }
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* Segmented control — children may be <div> or <button> (we keep the button
+   variant a11y-honest and reset its native chrome to match the divs from
+   the design's tokens.css). */
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 7px;
+  height: 24px;
+  align-items: center;
+}
+.seg > * {
+  padding: 0 10px;
+  height: 20px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-700);
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  cursor: default;
+}
+.seg > .active {
+  background: #fff;
+  color: var(--gray-900);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+}
 
 /* Badges */
 .badge {

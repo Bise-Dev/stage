@@ -93,7 +93,6 @@ export function Subheader({
           type="button"
           onClick={() => onScopeChange('workdir')}
           className={scope === 'workdir' ? 'active' : undefined}
-          style={segBtnStyle(scope === 'workdir')}
         >
           Working tree
         </button>
@@ -101,7 +100,6 @@ export function Subheader({
           type="button"
           onClick={() => onScopeChange('base')}
           className={scope === 'base' ? 'active' : undefined}
-          style={segBtnStyle(scope === 'base')}
         >
           vs {base}
         </button>
@@ -145,20 +143,4 @@ export function Subheader({
       </button>
     </div>
   );
-}
-
-function segBtnStyle(active: boolean): React.CSSProperties {
-  return {
-    padding: '0 10px',
-    height: 20,
-    borderRadius: 5,
-    background: active ? '#fff' : 'transparent',
-    color: active ? 'var(--gray-900)' : 'var(--gray-700)',
-    border: 'none',
-    fontFamily: 'inherit',
-    fontSize: 12,
-    fontWeight: 500,
-    boxShadow: active ? '0 1px 2px rgba(0,0,0,0.10), 0 0 0 0.5px rgba(0,0,0,0.04)' : 'none',
-    cursor: 'default',
-  };
 }
