@@ -72,6 +72,15 @@ export function useSelfReviewDiff(
   );
 
   const fetchDiff = useCallback(async () => {
+    // Don't fire a `base`-scope fetch until we know which base. `baseRef`
+    // is resolved asynchronously from repoSummary() on mount; with a
+    // persisted `base` preference in localStorage, this effect would
+    // otherwise race the resolution and Rust would (correctly) refuse with
+    // "base_ref required in base scope but was not provided".
+    if (scope === 'base' && !baseRef) {
+      setLoading(true);
+      return;
+    }
     try {
       const next = await selfReviewDiff(scope, scope === 'base' ? baseRef : null);
       cacheRef.current.set(`${scope}:${scope === 'base' ? (baseRef ?? '') : ''}`, next);

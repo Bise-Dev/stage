@@ -100,6 +100,9 @@ export function Subheader({
           type="button"
           onClick={() => onScopeChange('base')}
           className={scope === 'base' ? 'active' : undefined}
+          disabled={!defaultBranch}
+          title={defaultBranch ? undefined : 'No default branch detected for this repo'}
+          style={!defaultBranch ? { opacity: 0.5 } : undefined}
         >
           vs {base}
         </button>
