@@ -1,6 +1,26 @@
 import { Icon } from '../../components/Icon';
 import { Composer } from './Composer';
-import type { Comment, ComposerTarget } from './types';
+import type { Anchor, Comment, ComposerTarget } from './types';
+
+/** Short header text for the anchor — same shape as the composer's label
+ *  so the read view matches the write view. */
+function anchorLabel(anchor: Anchor): string {
+  if (anchor.kind === 'line') {
+    return anchor.lineStart === anchor.lineEnd
+      ? `L${anchor.lineStart}`
+      : `L${anchor.lineStart}–L${anchor.lineEnd}`;
+  }
+  if (anchor.kind === 'file') return 'file';
+  // dangling: show the original target so the user can still trace what it
+  // pointed at, even though the lines/file are gone.
+  const orig = anchor.originalAnchor;
+  if (orig.kind === 'line') {
+    return orig.lineStart === orig.lineEnd
+      ? `L${orig.lineStart}`
+      : `L${orig.lineStart}–L${orig.lineEnd}`;
+  }
+  return 'file';
+}
 
 /**
  * Top-level comment + flat ordered replies (Q10-F). Used both for inline
@@ -38,20 +58,41 @@ export function Thread({
         color: 'var(--gray-800)',
       }}
     >
-      {isDangling && (
-        <div
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 4,
+          paddingBottom: 4,
+          borderBottom: '1px solid var(--hairline-2)',
+        }}
+      >
+        <span
           style={{
+            fontFamily: 'var(--font-mono)',
             fontSize: 10.5,
-            fontWeight: 700,
-            color: '#b56500',
-            marginBottom: 4,
-            textTransform: 'uppercase',
+            fontWeight: 600,
+            color: isDangling ? '#b56500' : 'var(--blue-press)',
             letterSpacing: 0.04,
           }}
         >
-          Dangling — anchor lost on edit
-        </div>
-      )}
+          {anchorLabel(comment.anchor)}
+        </span>
+        {isDangling && (
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              color: '#b56500',
+              textTransform: 'uppercase',
+              letterSpacing: 0.04,
+            }}
+          >
+            Dangling — anchor lost on edit
+          </span>
+        )}
+      </div>
       <div style={{ whiteSpace: 'pre-wrap' }}>{comment.body}</div>
       {comment.replies.map((r) => (
         <div
