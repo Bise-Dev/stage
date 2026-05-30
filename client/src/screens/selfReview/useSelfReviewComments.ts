@@ -88,6 +88,12 @@ export type UseSelfReviewComments = {
   startFileComment(filePath: string): void;
   startReply(parentId: string): void;
   saveCurrent(body: string): void;
+  /**
+   * Direct one-shot create — used by the @git-diff-view widget slot path
+   * (the library owns the composer slot, so we don't go through the React
+   * composer state machine that the file/reply flows use).
+   */
+  saveLineComment(anchor: LineAnchor, body: string): void;
   cancelComposer(): void;
   deleteComment(id: string): void;
   /** Returns the markdown that was written to the clipboard. */
@@ -178,6 +184,20 @@ export function useSelfReviewComments(diff: SelfReviewDiff | null): UseSelfRevie
     [composer],
   );
 
+  const saveLineComment = useCallback((anchor: LineAnchor, body: string) => {
+    const trimmed = body.trim();
+    if (!trimmed) return;
+    const next: Comment = {
+      id: newId(),
+      anchor,
+      body: trimmed,
+      createdAt: Date.now(),
+      replies: [],
+    };
+    setComments((cur) => [...cur, next]);
+    setComposer(null);
+  }, []);
+
   const deleteComment = useCallback((id: string) => {
     setComments((cur) => cur.filter((c) => c.id !== id));
   }, []);
@@ -198,6 +218,7 @@ export function useSelfReviewComments(diff: SelfReviewDiff | null): UseSelfRevie
     startFileComment,
     startReply,
     saveCurrent,
+    saveLineComment,
     cancelComposer,
     deleteComment,
     copyAsMarkdown,

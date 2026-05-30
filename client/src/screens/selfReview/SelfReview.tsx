@@ -55,6 +55,7 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
     startFileComment,
     startReply,
     saveCurrent,
+    saveLineComment,
     cancelComposer,
     deleteComment,
     copyAsMarkdown,
@@ -257,6 +258,7 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
               onStartFileComment={startFileComment}
               onStartReply={startReply}
               onSaveComposer={saveCurrent}
+              onSaveLineComment={saveLineComment}
               onCancelComposer={cancelComposer}
               onDeleteComment={deleteComment}
             />

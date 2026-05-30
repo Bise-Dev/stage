@@ -35,6 +35,7 @@ export function DiffPane({
   onStartFileComment,
   onStartReply,
   onSaveComposer,
+  onSaveLineComment,
   onCancelComposer,
   onDeleteComment,
 }: {
@@ -50,6 +51,8 @@ export function DiffPane({
   onStartFileComment(filePath: string): void;
   onStartReply(parentId: string): void;
   onSaveComposer(body: string): void;
+  /** Bypasses the composer state — used by the library's widget slot. */
+  onSaveLineComment(anchor: LineAnchor, body: string): void;
   onCancelComposer(): void;
   onDeleteComment(id: string): void;
 }) {
@@ -92,6 +95,7 @@ export function DiffPane({
           onStartFileComment={onStartFileComment}
           onStartReply={onStartReply}
           onSaveComposer={onSaveComposer}
+          onSaveLineComment={onSaveLineComment}
           onCancelComposer={onCancelComposer}
           onDeleteComment={onDeleteComment}
         />
@@ -111,6 +115,7 @@ function FileBlock({
   onStartFileComment,
   onStartReply,
   onSaveComposer,
+  onSaveLineComment,
   onCancelComposer,
   onDeleteComment,
 }: {
@@ -124,6 +129,7 @@ function FileBlock({
   onStartFileComment(filePath: string): void;
   onStartReply(parentId: string): void;
   onSaveComposer(body: string): void;
+  onSaveLineComment(anchor: LineAnchor, body: string): void;
   onCancelComposer(): void;
   onDeleteComment(id: string): void;
 }) {
@@ -273,7 +279,14 @@ function FileBlock({
           }}
           diffViewMode={viewMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
           diffViewHighlight
-          diffViewAddWidget={false}
+          // The library's widget slot is opened *only* by clicking the "+"
+          // icon — that's the path that calls its internal `setWidget(...)`.
+          // Drag-selection captures a range, but the user still clicks the
+          // "+" on the end line to open the composer; the library then
+          // enriches `onAddWidgetClick` with `fromLineNumber` from the cached
+          // selection. Disabling the "+" leaves no entry point at all, so we
+          // keep it on (revising Q10-H — the library's contract requires it).
+          diffViewAddWidget
           extendData={extendData}
           enableMultiSelect
           onAddWidgetClick={({ lineNumber, fromLineNumber, side }) => {
@@ -289,30 +302,36 @@ function FileBlock({
             });
           }}
           renderWidgetLine={({ lineNumber, fromLineNumber, side, onClose }) => {
-            // The library only renders the widget while it's the "active" line;
-            // we render our composer only if our state matches. Avoids stacking
-            // multiple composers when the user double-clicks.
+            // The library only calls us when its internal widget slot is open
+            // at this line, so we don't need to second-guess with React-state
+            // line comparisons. Render iff our active composer is the
+            // new-line composer for this file. The library will tear down
+            // the slot when the user clicks "+" elsewhere.
             if (!newComposerActive) return null;
-            const anchor = composer?.kind === 'new-line' ? composer.anchor : null;
             const ourSide = sideToOurs(side);
-            if (
-              !anchor ||
-              anchor.side !== ourSide ||
-              anchor.lineEnd !== lineNumber ||
-              anchor.lineStart !== Math.min(lineNumber, fromLineNumber ?? lineNumber)
-            ) {
-              return null;
-            }
+            const start = Math.min(lineNumber, fromLineNumber ?? lineNumber);
+            const end = Math.max(lineNumber, fromLineNumber ?? lineNumber);
             return (
               <div style={{ padding: '4px 12px' }}>
                 <Composer
                   placeholder={
-                    anchor.lineStart === anchor.lineEnd
-                      ? `Comment on L${anchor.lineStart}`
-                      : `Comment on L${anchor.lineStart}–${anchor.lineEnd}`
+                    start === end ? `Comment on L${start}` : `Comment on L${start}–${end}`
                   }
                   onSave={(b) => {
-                    onSaveComposer(b);
+                    // Direct one-shot create — bypasses the React composer
+                    // state machine because the library owns the slot here
+                    // and queuing a setComposer → saveCurrent two-step would
+                    // race the closure.
+                    onSaveLineComment(
+                      {
+                        kind: 'line',
+                        filePath: file.path,
+                        side: ourSide,
+                        lineStart: start,
+                        lineEnd: end,
+                      },
+                      b,
+                    );
                     onClose();
                   }}
                   onCancel={() => {
