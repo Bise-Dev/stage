@@ -1,6 +1,6 @@
 import { DiffModeEnum, DiffViewWithMultiSelect, SplitSide } from '@git-diff-view/react';
 import '@git-diff-view/react/styles/diff-view.css';
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import { type Ref, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import { Icon } from '../../components/Icon';
 import type { SelfReviewFileChange } from '../../tauri';
 import { Composer } from './Composer';
@@ -40,6 +40,8 @@ type DiffPaneProps = {
   onSaveLineComment(anchor: LineAnchor, body: string): void;
   onCancelComposer(): void;
   onDeleteComment(id: string): void;
+  /** React 19 ref-as-prop. Parent supplies a `useRef<DiffPaneHandle>(null)`. */
+  ref?: Ref<DiffPaneHandle>;
 };
 
 /**
@@ -55,25 +57,23 @@ type DiffPaneProps = {
  * `data` prop, so a parent re-render doesn't rebuild the underlying
  * DiffFile or wipe the library's widget store.
  */
-export const DiffPane = forwardRef<DiffPaneHandle, DiffPaneProps>(function DiffPane(
-  {
-    files,
-    viewLayout,
-    selectedPath,
-    viewMode,
-    viewed,
-    onToggleViewed,
-    comments,
-    composer,
-    onStartFileComment,
-    onStartReply,
-    onSaveComposer,
-    onSaveLineComment,
-    onCancelComposer,
-    onDeleteComment,
-  },
+export function DiffPane({
+  files,
+  viewLayout,
+  selectedPath,
+  viewMode,
+  viewed,
+  onToggleViewed,
+  comments,
+  composer,
+  onStartFileComment,
+  onStartReply,
+  onSaveComposer,
+  onSaveLineComment,
+  onCancelComposer,
+  onDeleteComment,
   ref,
-) {
+}: DiffPaneProps) {
   const fileRefs = useRef(new Map<string, HTMLDivElement>());
   useImperativeHandle(
     ref,
@@ -139,7 +139,7 @@ export const DiffPane = forwardRef<DiffPaneHandle, DiffPaneProps>(function DiffP
       )}
     </div>
   );
-});
+}
 
 function FileBlock({
   file,
