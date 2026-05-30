@@ -155,8 +155,6 @@ function FileBlock({
     return { oldFile, newFile };
   }, [lineComments]);
 
-  const newComposerActive = composer?.kind === 'new-line' && composer.anchor.filePath === file.path;
-
   // The library passes us its SplitSide enum; map to our 'left'|'right'.
   const sideToOurs = (s: SplitSide): Side => (s === SplitSide.old ? 'left' : 'right');
 
@@ -279,6 +277,11 @@ function FileBlock({
           }}
           diffViewMode={viewMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
           diffViewHighlight
+          // Bypass the library's width-based widget gating. Without this it
+          // gates "render the widget content" on a measured `.unified-diff-
+          // table-wrapper` width — the measurement lags the first paint, so
+          // the widget row appears empty until the next resize event.
+          diffViewWrap
           // The library's widget slot is opened *only* by clicking the "+"
           // icon — that's the path that calls its internal `setWidget(...)`.
           // Drag-selection captures a range, but the user still clicks the
@@ -302,12 +305,13 @@ function FileBlock({
             });
           }}
           renderWidgetLine={({ lineNumber, fromLineNumber, side, onClose }) => {
-            // The library only calls us when its internal widget slot is open
-            // at this line, so we don't need to second-guess with React-state
-            // line comparisons. Render iff our active composer is the
-            // new-line composer for this file. The library will tear down
-            // the slot when the user clicks "+" elsewhere.
-            if (!newComposerActive) return null;
+            // The library is the source of truth for "is the widget slot open
+            // at this line". We don't gate on React state here — the library
+            // updates its widget store synchronously (reactivity-store) and
+            // calls us *before* our setComposer flush lands, so any React
+            // guard would return null on the first call and never re-render
+            // (the library only re-renders this slot when widgetLineNumber
+            // changes, not when our state catches up).
             const ourSide = sideToOurs(side);
             const start = Math.min(lineNumber, fromLineNumber ?? lineNumber);
             const end = Math.max(lineNumber, fromLineNumber ?? lineNumber);
@@ -318,10 +322,6 @@ function FileBlock({
                     start === end ? `Comment on L${start}` : `Comment on L${start}–${end}`
                   }
                   onSave={(b) => {
-                    // Direct one-shot create — bypasses the React composer
-                    // state machine because the library owns the slot here
-                    // and queuing a setComposer → saveCurrent two-step would
-                    // race the closure.
                     onSaveLineComment(
                       {
                         kind: 'line',
