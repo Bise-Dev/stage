@@ -218,6 +218,41 @@ body {
   color: #7b2cab;
 }
 
+/* Self-Review: visual "+" affordance on line-number hover.
+   Purely cosmetic — `pointer-events: none` lets every pointerdown/mouseup
+   pass through to the @git-diff-view multi-select manager, which is what
+   actually opens the composer (see DiffPane.tsx). The library's built-in
+   "+" was a real <button> that called e.stopPropagation() and killed the
+   drag, which is why we disable `diffViewAddWidget` and provide this
+   instead. */
+.self-review-diff [data-line-num],
+.self-review-diff [data-line-old-num],
+.self-review-diff [data-line-new-num] {
+  position: relative;
+  cursor: cell;
+}
+.self-review-diff [data-line-num]:hover::after,
+.self-review-diff [data-line-old-num]:hover::after,
+.self-review-diff [data-line-new-num]:hover::after {
+  content: "+";
+  position: absolute;
+  right: -8px;
+  top: 50%;
+  transform: translate(50%, -50%);
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  z-index: 2;
+}
+
 /* Avatar */
 .avatar {
   width: 22px;

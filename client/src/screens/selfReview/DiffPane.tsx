@@ -330,100 +330,106 @@ function FileBlock({
 
       {/* The diff itself — only when there's a patch to render. The library
           renders its own `.diff-tailwindcss-wrapper` internally, so we don't
-          need to add one ourselves. */}
+          need to add one ourselves. The `self-review-diff` wrapper scopes
+          the hover-"+" CSS overlay (see styles.css) so it doesn't leak to
+          any other diff-view consumer in the future. */}
       {file.patch && !file.isBinary && !file.isTruncated ? (
-        <DiffViewWithMultiSelect
-          // biome-ignore lint/suspicious/noExplicitAny: ref shape isn't exported as a usable name
-          ref={dvRef as unknown as React.Ref<any>}
-          data={diffData}
-          diffViewMode={viewMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
-          diffViewHighlight
-          // Bypass the library's width-based widget gating. Without this it
-          // gates "render the widget content" on a measured `.unified-diff-
-          // table-wrapper` width — the measurement lags the first paint, so
-          // the widget row appears empty until the next resize event.
-          diffViewWrap
-          // No "+" gutter icon: it sits at `left-[100%] translate-x-[-50%]`,
-          // straddling the line-number / code boundary — exactly where the
-          // user wants to start a drag. Its onMouseDown calls
-          // e.stopPropagation(), so the multi-select manager underneath
-          // never sees the pointerdown and the drag never starts. Instead
-          // every entry goes through the multi-select pipeline:
-          // `onMultiSelectComplete` fires on mouseup for both a single-line
-          // click (start === end) and a real drag, and we programmatically
-          // open the widget via the captured store hook below. GitHub's
-          // model, end-to-end uniform.
-          diffViewAddWidget={false}
-          extendData={extendData}
-          enableMultiSelect
-          onCreateUseWidgetHook={(hook) => {
-            widgetHookRef.current = hook as unknown as WidgetHook;
-          }}
-          renderWidgetLine={({ lineNumber, fromLineNumber, side, onClose }) => {
-            // Prefer the range from our document-mouseup listener
-            // (`pendingRangeRef`) since the library's internal range cache
-            // gets cleared by its empty-lines filter. Fall back to the
-            // library's lineNumber/fromLineNumber for any other path.
-            const ourSide = sideToOurs(side);
-            const pending = pendingRangeRef.current;
-            const useRange = pending && pending.side === side && pending.filePath === file.path;
-            const start = useRange
-              ? pending.start
-              : Math.min(lineNumber, fromLineNumber ?? lineNumber);
-            const end = useRange ? pending.end : Math.max(lineNumber, fromLineNumber ?? lineNumber);
-            const rangeLabel = start === end ? `L${start}` : `L${start}–L${end}`;
-            return (
-              <div style={{ padding: '4px 12px' }}>
-                <Composer
-                  label={rangeLabel}
-                  placeholder="Leave a comment…"
-                  onSave={(b) => {
-                    onSaveLineComment(
-                      {
-                        kind: 'line',
-                        filePath: file.path,
-                        side: ourSide,
-                        lineStart: start,
-                        lineEnd: end,
-                      },
-                      b,
-                    );
-                    pendingRangeRef.current = null;
-                    onClose();
-                  }}
-                  onCancel={() => {
-                    onCancelComposer();
-                    pendingRangeRef.current = null;
-                    onClose();
-                  }}
-                  autoFocus
-                />
-              </div>
-            );
-          }}
-          renderExtendLine={({ data }) => {
-            const ids: string[] = data?.commentIds ?? [];
-            const threads = ids
-              .map((id) => lineComments.find((c) => c.id === id))
-              .filter((c): c is Comment => Boolean(c));
-            if (threads.length === 0) return null;
-            return (
-              <div style={{ padding: '4px 12px' }}>
-                {threads.map((c) => (
-                  <Thread
-                    key={c.id}
-                    comment={c}
-                    composer={composer}
-                    onStartReply={onStartReply}
-                    onSaveComposer={onSaveComposer}
-                    onCancelComposer={onCancelComposer}
-                    onDelete={onDeleteComment}
+        <div className="self-review-diff">
+          <DiffViewWithMultiSelect
+            // biome-ignore lint/suspicious/noExplicitAny: ref shape isn't exported as a usable name
+            ref={dvRef as unknown as React.Ref<any>}
+            data={diffData}
+            diffViewMode={viewMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
+            diffViewHighlight
+            // Bypass the library's width-based widget gating. Without this it
+            // gates "render the widget content" on a measured `.unified-diff-
+            // table-wrapper` width — the measurement lags the first paint, so
+            // the widget row appears empty until the next resize event.
+            diffViewWrap
+            // No "+" gutter icon: it sits at `left-[100%] translate-x-[-50%]`,
+            // straddling the line-number / code boundary — exactly where the
+            // user wants to start a drag. Its onMouseDown calls
+            // e.stopPropagation(), so the multi-select manager underneath
+            // never sees the pointerdown and the drag never starts. Instead
+            // every entry goes through the multi-select pipeline:
+            // `onMultiSelectComplete` fires on mouseup for both a single-line
+            // click (start === end) and a real drag, and we programmatically
+            // open the widget via the captured store hook below. GitHub's
+            // model, end-to-end uniform.
+            diffViewAddWidget={false}
+            extendData={extendData}
+            enableMultiSelect
+            onCreateUseWidgetHook={(hook) => {
+              widgetHookRef.current = hook as unknown as WidgetHook;
+            }}
+            renderWidgetLine={({ lineNumber, fromLineNumber, side, onClose }) => {
+              // Prefer the range from our document-mouseup listener
+              // (`pendingRangeRef`) since the library's internal range cache
+              // gets cleared by its empty-lines filter. Fall back to the
+              // library's lineNumber/fromLineNumber for any other path.
+              const ourSide = sideToOurs(side);
+              const pending = pendingRangeRef.current;
+              const useRange = pending && pending.side === side && pending.filePath === file.path;
+              const start = useRange
+                ? pending.start
+                : Math.min(lineNumber, fromLineNumber ?? lineNumber);
+              const end = useRange
+                ? pending.end
+                : Math.max(lineNumber, fromLineNumber ?? lineNumber);
+              const rangeLabel = start === end ? `L${start}` : `L${start}–L${end}`;
+              return (
+                <div style={{ padding: '4px 12px' }}>
+                  <Composer
+                    label={rangeLabel}
+                    placeholder="Leave a comment…"
+                    onSave={(b) => {
+                      onSaveLineComment(
+                        {
+                          kind: 'line',
+                          filePath: file.path,
+                          side: ourSide,
+                          lineStart: start,
+                          lineEnd: end,
+                        },
+                        b,
+                      );
+                      pendingRangeRef.current = null;
+                      onClose();
+                    }}
+                    onCancel={() => {
+                      onCancelComposer();
+                      pendingRangeRef.current = null;
+                      onClose();
+                    }}
+                    autoFocus
                   />
-                ))}
-              </div>
-            );
-          }}
-        />
+                </div>
+              );
+            }}
+            renderExtendLine={({ data }) => {
+              const ids: string[] = data?.commentIds ?? [];
+              const threads = ids
+                .map((id) => lineComments.find((c) => c.id === id))
+                .filter((c): c is Comment => Boolean(c));
+              if (threads.length === 0) return null;
+              return (
+                <div style={{ padding: '4px 12px' }}>
+                  {threads.map((c) => (
+                    <Thread
+                      key={c.id}
+                      comment={c}
+                      composer={composer}
+                      onStartReply={onStartReply}
+                      onSaveComposer={onSaveComposer}
+                      onCancelComposer={onCancelComposer}
+                      onDelete={onDeleteComment}
+                    />
+                  ))}
+                </div>
+              );
+            }}
+          />
+        </div>
       ) : (
         <div
           style={{
