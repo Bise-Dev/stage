@@ -1,6 +1,6 @@
 import { DiffModeEnum, DiffViewWithMultiSelect, SplitSide } from '@git-diff-view/react';
 import '@git-diff-view/react/styles/diff-view.css';
-import { useEffect, useMemo, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import { Icon } from '../../components/Icon';
 import type { SelfReviewFileChange } from '../../tauri';
 import { Composer } from './Composer';
@@ -15,35 +15,22 @@ const STATUS_BADGE = {
 } as const;
 
 export type ViewMode = 'split' | 'unified';
+export type ViewLayout = 'scroll' | 'single';
 
-/**
- * Renders the currently-selected file. Matches the design's "Local review"
- * layout (one file at a time, sidebar drives selection) and avoids the
- * stacked-files perf hit on scope toggles — only one
- * `<DiffViewWithMultiSelect>` lives at any moment, so we don't pay
- * tokenize+highlight for every changed file on every refetch.
- */
-export function DiffPane({
-  file,
-  fileCount,
-  viewMode,
-  isViewed,
-  onToggleViewed,
-  comments,
-  composer,
-  onStartFileComment,
-  onStartReply,
-  onSaveComposer,
-  onSaveLineComment,
-  onCancelComposer,
-  onDeleteComment,
-}: {
-  file: SelfReviewFileChange | null;
-  /** Total file count — used only for the empty-state copy. */
-  fileCount: number;
+export type DiffPaneHandle = {
+  /** Scrolls the named file's block into view (used in `scroll` layout). */
+  scrollFileIntoView(path: string): void;
+};
+
+type DiffPaneProps = {
+  files: SelfReviewFileChange[];
+  viewLayout: ViewLayout;
+  /** Which file the sidebar has selected; in 'single' layout determines what
+   *  is rendered, in 'scroll' layout it's only the scroll target. */
+  selectedPath: string | null;
   viewMode: ViewMode;
-  isViewed: boolean;
-  onToggleViewed(): void;
+  viewed: Set<string>;
+  onToggleViewed(path: string): void;
   comments: Comment[];
   composer: ComposerTarget | null;
   onStartFileComment(filePath: string): void;
@@ -53,7 +40,54 @@ export function DiffPane({
   onSaveLineComment(anchor: LineAnchor, body: string): void;
   onCancelComposer(): void;
   onDeleteComment(id: string): void;
-}) {
+};
+
+/**
+ * Renders one or many file diffs depending on `viewLayout`.
+ *
+ * - `scroll`: every file stacked vertically (GitHub-style). The sidebar
+ *   acts as a jump-list — clicking a file scrolls its block into view.
+ * - `single`: only the selected file is rendered. Lighter on first paint
+ *   for diffs with many files, at the cost of needing sidebar clicks to
+ *   move between files.
+ *
+ * Each FileBlock owns its own `DiffViewWithMultiSelect` and memoizes its
+ * `data` prop, so a parent re-render doesn't rebuild the underlying
+ * DiffFile or wipe the library's widget store.
+ */
+export const DiffPane = forwardRef<DiffPaneHandle, DiffPaneProps>(function DiffPane(
+  {
+    files,
+    viewLayout,
+    selectedPath,
+    viewMode,
+    viewed,
+    onToggleViewed,
+    comments,
+    composer,
+    onStartFileComment,
+    onStartReply,
+    onSaveComposer,
+    onSaveLineComment,
+    onCancelComposer,
+    onDeleteComment,
+  },
+  ref,
+) {
+  const fileRefs = useRef(new Map<string, HTMLDivElement>());
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollFileIntoView(path: string) {
+        fileRefs.current.get(path)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      },
+    }),
+    [],
+  );
+
+  const visibleFiles =
+    viewLayout === 'scroll' ? files : files.filter((f) => f.path === selectedPath);
+
   return (
     <div
       style={{
@@ -64,7 +98,7 @@ export function DiffPane({
         padding: '12px 14px',
       }}
     >
-      {file === null ? (
+      {visibleFiles.length === 0 ? (
         <div
           style={{
             padding: '40px 20px',
@@ -73,33 +107,39 @@ export function DiffPane({
             fontSize: 13,
           }}
         >
-          {fileCount === 0
+          {files.length === 0
             ? 'No changes to review on this branch.'
             : 'Pick a file from the sidebar.'}
         </div>
       ) : (
-        <FileBlock
-          // Keying on path forces a clean remount when the user switches
-          // files — cheaper than letting the library try to diff its
-          // internal AST against a totally different patch.
-          key={file.path}
-          file={file}
-          viewMode={viewMode}
-          isViewed={isViewed}
-          onToggleViewed={onToggleViewed}
-          comments={comments}
-          composer={composer}
-          onStartFileComment={onStartFileComment}
-          onStartReply={onStartReply}
-          onSaveComposer={onSaveComposer}
-          onSaveLineComment={onSaveLineComment}
-          onCancelComposer={onCancelComposer}
-          onDeleteComment={onDeleteComment}
-        />
+        visibleFiles.map((f) => (
+          <div
+            key={f.path}
+            ref={(el) => {
+              if (el) fileRefs.current.set(f.path, el);
+              else fileRefs.current.delete(f.path);
+            }}
+          >
+            <FileBlock
+              file={f}
+              viewMode={viewMode}
+              isViewed={viewed.has(f.path)}
+              onToggleViewed={() => onToggleViewed(f.path)}
+              comments={comments.filter((c) => c.anchor.filePath === f.path)}
+              composer={composer}
+              onStartFileComment={onStartFileComment}
+              onStartReply={onStartReply}
+              onSaveComposer={onSaveComposer}
+              onSaveLineComment={onSaveLineComment}
+              onCancelComposer={onCancelComposer}
+              onDeleteComment={onDeleteComment}
+            />
+          </div>
+        ))
       )}
     </div>
   );
-}
+});
 
 function FileBlock({
   file,

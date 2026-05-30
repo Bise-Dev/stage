@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TitleBar } from '../../components/TitleBar';
 import { getActiveRepo, repoSummary } from '../../tauri';
-import { DiffPane, type ViewMode } from './DiffPane';
+import { DiffPane, type DiffPaneHandle, type ViewLayout, type ViewMode } from './DiffPane';
 import { FileList } from './FileList';
 import { Subheader } from './Subheader';
 import { useSelfReviewComments } from './useSelfReviewComments';
@@ -16,15 +16,28 @@ import { clearViewed, loadViewed, setViewed } from './viewedStore';
  * store, and the Subheader / FileList / DiffPane layout. ESC exits to
  * Workspaces.
  */
+const LAYOUT_KEY = 'selfReview:viewLayout';
+
+function loadLayout(): ViewLayout {
+  return localStorage.getItem(LAYOUT_KEY) === 'single' ? 'single' : 'scroll';
+}
+
 export function SelfReview({ onExit }: { onExit: () => void }) {
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('unified');
+  const [viewLayout, setViewLayoutState] = useState<ViewLayout>(loadLayout);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [viewed, setViewedState] = useState<Set<string>>(new Set());
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const filterRef = useRef<HTMLInputElement>(null);
+  const diffPaneRef = useRef<DiffPaneHandle>(null);
+
+  const setViewLayout = useCallback((v: ViewLayout) => {
+    localStorage.setItem(LAYOUT_KEY, v);
+    setViewLayoutState(v);
+  }, []);
 
   // Resolve active repo + default branch on mount. Fail loud per CLAUDE.md:
   // surface the message instead of falling back to "main".
@@ -131,9 +144,18 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
     }
   }, [diff, selectedPath]);
 
-  const onSelectFile = useCallback((path: string) => {
-    setSelectedPath(path);
-  }, []);
+  const onSelectFile = useCallback(
+    (path: string) => {
+      setSelectedPath(path);
+      // In scroll mode, the diff pane has every file stacked; clicking a
+      // file in the sidebar scrolls its block into view. In single mode
+      // it just swaps which file is rendered.
+      if (viewLayout === 'scroll') {
+        diffPaneRef.current?.scrollFileIntoView(path);
+      }
+    },
+    [viewLayout],
+  );
 
   const commentCounts = useMemo(() => {
     const m = new Map<string, number>();
@@ -142,20 +164,6 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
     }
     return m;
   }, [comments]);
-
-  // One-file-at-a-time render: pick the selected file (or null if none),
-  // and pre-filter comments down to that file so DiffPane doesn't do it on
-  // every re-render. Both memos cheap; the win is that only ONE
-  // <DiffViewWithMultiSelect> ever lives, so scope toggles don't pay
-  // tokenize+highlight for every changed file in the diff.
-  const selectedFile = useMemo(
-    () => diff?.files.find((f) => f.path === selectedPath) ?? null,
-    [diff, selectedPath],
-  );
-  const commentsForSelected = useMemo(
-    () => (selectedFile ? comments.filter((c) => c.anchor.filePath === selectedFile.path) : []),
-    [comments, selectedFile],
-  );
 
   const onCopy = useCallback(async () => {
     try {
@@ -211,7 +219,8 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
           />
 
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-            {/* Diff toolbar: split/unified + transient loading hint */}
+            {/* Diff toolbar: layout toggle (scroll/single) on the left,
+                split/unified on the right, transient loading hint between. */}
             <div
               style={{
                 height: 32,
@@ -224,7 +233,29 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
                 background: '#fff',
               }}
             >
-              <div className="seg">
+              <div className="seg" aria-label="Diff layout">
+                <button
+                  type="button"
+                  onClick={() => setViewLayout('scroll')}
+                  className={viewLayout === 'scroll' ? 'active' : undefined}
+                  title="Scroll through all files (GitHub-style)"
+                >
+                  Scroll
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewLayout('single')}
+                  className={viewLayout === 'single' ? 'active' : undefined}
+                  title="Show one file at a time"
+                >
+                  Single
+                </button>
+              </div>
+              <div style={{ flex: 1 }} />
+              {loading && (
+                <span style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>refreshing…</span>
+              )}
+              <div className="seg" aria-label="Diff view mode">
                 <button
                   type="button"
                   onClick={() => setViewMode('split')}
@@ -240,18 +271,16 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
                   Unified
                 </button>
               </div>
-              <div style={{ flex: 1 }} />
-              {loading && (
-                <span style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>refreshing…</span>
-              )}
             </div>
             <DiffPane
-              file={selectedFile}
-              fileCount={diff?.files.length ?? 0}
+              ref={diffPaneRef}
+              files={diff?.files ?? []}
+              viewLayout={viewLayout}
+              selectedPath={selectedPath}
               viewMode={viewMode}
-              isViewed={selectedFile ? viewed.has(selectedFile.path) : false}
-              onToggleViewed={() => selectedFile && toggleViewed(selectedFile.path)}
-              comments={selectedFile ? commentsForSelected : []}
+              viewed={viewed}
+              onToggleViewed={toggleViewed}
+              comments={comments}
               composer={composer}
               onStartFileComment={startFileComment}
               onStartReply={startReply}
