@@ -224,16 +224,22 @@ body {
    actually opens the composer (see DiffPane.tsx). The library's built-in
    "+" was a real <button> that called e.stopPropagation() and killed the
    drag, which is why we disable `diffViewAddWidget` and provide this
-   instead. */
-.self-review-diff [data-line-num],
-.self-review-diff [data-line-old-num],
-.self-review-diff [data-line-new-num] {
-  position: relative;
+   instead.
+
+   We target the line-number <td> (the library already gives it
+   `position: relative` and the classes below), not the inner <span>.
+   This makes the hitbox the whole gutter cell — in unified mode that
+   single cell holds both old+new line-number spans, so the "+" shows
+   once anywhere in the row's gutter; in split mode each side has its
+   own cell, so the "+" follows whichever side you're hovering. */
+.self-review-diff td.diff-line-num,
+.self-review-diff td.diff-line-old-num,
+.self-review-diff td.diff-line-new-num {
   cursor: cell;
 }
-.self-review-diff [data-line-num]:hover::after,
-.self-review-diff [data-line-old-num]:hover::after,
-.self-review-diff [data-line-new-num]:hover::after {
+.self-review-diff td.diff-line-num:hover::after,
+.self-review-diff td.diff-line-old-num:hover::after,
+.self-review-diff td.diff-line-new-num:hover::after {
   content: "+";
   position: absolute;
   right: -8px;
