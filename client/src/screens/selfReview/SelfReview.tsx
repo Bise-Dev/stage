@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TitleBar } from '../../components/TitleBar';
 import { getActiveRepo, repoSummary } from '../../tauri';
-import { DiffPane, type DiffPaneHandle, type ViewMode } from './DiffPane';
+import { DiffPane, type ViewMode } from './DiffPane';
 import { FileList } from './FileList';
 import { Subheader } from './Subheader';
 import { useSelfReviewComments } from './useSelfReviewComments';
@@ -25,7 +25,6 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
   const [viewed, setViewedState] = useState<Set<string>>(new Set());
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const filterRef = useRef<HTMLInputElement>(null);
-  const diffPaneRef = useRef<DiffPaneHandle>(null);
 
   // Resolve active repo + default branch on mount. Fail loud per CLAUDE.md:
   // surface the message instead of falling back to "main".
@@ -134,7 +133,6 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
 
   const onSelectFile = useCallback((path: string) => {
     setSelectedPath(path);
-    diffPaneRef.current?.scrollFileIntoView(path);
   }, []);
 
   const commentCounts = useMemo(() => {
@@ -144,6 +142,20 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
     }
     return m;
   }, [comments]);
+
+  // One-file-at-a-time render: pick the selected file (or null if none),
+  // and pre-filter comments down to that file so DiffPane doesn't do it on
+  // every re-render. Both memos cheap; the win is that only ONE
+  // <DiffViewWithMultiSelect> ever lives, so scope toggles don't pay
+  // tokenize+highlight for every changed file in the diff.
+  const selectedFile = useMemo(
+    () => diff?.files.find((f) => f.path === selectedPath) ?? null,
+    [diff, selectedPath],
+  );
+  const commentsForSelected = useMemo(
+    () => (selectedFile ? comments.filter((c) => c.anchor.filePath === selectedFile.path) : []),
+    [comments, selectedFile],
+  );
 
   const onCopy = useCallback(async () => {
     try {
@@ -234,12 +246,12 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
               )}
             </div>
             <DiffPane
-              ref={diffPaneRef}
-              files={diff?.files ?? []}
+              file={selectedFile}
+              fileCount={diff?.files.length ?? 0}
               viewMode={viewMode}
-              viewed={viewed}
-              onToggleViewed={toggleViewed}
-              comments={comments}
+              isViewed={selectedFile ? viewed.has(selectedFile.path) : false}
+              onToggleViewed={() => selectedFile && toggleViewed(selectedFile.path)}
+              comments={selectedFile ? commentsForSelected : []}
               composer={composer}
               onStartLineComment={startLineComment}
               onStartFileComment={startFileComment}

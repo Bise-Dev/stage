@@ -1,5 +1,5 @@
 import { listen } from '@tauri-apps/api/event';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { type SelfReviewDiff, type SelfReviewScope, selfReviewDiff } from '../../tauri';
 
 const SCOPE_KEY_PREFIX = 'selfReview:scope:';
@@ -28,6 +28,12 @@ export type UseSelfReviewDiff = {
  * `repo-changed` event (the global watcher fires on .git/, working tree,
  * untracked dirs) and whenever the scope or `baseRef` changes.
  *
+ * To make scope toggling feel instant we keep an in-memory cache keyed by
+ * `(scope, baseRef)` — flipping back to a previously-seen scope swaps the
+ * cached payload in synchronously while the background refetch runs to pick
+ * up any drift. The cache is dropped on every `repo-changed` event so it
+ * never gets stale relative to the working tree.
+ *
  * Per CLAUDE.md "Error handling": no silent fallbacks — a backend failure
  * leaves `diff` null and `error` populated, and the screen shows a red banner.
  */
@@ -39,23 +45,36 @@ export function useSelfReviewDiff(
   const [diff, setDiff] = useState<SelfReviewDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Cache keyed by `${scope}:${baseRef ?? ''}`. Holds the most recent payload
+  // for each (scope, base) we've fetched in this session.
+  const cacheRef = useRef<Map<string, SelfReviewDiff>>(new Map());
 
-  // Reload persisted scope when the repo changes underneath us.
+  // Reload persisted scope when the repo changes underneath us, and drop the
+  // cache — different repo means different diffs.
   useEffect(() => {
     setScopeState(loadScope(repoPath));
+    cacheRef.current.clear();
   }, [repoPath]);
 
   const setScope = useCallback(
     (s: SelfReviewScope) => {
       saveScope(repoPath, s);
+      // Optimistic swap: if we have a cached payload for the target scope,
+      // show it instantly and let the background refetch reconcile.
+      const cached = cacheRef.current.get(`${s}:${s === 'base' ? (baseRef ?? '') : ''}`);
+      if (cached) {
+        setDiff(cached);
+        setError(null);
+      }
       setScopeState(s);
     },
-    [repoPath],
+    [repoPath, baseRef],
   );
 
   const fetchDiff = useCallback(async () => {
     try {
       const next = await selfReviewDiff(scope, scope === 'base' ? baseRef : null);
+      cacheRef.current.set(`${scope}:${scope === 'base' ? (baseRef ?? '') : ''}`, next);
       setDiff(next);
       setError(null);
     } catch (e) {
@@ -72,15 +91,22 @@ export function useSelfReviewDiff(
     }
   }, [scope, baseRef]);
 
-  // Initial + scope/base changes.
+  // Initial + scope/base changes. We only show the spinner if we have nothing
+  // cached for the new scope — otherwise the optimistic swap above already
+  // populated `diff` and the user shouldn't see a loading state.
   useEffect(() => {
-    setLoading(true);
+    const cached = cacheRef.current.get(`${scope}:${scope === 'base' ? (baseRef ?? '') : ''}`);
+    if (!cached) setLoading(true);
     fetchDiff();
-  }, [fetchDiff]);
+  }, [fetchDiff, scope, baseRef]);
 
-  // Live refresh via the global watcher.
+  // Live refresh via the global watcher. A file change invalidates the cache
+  // for every scope — both modes' diffs are affected by a working-tree edit.
   useEffect(() => {
-    const unlisten = listen('repo-changed', () => fetchDiff());
+    const unlisten = listen('repo-changed', () => {
+      cacheRef.current.clear();
+      fetchDiff();
+    });
     return () => {
       unlisten.then((u) => u());
     };

@@ -1,6 +1,6 @@
 import { DiffModeEnum, DiffViewWithMultiSelect, SplitSide } from '@git-diff-view/react';
 import '@git-diff-view/react/styles/diff-view.css';
-import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { Icon } from '../../components/Icon';
 import type { SelfReviewFileChange } from '../../tauri';
 import { Composer } from './Composer';
@@ -14,58 +14,45 @@ const STATUS_BADGE = {
   renamed: { label: 'renamed', cls: 'badge-purple' },
 } as const;
 
-/** Imperative handle the parent uses to scroll a file's diff into view. */
-export type DiffPaneHandle = {
-  scrollFileIntoView(path: string): void;
-};
-
 export type ViewMode = 'split' | 'unified';
 
-export const DiffPane = forwardRef<
-  DiffPaneHandle,
-  {
-    files: SelfReviewFileChange[];
-    viewMode: ViewMode;
-    viewed: Set<string>;
-    onToggleViewed(path: string): void;
-    comments: Comment[];
-    composer: ComposerTarget | null;
-    onStartLineComment(anchor: LineAnchor): void;
-    onStartFileComment(filePath: string): void;
-    onStartReply(parentId: string): void;
-    onSaveComposer(body: string): void;
-    onCancelComposer(): void;
-    onDeleteComment(id: string): void;
-  }
->(function DiffPane(
-  {
-    files,
-    viewMode,
-    viewed,
-    onToggleViewed,
-    comments,
-    composer,
-    onStartLineComment,
-    onStartFileComment,
-    onStartReply,
-    onSaveComposer,
-    onCancelComposer,
-    onDeleteComment,
-  },
-  ref,
-) {
-  const fileRefs = useRef(new Map<string, HTMLDivElement>());
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      scrollFileIntoView(path: string) {
-        fileRefs.current.get(path)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      },
-    }),
-    [],
-  );
-
+/**
+ * Renders the currently-selected file. Matches the design's "Local review"
+ * layout (one file at a time, sidebar drives selection) and avoids the
+ * stacked-files perf hit on scope toggles — only one
+ * `<DiffViewWithMultiSelect>` lives at any moment, so we don't pay
+ * tokenize+highlight for every changed file on every refetch.
+ */
+export function DiffPane({
+  file,
+  fileCount,
+  viewMode,
+  isViewed,
+  onToggleViewed,
+  comments,
+  composer,
+  onStartLineComment,
+  onStartFileComment,
+  onStartReply,
+  onSaveComposer,
+  onCancelComposer,
+  onDeleteComment,
+}: {
+  file: SelfReviewFileChange | null;
+  /** Total file count — used only for the empty-state copy. */
+  fileCount: number;
+  viewMode: ViewMode;
+  isViewed: boolean;
+  onToggleViewed(): void;
+  comments: Comment[];
+  composer: ComposerTarget | null;
+  onStartLineComment(anchor: LineAnchor): void;
+  onStartFileComment(filePath: string): void;
+  onStartReply(parentId: string): void;
+  onSaveComposer(body: string): void;
+  onCancelComposer(): void;
+  onDeleteComment(id: string): void;
+}) {
   return (
     <div
       style={{
@@ -76,7 +63,7 @@ export const DiffPane = forwardRef<
         padding: '12px 14px',
       }}
     >
-      {files.length === 0 && (
+      {file === null ? (
         <div
           style={{
             padding: '40px 20px',
@@ -85,17 +72,21 @@ export const DiffPane = forwardRef<
             fontSize: 13,
           }}
         >
-          No changes to review on this branch.
+          {fileCount === 0
+            ? 'No changes to review on this branch.'
+            : 'Pick a file from the sidebar.'}
         </div>
-      )}
-      {files.map((f) => (
+      ) : (
         <FileBlock
-          key={f.path}
-          file={f}
+          // Keying on path forces a clean remount when the user switches
+          // files — cheaper than letting the library try to diff its
+          // internal AST against a totally different patch.
+          key={file.path}
+          file={file}
           viewMode={viewMode}
-          isViewed={viewed.has(f.path)}
-          onToggleViewed={() => onToggleViewed(f.path)}
-          comments={comments.filter((c) => c.anchor.filePath === f.path)}
+          isViewed={isViewed}
+          onToggleViewed={onToggleViewed}
+          comments={comments}
           composer={composer}
           onStartLineComment={onStartLineComment}
           onStartFileComment={onStartFileComment}
@@ -103,15 +94,11 @@ export const DiffPane = forwardRef<
           onSaveComposer={onSaveComposer}
           onCancelComposer={onCancelComposer}
           onDeleteComment={onDeleteComment}
-          registerRef={(el) => {
-            if (el) fileRefs.current.set(f.path, el);
-            else fileRefs.current.delete(f.path);
-          }}
         />
-      ))}
+      )}
     </div>
   );
-});
+}
 
 function FileBlock({
   file,
@@ -126,7 +113,6 @@ function FileBlock({
   onSaveComposer,
   onCancelComposer,
   onDeleteComment,
-  registerRef,
 }: {
   file: SelfReviewFileChange;
   viewMode: ViewMode;
@@ -140,7 +126,6 @@ function FileBlock({
   onSaveComposer(body: string): void;
   onCancelComposer(): void;
   onDeleteComment(id: string): void;
-  registerRef(el: HTMLDivElement | null): void;
 }) {
   const badge = STATUS_BADGE[file.status];
 
@@ -171,7 +156,6 @@ function FileBlock({
 
   return (
     <div
-      ref={registerRef}
       style={{
         background: '#fff',
         border: '1px solid var(--hairline)',
