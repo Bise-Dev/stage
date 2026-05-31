@@ -53,8 +53,8 @@ The single status shown per Workspace, computed from two owners. Pre-publish (no
 _Avoid_: storing it; using "Ready to share" as a state (that's the creation gesture).
 
 **Publish** (verb):
-The action that opens or updates the github PR for this workspace. **Publish means PR creation, not branch push** — the branch must already exist on github before the Workspace was created (precondition for Ready-to-share). First publish creates the github PR (sets `pr_number` on the Workspace). Subsequent publishes push new review activity (storyline edits and any pending comments) against the same PR. Repeating publish is the normal lifecycle — the workspace is reusable across publish cycles.
-_Avoid_: "submit" (used inside publish for the github Review event), "send", "push" (overloaded with branch push, which is a separate, pre-Workspace action).
+The action that gets this workspace's branch + PR onto github. **There is no GitHub precondition at Workspace creation** — the author works fully locally (Self-Review → Ready-to-share → storyline composition) without ever pushing, and Publish is the single point where Stage touches github. First publish pushes the branch if github does not yet have it and creates the github PR (sets `pr_number` on the Workspace); a branch that cannot be pushed/opened surfaces github's error here (e.g. 422), never at create. Subsequent publishes push new review activity (storyline edits and any pending comments) against the same PR. Repeating publish is the normal lifecycle — the workspace is reusable across publish cycles.
+_Avoid_: "submit" (used inside publish for the github Review event), "send".
 
 **Workspace lifetime**:
 A Workspace outlives the github PR it points to. PR close / merge does not delete the Workspace — reads stay available and the author can resume Self-Review on the same branch, edit the Storyline, and re-publish (re-opening a PR if needed). There is **no archive concept**: mutability follows the github PR state strictly (closed PR → frozen workspace; reopened PR → thawed). See `docs/design.md` § 8.

@@ -39,8 +39,23 @@ from apps.workspaces.services import (
     pull_request_reopen,
     storyline_replace,
     workspace_create,
+    workspace_delete,
     workspace_update_local_phase,
 )
+
+
+def _overview_cache_key(user_pk: int | None, owner: str, repo: str) -> str:
+    """Cache key for RepoOverviewApi, shared with the create/delete handlers
+    that must bust it. Single source of truth so the three sites can't drift."""
+    return f"overview:{user_pk}:{owner}/{repo}"
+
+
+def _assert_pre_publish_visible(ws: Workspace, user_pk: int | None) -> None:
+    """A pre-publish workspace is creator-private: a non-creator must not learn
+    it exists (404, not 403). Shared by the GET / storyline / delete handlers so
+    the privacy predicate can't drift across the three sites."""
+    if ws.pr_number is None and user_pk != ws.created_by_id:
+        raise ApplicationError("Not found", status=404)
 
 
 class WorkspaceListApi(APIView):
@@ -52,6 +67,15 @@ class WorkspaceListApi(APIView):
         serializer = WorkspaceCreateInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         ws = workspace_create(creator=cast(User, request.user), **serializer.validated_data)
+        # The overview is cached per (user, repo) for 30s (see RepoOverviewApi).
+        # Bust it so the new workspace shows up immediately.
+        cache.delete(
+            _overview_cache_key(
+                request.user.pk,
+                serializer.validated_data["repo_owner"],
+                serializer.validated_data["repo_name"],
+            )
+        )
         return Response(WorkspaceOutputSerializer(ws).data, status=status.HTTP_201_CREATED)
 
 
@@ -62,7 +86,7 @@ class RepoOverviewApi(APIView):
     """
 
     def get(self, request: Request, owner: str, repo: str) -> Response:
-        cache_key = f"overview:{request.user.pk}:{owner}/{repo}"
+        cache_key = _overview_cache_key(request.user.pk, owner, repo)
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached)
@@ -110,8 +134,7 @@ class WorkspaceDetailApi(APIView):
 
     def get(self, request: Request, workspace_id: uuid.UUID) -> Response:
         ws = self._get_workspace(workspace_id)
-        if ws.pr_number is None and request.user.pk != ws.created_by_id:
-            raise ApplicationError("Not found", status=404)
+        _assert_pre_publish_visible(ws, request.user.pk)
         return Response(WorkspaceOutputSerializer(ws).data)
 
     def patch(self, request: Request, workspace_id: uuid.UUID) -> Response:
@@ -123,12 +146,18 @@ class WorkspaceDetailApi(APIView):
         )
         return Response(WorkspaceOutputSerializer(updated).data)
 
+    def delete(self, request: Request, workspace_id: uuid.UUID) -> Response:
+        ws = self._get_workspace(workspace_id)
+        _assert_pre_publish_visible(ws, request.user.pk)
+        workspace_delete(workspace=ws, user=cast(User, request.user))
+        cache.delete(_overview_cache_key(request.user.pk, ws.repo_owner, ws.repo_name))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class StorylineDetailApi(APIView):
     def get(self, request: Request, workspace_id: uuid.UUID) -> Response:
         ws = workspace_get(workspace_id=workspace_id)
-        if ws.pr_number is None and request.user.pk != ws.created_by_id:
-            raise ApplicationError("Not found", status=404)
+        _assert_pre_publish_visible(ws, request.user.pk)
         with make_user_gateway(cast(User, request.user)) as g:
             data, etag = storyline_read(workspace=ws, gateway=g)
         response = Response(data)

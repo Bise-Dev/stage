@@ -162,3 +162,20 @@ export const authLogout = () => invoke<void>('auth_logout');
 // --- GitHub proxy ---
 export const githubPrs = (role: 'author' | 'reviewer') =>
   invoke<GithubPrSearchItem[]>('github_prs', { role });
+
+// --- Workspaces ---
+export type WorkspaceCreateInput = {
+  repoOwner: string;
+  repoName: string;
+  headRef: string;
+  baseRef: string;
+  title: string;
+};
+
+// Returns the created workspace as raw JSON; the caller ignores the body and
+// re-fetches the overview instead (see docs/adr/0009 + the create-workspace spec).
+export const workspaceCreate = (input: WorkspaceCreateInput) =>
+  invoke<unknown>('workspace_create', input);
+
+export const workspaceDelete = (workspaceId: string) =>
+  invoke<void>('workspace_delete', { workspaceId });
