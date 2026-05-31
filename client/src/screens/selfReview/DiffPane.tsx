@@ -1,6 +1,6 @@
 import { DiffModeEnum, DiffViewWithMultiSelect, SplitSide } from '@git-diff-view/react';
 import '@git-diff-view/react/styles/diff-view.css';
-import { type Ref, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import { type Ref, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Icon } from '../../components/Icon';
 import type { SelfReviewFileChange } from '../../tauri';
 import { Composer } from './Composer';
@@ -114,33 +114,150 @@ export function DiffPane({
         </div>
       ) : (
         visibleFiles.map((f) => (
-          <div
+          <LazyFileBlock
             key={f.path}
-            ref={(el) => {
+            file={f}
+            registerRef={(el) => {
               if (el) fileRefs.current.set(f.path, el);
               else fileRefs.current.delete(f.path);
             }}
-          >
-            <FileBlock
-              file={f}
-              viewMode={viewMode}
-              isViewed={viewed.has(f.path)}
-              onToggleViewed={() => onToggleViewed(f.path)}
-              comments={comments.filter((c) => c.anchor.filePath === f.path)}
-              composer={composer}
-              onStartFileComment={onStartFileComment}
-              onStartReply={onStartReply}
-              onSaveComposer={onSaveComposer}
-              onSaveLineComment={onSaveLineComment}
-              onCancelComposer={onCancelComposer}
-              onDeleteComment={onDeleteComment}
-            />
-          </div>
+            viewMode={viewMode}
+            isViewed={viewed.has(f.path)}
+            onToggleViewed={() => onToggleViewed(f.path)}
+            comments={comments.filter((c) => c.anchor.filePath === f.path)}
+            composer={composer}
+            onStartFileComment={onStartFileComment}
+            onStartReply={onStartReply}
+            onSaveComposer={onSaveComposer}
+            onSaveLineComment={onSaveLineComment}
+            onCancelComposer={onCancelComposer}
+            onDeleteComment={onDeleteComment}
+          />
         ))
       )}
     </div>
   );
 }
+
+/**
+ * Lazy-mount wrapper around FileBlock for the `scroll` layout. Big PRs
+ * stacked all the FileBlocks at once paid the tokenize-and-render cost
+ * eagerly for every file, which made scrolling and even typing in a
+ * composer noticeably laggy. Each file now starts as a fixed-height
+ * placeholder and swaps in the real FileBlock once it crosses near the
+ * viewport (IntersectionObserver with a 600px rootMargin). Once mounted
+ * it stays mounted — unmounting would lose composer state and comments
+ * in flight.
+ */
+type LazyFileBlockProps = Omit<FileBlockProps, 'file'> & {
+  file: SelfReviewFileChange;
+  registerRef(el: HTMLDivElement | null): void;
+};
+function LazyFileBlock({ registerRef, ...rest }: LazyFileBlockProps) {
+  const [mounted, setMounted] = useState(false);
+  const localRef = useRef<HTMLDivElement>(null);
+  const setRef = (el: HTMLDivElement | null) => {
+    localRef.current = el;
+    registerRef(el);
+  };
+
+  useEffect(() => {
+    if (mounted) return;
+    const node = localRef.current;
+    if (!node) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setMounted(true);
+          obs.disconnect();
+        }
+      },
+      // Preload before they hit the viewport so scrolling feels smooth.
+      { rootMargin: '600px' },
+    );
+    obs.observe(node);
+    return () => obs.disconnect();
+  }, [mounted]);
+
+  if (mounted) {
+    return (
+      <div ref={setRef}>
+        <FileBlock {...rest} />
+      </div>
+    );
+  }
+
+  // Cheap estimate of the rendered block's height so the scrollbar stays
+  // close to truthful before the real mount. 18px per line + ~80px chrome,
+  // clamped so a 10k-line file doesn't reserve the whole window.
+  const lines = rest.file.additions + rest.file.deletions;
+  const estimated = Math.min(800, 80 + lines * 18);
+  const badge = STATUS_BADGE[rest.file.status];
+  return (
+    <div
+      ref={setRef}
+      style={{
+        background: '#fff',
+        border: '1px solid var(--hairline)',
+        borderRadius: 'var(--r-md)',
+        marginBottom: 14,
+        minHeight: estimated,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <div
+        style={{
+          height: 36,
+          flex: '0 0 36px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '0 14px',
+          borderBottom: '1px solid var(--hairline)',
+        }}
+      >
+        <span
+          className="mono"
+          style={{ fontSize: 12.5, color: 'var(--gray-800)', fontWeight: 500 }}
+        >
+          {rest.file.path}
+        </span>
+        <span className={`badge ${badge.cls}`}>{badge.label}</span>
+        <span style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>
+          +{rest.file.additions} −{rest.file.deletions}
+        </span>
+      </div>
+      <div
+        style={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 11.5,
+          color: 'var(--gray-400)',
+        }}
+      >
+        scroll to load
+      </div>
+    </div>
+  );
+}
+
+type FileBlockProps = {
+  file: SelfReviewFileChange;
+  viewMode: ViewMode;
+  isViewed: boolean;
+  onToggleViewed(): void;
+  comments: Comment[];
+  composer: ComposerTarget | null;
+  onStartFileComment(filePath: string): void;
+  onStartReply(parentId: string): void;
+  onSaveComposer(body: string): void;
+  onSaveLineComment(anchor: LineAnchor, body: string): void;
+  onCancelComposer(): void;
+  onDeleteComment(id: string): void;
+};
 
 function FileBlock({
   file,
@@ -155,20 +272,7 @@ function FileBlock({
   onSaveLineComment,
   onCancelComposer,
   onDeleteComment,
-}: {
-  file: SelfReviewFileChange;
-  viewMode: ViewMode;
-  isViewed: boolean;
-  onToggleViewed(): void;
-  comments: Comment[];
-  composer: ComposerTarget | null;
-  onStartFileComment(filePath: string): void;
-  onStartReply(parentId: string): void;
-  onSaveComposer(body: string): void;
-  onSaveLineComment(anchor: LineAnchor, body: string): void;
-  onCancelComposer(): void;
-  onDeleteComment(id: string): void;
-}) {
+}: FileBlockProps) {
   const badge = STATUS_BADGE[file.status];
 
   const fileLevel = comments.filter((c) => c.anchor.kind === 'file');
