@@ -5,6 +5,7 @@ import { Icon } from '../../components/Icon';
 import type { SelfReviewFileChange } from '../../tauri';
 import { Composer } from './Composer';
 import { Thread } from './Thread';
+import { inferDiffLanguage } from './markdown';
 import type { Comment, ComposerTarget, LineAnchor, Side } from './types';
 
 const STATUS_BADGE = {
@@ -179,14 +180,18 @@ function FileBlock({
   // render makes it rebuild the DiffFile, and a downstream useEffect then
   // clears the widget store — so clicking "+" never opens the slot. Only
   // rebuild when the actual patch content changes.
-  const diffData = useMemo(
-    () => ({
-      oldFile: { fileName: file.oldPath ?? file.path },
-      newFile: { fileName: file.path },
+  const diffData = useMemo(() => {
+    // Only set `fileLang` when we know it's a lowlight-supported language;
+    // unknown extensions (e.g. `bun.lock`) trip a noisy "not support current
+    // lang: <ext> yet" warning otherwise. The library falls back to a plain
+    // (unhighlighted) render when fileLang is absent.
+    const lang = inferDiffLanguage(file.path);
+    return {
+      oldFile: { fileName: file.oldPath ?? file.path, fileLang: lang },
+      newFile: { fileName: file.path, fileLang: lang },
       hunks: [file.patch],
-    }),
-    [file.path, file.oldPath, file.patch],
-  );
+    };
+  }, [file.path, file.oldPath, file.patch]);
 
   // Bucket inline comments by side + line for the library's extendData API.
   const extendData = useMemo(() => {

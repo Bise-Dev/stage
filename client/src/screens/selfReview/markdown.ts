@@ -179,3 +179,13 @@ function inferLanguage(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
   return EXT_TO_LANG[ext] ?? '';
 }
+
+/**
+ * Same map, exported for callers that need to decide whether to pass
+ * `fileLang` to the diff renderer at all (passing an unknown extension
+ * triggers the lowlight `"not support current lang: <ext> yet"` warning).
+ */
+export function inferDiffLanguage(path: string): string | undefined {
+  const lang = inferLanguage(path);
+  return lang ? lang : undefined;
+}
