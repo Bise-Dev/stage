@@ -36,6 +36,47 @@ export type DiffStats = { added: number; removed: number };
 export const gitDiffStats = (baseRef: string, headRef: string) =>
   invoke<DiffStats>('git_diff_stats', { baseRef, headRef });
 
+// --- Self-Review diff (see docs/adr/0010, CONTEXT.md "Self-Review") ---
+export type SelfReviewScope = 'workdir' | 'base';
+export type FileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
+
+export type SelfReviewFileChange = {
+  path: string;
+  oldPath: string | null;
+  status: FileStatus;
+  additions: number;
+  deletions: number;
+  /** Unified-diff text. Empty when `isBinary`. Clipped at 256 KB when `isTruncated`. */
+  patch: string;
+  isBinary: boolean;
+  isTruncated: boolean;
+};
+
+export type SelfReviewStats = {
+  added: number;
+  removed: number;
+  filesChanged: number;
+};
+
+export type SelfReviewDiff = {
+  currentBranch: string;
+  scope: SelfReviewScope;
+  /** Only set when `scope === 'base'`. */
+  baseRef: string | null;
+  /** Short HEAD sha (8 chars). Used by the frontend for stale-anchor detection. */
+  headSha: string;
+  files: SelfReviewFileChange[];
+  stats: SelfReviewStats;
+};
+
+/**
+ * Compute the diff the Self-Review screen renders. `baseRef` is required when
+ * `scope === 'base'` and ignored otherwise; the active repo is resolved on
+ * the Rust side from app state, not passed from the frontend.
+ */
+export const selfReviewDiff = (scope: SelfReviewScope, baseRef: string | null) =>
+  invoke<SelfReviewDiff>('self_review_diff', { scope, baseRef });
+
 export const gitFetch = () => invoke<FetchOutcome>('git_fetch');
 
 // --- Repo overview (Stage + GitHub aggregation; see docs/adr/0009) ---

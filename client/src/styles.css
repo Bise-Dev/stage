@@ -150,6 +150,42 @@ body {
   padding: 0 14px;
   font-size: 13px;
 }
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* Segmented control — children may be <div> or <button> (we keep the button
+   variant a11y-honest and reset its native chrome to match the divs from
+   the design's tokens.css). */
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 7px;
+  height: 24px;
+  align-items: center;
+}
+.seg > * {
+  padding: 0 10px;
+  height: 20px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-700);
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  cursor: default;
+}
+.seg > .active {
+  background: #fff;
+  color: var(--gray-900);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+}
 
 /* Badges */
 .badge {
@@ -180,6 +216,47 @@ body {
 .badge-purple {
   background: rgba(175, 82, 222, 0.14);
   color: #7b2cab;
+}
+
+/* Self-Review: visual "+" affordance on line-number hover.
+   Purely cosmetic — `pointer-events: none` lets every pointerdown/mouseup
+   pass through to the @git-diff-view multi-select manager, which is what
+   actually opens the composer (see DiffPane.tsx). The library's built-in
+   "+" was a real <button> that called e.stopPropagation() and killed the
+   drag, which is why we disable `diffViewAddWidget` and provide this
+   instead.
+
+   We target the line-number <td> (the library already gives it
+   `position: relative` and the classes below), not the inner <span>.
+   This makes the hitbox the whole gutter cell — in unified mode that
+   single cell holds both old+new line-number spans, so the "+" shows
+   once anywhere in the row's gutter; in split mode each side has its
+   own cell, so the "+" follows whichever side you're hovering. */
+.self-review-diff td.diff-line-num,
+.self-review-diff td.diff-line-old-num,
+.self-review-diff td.diff-line-new-num {
+  cursor: cell;
+}
+.self-review-diff td.diff-line-num:hover::after,
+.self-review-diff td.diff-line-old-num:hover::after,
+.self-review-diff td.diff-line-new-num:hover::after {
+  content: "+";
+  position: absolute;
+  right: -8px;
+  top: 50%;
+  transform: translate(50%, -50%);
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  z-index: 2;
 }
 
 /* Avatar */
