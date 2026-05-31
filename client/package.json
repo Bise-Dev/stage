@@ -13,11 +13,13 @@
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
+    "@git-diff-view/react": "^0.1.5",
     "@tauri-apps/api": "^2.1.1",
     "@tauri-apps/plugin-dialog": "^2.0.1",
     "@tauri-apps/plugin-store": "^2.4.3",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "shiki": "^4.1.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

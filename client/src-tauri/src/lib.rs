@@ -83,6 +83,7 @@ pub fn run() {
             commands::repo_summary,
             commands::git_local_branches,
             commands::git_diff_stats,
+            commands::self_review_diff,
             commands::repo_overview,
             commands::workspace_create,
             commands::workspace_delete,

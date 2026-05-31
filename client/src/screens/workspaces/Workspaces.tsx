@@ -57,9 +57,11 @@ function slugFromRemote(url: string | null): string | null {
 export function Workspaces({
   user,
   onChangeRepo,
+  onStartSelfReview,
 }: {
   user: User;
   onChangeRepo: () => void;
+  onStartSelfReview: () => void;
 }) {
   const me = user.github_login;
   const [repoSlug, setRepoSlug] = useState<string | null>(null);
@@ -552,6 +554,7 @@ export function Workspaces({
                           b={b}
                           stats={diffStats[b.name]}
                           onReadyToShare={ghRepo ? openNewWorkspace : undefined}
+                          onStartSelfReview={onStartSelfReview}
                         />
                       ))}
                     </Bucket>
@@ -1089,10 +1092,12 @@ function BranchRowCompact({
   b,
   stats,
   onReadyToShare,
+  onStartSelfReview,
 }: {
   b: BranchInfo;
   stats?: DiffStats;
   onReadyToShare?: (branch: string) => void;
+  onStartSelfReview: () => void;
 }) {
   return (
     <div style={rowShell()}>
@@ -1141,13 +1146,14 @@ function BranchRowCompact({
           </span>
         </div>
       </div>
-      <button
-        type="button"
-        className="btn"
-        onClick={() => console.info('workspaces_self_review_stub', b.name)}
-      >
-        <Icon name="play" size={10} color="var(--gray-700)" /> Self-Review
-      </button>
+      {/* Q6: Self-Review only on the currently-checked-out branch. The diff
+          fundamentally describes the working tree of HEAD; we don't want a
+          button that pretends to work on non-current branches. */}
+      {b.isHead && (
+        <button type="button" className="btn" onClick={onStartSelfReview}>
+          <Icon name="play" size={10} color="var(--gray-700)" /> Self-Review
+        </button>
+      )}
       {onReadyToShare && (
         <button type="button" className="btn btn-primary" onClick={() => onReadyToShare(b.name)}>
           <Icon name="plus" size={10} color="#fff" /> Ready to share

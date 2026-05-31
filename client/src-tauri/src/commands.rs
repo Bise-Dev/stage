@@ -82,6 +82,30 @@ pub fn git_local_branches(state: State<'_, AppState>) -> Result<Vec<git::BranchI
 }
 
 #[tauri::command]
+pub fn self_review_diff(
+    state: State<'_, AppState>,
+    scope: String,
+    base_ref: Option<String>,
+) -> Result<git::SelfReviewDiff, AppError> {
+    let path = state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| a.path.clone())
+        .ok_or(AppError::NoActiveRepo)?;
+    let scope = match scope.as_str() {
+        "workdir" => git::SelfReviewScope::Workdir,
+        "base" => git::SelfReviewScope::Base,
+        other => {
+            return Err(AppError::Backend(format!(
+                "self_review_diff: invalid scope '{other}' (expected 'workdir' or 'base')"
+            )));
+        }
+    };
+    git::self_review_diff(&path, scope, base_ref.as_deref())
+}
+
+#[tauri::command]
 pub fn git_diff_stats(
     state: State<'_, AppState>,
     base_ref: String,

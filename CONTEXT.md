@@ -37,7 +37,7 @@ The author's chosen narrative for how a reviewer should walk through the change 
 _Avoid_: Tour, walkthrough, guide.
 
 **Self-Review**:
-An iterative, author-only stage in which the author inspects their own evolving diff to gain an improved overview of their current changes and guide further implementation work (with or without an agent). It lives as long as the author keeps editing the branch and ends when they are happy with the change. Distinct from the Storyline: a Self-Review is a working aid for the author; a Storyline is the artifact handed to reviewers. **Today the client is sign-in-first** — github is Stage's IDP (ADR-0008), so the author authenticates against the Stage backend before reaching any workspace surface, Self-Review included. A pure local-only Self-Review screen (no Stage backend, no auth) is a possible future direction, not current behavior.
+An iterative, author-only stage in which the author inspects their own evolving diff to gain an improved overview of their current changes and guide further implementation work (with or without an agent). It lives as long as the author keeps editing the branch and ends when they are happy with the change. Distinct from the Storyline: a Self-Review is a working aid for the author; a Storyline is the artifact handed to reviewers. By default Self-Review compares the working tree against `HEAD` (uncommitted only); the author can toggle to a branch-vs-default-branch view that includes committed work. **Does not require Stage authentication** — the client can operate fully local-only during Self-Review; the device-flow login is triggered the first time the author hits "Ready to share".
 _Avoid_: Local review, pre-flight, draft review.
 
 **Ready to share** (state, gesture):

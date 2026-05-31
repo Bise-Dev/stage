@@ -2,10 +2,11 @@ import { useCallback, useState } from 'react';
 
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { SignIn } from './screens/onboarding/SignIn';
+import { SelfReview } from './screens/selfReview/SelfReview';
 import { Workspaces } from './screens/workspaces/Workspaces';
 import type { User } from './tauri';
 
-type View = 'signIn' | 'openRepo' | 'workspace';
+type View = 'signIn' | 'openRepo' | 'workspaces' | 'selfReview';
 
 export function App() {
   const [view, setView] = useState<View>('signIn');
@@ -19,10 +20,12 @@ export function App() {
 
   const onRepoOpened = useCallback(() => {
     setHasRepo(true);
-    setView('workspace');
+    setView('workspaces');
   }, []);
 
   const changeRepo = useCallback(() => setView('openRepo'), []);
+  const startSelfReview = useCallback(() => setView('selfReview'), []);
+  const exitSelfReview = useCallback(() => setView('workspaces'), []);
 
   if (view === 'signIn') return <SignIn onAuthenticated={onAuthenticated} />;
   if (view === 'openRepo') {
@@ -31,13 +34,16 @@ export function App() {
     return (
       <OpenRepository
         onOpened={onRepoOpened}
-        onBack={hasRepo ? () => setView('workspace') : undefined}
+        onBack={hasRepo ? () => setView('workspaces') : undefined}
       />
     );
+  }
+  if (view === 'selfReview') {
+    return <SelfReview onExit={exitSelfReview} />;
   }
   if (!user) {
     // Defensive: should be unreachable, but biome wants explicit null guard.
     return null;
   }
-  return <Workspaces user={user} onChangeRepo={changeRepo} />;
+  return <Workspaces user={user} onChangeRepo={changeRepo} onStartSelfReview={startSelfReview} />;
 }
