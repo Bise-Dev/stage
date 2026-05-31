@@ -347,3 +347,108 @@ body {
 .stage * {
   scrollbar-width: none;
 }
+
+/* Rendered markdown (storyline intros). Tailwind preflight strips heading/list
+   styling, so restore the tags react-markdown emits, scoped to the .md wrapper. */
+.md {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--gray-800);
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md > :last-child {
+  margin-bottom: 0;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 1em 0 0.4em;
+  color: var(--gray-900);
+}
+.md h1 {
+  font-size: 1.5em;
+}
+.md h2 {
+  font-size: 1.25em;
+}
+.md h3 {
+  font-size: 1.1em;
+}
+.md h4 {
+  font-size: 1em;
+}
+.md p {
+  margin: 0.5em 0;
+}
+.md ul,
+.md ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+.md ul {
+  list-style: disc;
+}
+.md ol {
+  list-style: decimal;
+}
+.md li {
+  margin: 0.15em 0;
+}
+.md a {
+  color: var(--blue);
+  text-decoration: none;
+}
+.md a:hover {
+  text-decoration: underline;
+}
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--gray-100);
+  padding: 0.1em 0.3em;
+  border-radius: var(--r-sm);
+}
+.md pre {
+  background: var(--gray-100);
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  overflow: auto;
+  margin: 0.5em 0;
+}
+.md pre code {
+  background: none;
+  padding: 0;
+}
+.md blockquote {
+  margin: 0.5em 0;
+  padding-left: 0.8em;
+  border-left: 3px solid var(--gray-200);
+  color: var(--gray-600);
+}
+.md table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+}
+.md th,
+.md td {
+  border: 1px solid var(--hairline);
+  padding: 4px 8px;
+  text-align: left;
+}
+.md th {
+  background: var(--gray-75);
+  font-weight: 600;
+}
+.md hr {
+  border: none;
+  border-top: 1px solid var(--hairline);
+  margin: 1em 0;
+}
+.md img {
+  max-width: 100%;
+}

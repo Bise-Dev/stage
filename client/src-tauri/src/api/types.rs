@@ -40,6 +40,38 @@ pub struct GithubPrSearchItem {
     pub user: GithubUserRef,
 }
 
+/// One storyline step as returned by GET/PUT `/workspaces/{id}/storyline/`.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct StorylineFileDto {
+    pub id: String,
+    pub diff_file_path: String,
+    pub order_index: i64,
+    pub title: String,
+    pub intro_text: String,
+    pub stale: bool,
+    pub stale_reason: Option<String>,
+}
+
+/// The full storyline payload (`storyline_read` shape). `etag` drives optimistic
+/// concurrency on PUT; `head_sha` is null pre-publish.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct StorylineDto {
+    pub etag: String,
+    pub head_sha: Option<String>,
+    pub files: Vec<StorylineFileDto>,
+}
+
+/// One step as sent from the webview into the `storyline_update` command.
+/// camelCase on the wire (webview convention); the SDK maps it to the backend's
+/// snake_case body explicitly (see `Client::storyline_update`).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorylineFileWrite {
+    pub diff_file_path: String,
+    pub order_index: i64,
+    pub intro_text: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +120,43 @@ mod tests {
         assert_eq!(s.session_token, "stg_eyJhbG_opaque");
         assert_eq!(s.user.github_login, "octocat");
         assert_eq!(s.user.id, 42);
+    }
+
+    #[test]
+    fn storyline_dto_deserializes_backend_payload() {
+        let json = serde_json::json!({
+            "etag": "e1",
+            "head_sha": null,
+            "files": [
+                {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "diff_file_path": "src/a.py",
+                    "order_index": 0,
+                    "title": "",
+                    "intro_text": "why a",
+                    "stale": false,
+                    "stale_reason": null
+                }
+            ]
+        });
+        let dto: StorylineDto = serde_json::from_value(json).unwrap();
+        assert_eq!(dto.etag, "e1");
+        assert!(dto.head_sha.is_none());
+        assert_eq!(dto.files.len(), 1);
+        assert_eq!(dto.files[0].diff_file_path, "src/a.py");
+        assert_eq!(dto.files[0].intro_text, "why a");
+    }
+
+    #[test]
+    fn storyline_file_write_reads_camelcase_from_webview() {
+        let json = serde_json::json!({
+            "diffFilePath": "src/a.py",
+            "orderIndex": 2,
+            "introText": "note"
+        });
+        let w: StorylineFileWrite = serde_json::from_value(json).unwrap();
+        assert_eq!(w.diff_file_path, "src/a.py");
+        assert_eq!(w.order_index, 2);
+        assert_eq!(w.intro_text, "note");
     }
 }

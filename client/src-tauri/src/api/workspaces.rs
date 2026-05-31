@@ -1,5 +1,6 @@
 use super::client::Client;
 use super::error::Error;
+use super::types::{StorylineDto, StorylineFileWrite};
 
 impl Client {
     /// Create a Stage workspace (pure backend DB record; no GitHub call).
@@ -26,6 +27,65 @@ impl Client {
             .http
             .post(url)
             .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        resp.json().await.map_err(|e| Self::json_err(status, e))
+    }
+
+    /// Read a workspace's storyline. GET /api/v1/workspaces/{id}/storyline/.
+    /// `etag` in the returned body drives optimistic concurrency on update.
+    pub async fn storyline_get(
+        &self,
+        token: &str,
+        workspace_id: &str,
+    ) -> Result<StorylineDto, Error> {
+        let url = self
+            .base_url
+            .join(&format!("api/v1/workspaces/{workspace_id}/storyline/"))
+            .unwrap();
+        let resp = self.http.get(url).bearer_auth(token).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        resp.json().await.map_err(|e| Self::json_err(status, e))
+    }
+
+    /// Replace a workspace's storyline. PUT /api/v1/workspaces/{id}/storyline/
+    /// with `If-Match: <etag>` (optimistic concurrency; 409 etag_mismatch on
+    /// stale etag, 412 if the header is missing). Returns the re-read payload
+    /// with the freshly minted etag.
+    pub async fn storyline_update(
+        &self,
+        token: &str,
+        workspace_id: &str,
+        etag: &str,
+        files: &[StorylineFileWrite],
+    ) -> Result<StorylineDto, Error> {
+        let url = self
+            .base_url
+            .join(&format!("api/v1/workspaces/{workspace_id}/storyline/"))
+            .unwrap();
+        let body = serde_json::json!({
+            "files": files
+                .iter()
+                .map(|f| serde_json::json!({
+                    "diff_file_path": f.diff_file_path,
+                    "order_index": f.order_index,
+                    "intro_text": f.intro_text,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        let resp = self
+            .http
+            .put(url)
+            .bearer_auth(token)
+            .header("If-Match", etag)
             .json(&body)
             .send()
             .await?;
@@ -132,6 +192,87 @@ mod tests {
             .workspace_delete("stg_abc", "11111111-1111-1111-1111-111111111111")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn storyline_get_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/api/v1/workspaces/11111111-1111-1111-1111-111111111111/storyline/",
+            ))
+            .and(header_exists("authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "etag": "e1",
+                "head_sha": null,
+                "files": [{
+                    "id": "22222222-2222-2222-2222-222222222222",
+                    "diff_file_path": "src/a.py",
+                    "order_index": 0,
+                    "title": "",
+                    "intro_text": "why",
+                    "stale": false,
+                    "stale_reason": null
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let dto = client
+            .storyline_get("stg_abc", "11111111-1111-1111-1111-111111111111")
+            .await
+            .unwrap();
+        assert_eq!(dto.etag, "e1");
+        assert_eq!(dto.files.len(), 1);
+        assert_eq!(dto.files[0].diff_file_path, "src/a.py");
+    }
+
+    #[tokio::test]
+    async fn storyline_update_sends_if_match_and_snake_case_body() {
+        use crate::api::types::StorylineFileWrite;
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path(
+                "/api/v1/workspaces/11111111-1111-1111-1111-111111111111/storyline/",
+            ))
+            .and(header_exists("authorization"))
+            .and(header_exists("if-match"))
+            .and(body_partial_json(serde_json::json!({
+                "files": [{ "diff_file_path": "src/a.py", "order_index": 0, "intro_text": "why" }]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "etag": "e2",
+                "head_sha": null,
+                "files": [{
+                    "id": "22222222-2222-2222-2222-222222222222",
+                    "diff_file_path": "src/a.py",
+                    "order_index": 0,
+                    "title": "",
+                    "intro_text": "why",
+                    "stale": false,
+                    "stale_reason": null
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let files = vec![StorylineFileWrite {
+            diff_file_path: "src/a.py".into(),
+            order_index: 0,
+            intro_text: "why".into(),
+        }];
+        let dto = client
+            .storyline_update(
+                "stg_abc",
+                "11111111-1111-1111-1111-111111111111",
+                "e1",
+                &files,
+            )
+            .await
+            .unwrap();
+        assert_eq!(dto.etag, "e2");
     }
 
     #[tokio::test]
