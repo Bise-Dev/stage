@@ -113,27 +113,36 @@ export function DiffPane({
             : 'Pick a file from the sidebar.'}
         </div>
       ) : (
-        visibleFiles.map((f) => (
-          <LazyFileBlock
-            key={f.path}
-            file={f}
-            registerRef={(el) => {
-              if (el) fileRefs.current.set(f.path, el);
-              else fileRefs.current.delete(f.path);
-            }}
-            viewMode={viewMode}
-            isViewed={viewed.has(f.path)}
-            onToggleViewed={() => onToggleViewed(f.path)}
-            comments={comments.filter((c) => c.anchor.filePath === f.path)}
-            composer={composer}
-            onStartFileComment={onStartFileComment}
-            onStartReply={onStartReply}
-            onSaveComposer={onSaveComposer}
-            onSaveLineComment={onSaveLineComment}
-            onCancelComposer={onCancelComposer}
-            onDeleteComment={onDeleteComment}
-          />
-        ))
+        visibleFiles.map((f) => {
+          const isViewed = viewed.has(f.path);
+          // Viewed files collapse to a header-only row in scroll mode
+          // (GitHub's behavior — clears clutter as the author moves
+          // through their review). In single mode the user has explicitly
+          // navigated to a file, so don't second-guess them.
+          const collapsed = isViewed && viewLayout === 'scroll';
+          return (
+            <LazyFileBlock
+              key={f.path}
+              file={f}
+              registerRef={(el) => {
+                if (el) fileRefs.current.set(f.path, el);
+                else fileRefs.current.delete(f.path);
+              }}
+              viewMode={viewMode}
+              collapsed={collapsed}
+              isViewed={isViewed}
+              onToggleViewed={() => onToggleViewed(f.path)}
+              comments={comments.filter((c) => c.anchor.filePath === f.path)}
+              composer={composer}
+              onStartFileComment={onStartFileComment}
+              onStartReply={onStartReply}
+              onSaveComposer={onSaveComposer}
+              onSaveLineComment={onSaveLineComment}
+              onCancelComposer={onCancelComposer}
+              onDeleteComment={onDeleteComment}
+            />
+          );
+        })
       )}
     </div>
   );
@@ -161,8 +170,14 @@ function LazyFileBlock({ registerRef, ...rest }: LazyFileBlockProps) {
     registerRef(el);
   };
 
+  // Collapsed files render as a tiny header-only row; no need to defer them
+  // behind an IntersectionObserver — the cost is already minimal and
+  // making them eager keeps the toggle (mark unviewed) immediately
+  // responsive when the user scans the list.
+  const eager = mounted || rest.collapsed;
+
   useEffect(() => {
-    if (mounted) return;
+    if (eager) return;
     const node = localRef.current;
     if (!node) return;
     const obs = new IntersectionObserver(
@@ -177,9 +192,9 @@ function LazyFileBlock({ registerRef, ...rest }: LazyFileBlockProps) {
     );
     obs.observe(node);
     return () => obs.disconnect();
-  }, [mounted]);
+  }, [eager]);
 
-  if (mounted) {
+  if (eager) {
     return (
       <div ref={setRef}>
         <FileBlock {...rest} />
@@ -247,6 +262,9 @@ function LazyFileBlock({ registerRef, ...rest }: LazyFileBlockProps) {
 type FileBlockProps = {
   file: SelfReviewFileChange;
   viewMode: ViewMode;
+  /** When true, render only the header row — the user has marked the file
+   *  viewed and we're in scroll layout (see DiffPane). */
+  collapsed: boolean;
   isViewed: boolean;
   onToggleViewed(): void;
   comments: Comment[];
@@ -262,6 +280,7 @@ type FileBlockProps = {
 function FileBlock({
   file,
   viewMode,
+  collapsed,
   isViewed,
   onToggleViewed,
   comments,
@@ -274,6 +293,57 @@ function FileBlock({
   onDeleteComment,
 }: FileBlockProps) {
   const badge = STATUS_BADGE[file.status];
+
+  // Header-only render when collapsed. We keep the same chrome so the
+  // toggle stays in place — clicking "Viewed" again expands the file back.
+  if (collapsed) {
+    return (
+      <div
+        style={{
+          background: '#fff',
+          border: '1px solid var(--hairline)',
+          borderRadius: 'var(--r-md)',
+          marginBottom: 14,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            height: 36,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '0 14px',
+          }}
+        >
+          <span
+            className="mono"
+            style={{ fontSize: 12.5, color: 'var(--gray-500)', fontWeight: 500 }}
+          >
+            {file.path}
+          </span>
+          <span className={`badge ${badge.cls}`}>{badge.label}</span>
+          <span style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>
+            +{file.additions} −{file.deletions}
+          </span>
+          {comments.length > 0 && (
+            <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>
+              · {comments.length} comment{comments.length === 1 ? '' : 's'}
+            </span>
+          )}
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            className="btn"
+            onClick={onToggleViewed}
+            style={{ background: 'rgba(52,199,89,0.14)', color: 'var(--green-d)' }}
+          >
+            <Icon name="check" size={11} /> Viewed
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const fileLevel = comments.filter((c) => c.anchor.kind === 'file');
   const dangling = comments.filter((c) => c.anchor.kind === 'dangling');
