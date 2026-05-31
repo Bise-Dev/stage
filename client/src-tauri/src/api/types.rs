@@ -46,7 +46,6 @@ pub struct StorylineFileDto {
     pub id: String,
     pub diff_file_path: String,
     pub order_index: i64,
-    pub title: String,
     pub intro_text: String,
     pub stale: bool,
     pub stale_reason: Option<String>,
@@ -132,7 +131,6 @@ mod tests {
                     "id": "11111111-1111-1111-1111-111111111111",
                     "diff_file_path": "src/a.py",
                     "order_index": 0,
-                    "title": "",
                     "intro_text": "why a",
                     "stale": false,
                     "stale_reason": null

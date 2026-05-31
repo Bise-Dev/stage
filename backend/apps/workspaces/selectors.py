@@ -83,7 +83,6 @@ def storyline_read(*, workspace: Workspace, gateway) -> tuple[dict, str]:
                 "id": f.pk,
                 "diff_file_path": f.diff_file_path,
                 "order_index": f.order_index,
-                "title": f.title,
                 "intro_text": f.intro_text,
                 "stale": f.diff_file_path in stale_paths,
                 "stale_reason": "file_removed" if f.diff_file_path in stale_paths else None,

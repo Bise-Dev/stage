@@ -45,7 +45,6 @@ class StorylineFile(BaseModel):
     storyline = models.ForeignKey(Storyline, on_delete=models.CASCADE, related_name="files")
     diff_file_path = models.CharField(max_length=1024)
     order_index = models.IntegerField()
-    title = models.CharField(max_length=255, blank=True, default="")
     intro_text = models.TextField(blank=True, default="")
 
     class Meta:  # pyrefly: ignore[bad-override]

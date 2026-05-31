@@ -134,7 +134,13 @@ export function Storyline({
   };
 
   const save = async () => {
-    if (etag === null) return;
+    if (etag === null) {
+      // Fail loud (CLAUDE.md): Save is reachable only after a successful load
+      // (the button is disabled until `etag` is set). If a future trigger ever
+      // bypasses that guard, surface it rather than silently no-op'ing.
+      setSaveError("Can't save — the storyline hasn't loaded yet. Reload and try again.");
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -154,9 +160,9 @@ export function Storyline({
       // (no auto-reload — that would clobber the edits that lost the race). The
       // 409 conflict path is effectively unreachable in v1 (single author, single
       // client, pre-publish) — kept for the post-publish multi-writer future.
-      // Known wart: the backend raises etag_mismatch / workspace_frozen as a bare
-      // code in `message`, so on those (dead-in-v1) paths the banner shows a raw
-      // token until that base-branch gap is fixed. Other errors carry human text.
+      // Known wart: on etag_mismatch the backend puts a bare code in `message`,
+      // so that (dead-in-v1) path shows `etag_mismatch` in the banner until the
+      // base-branch gap is fixed. workspace_frozen and other errors carry human text.
       console.warn('storyline_save_failed', e);
       setSaveError(msgOf(e));
     } finally {
@@ -464,7 +470,7 @@ export function Storyline({
                       )}
                     </div>
                   )}
-                  {/* Per-file diff renders here next slice (spec §10). */}
+                  {/* Per-file diff renders here in a later slice. */}
                 </div>
               )}
             </div>

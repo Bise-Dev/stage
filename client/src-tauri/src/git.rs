@@ -169,8 +169,8 @@ pub fn diff_files(
             git2::Delta::Added => "A",
             git2::Delta::Deleted => "D",
             git2::Delta::Modified => "M",
-            git2::Delta::Renamed => "R",
-            git2::Delta::Copied => "C",
+            // No Renamed/Copied: rename detection is off (see the fn doc), so a
+            // rename surfaces as a Deleted + Added pair, never Delta::Renamed.
             _ => "?",
         }
         .to_string();

@@ -38,7 +38,8 @@ export const gitDiffStats = (baseRef: string, headRef: string) =>
 
 export type ChangedFile = {
   path: string;
-  /** "A" added · "M" modified · "D" deleted · "R" renamed · "C" copied · "?" other. */
+  /** "A" added · "M" modified · "D" deleted · "?" other. Rename detection is off,
+   * so a rename surfaces as a "D" + "A" pair (see `diff_files` in git.rs). */
   status: string;
   added: number;
   removed: number;
@@ -204,7 +205,6 @@ export type StorylineFile = {
   id: string;
   diff_file_path: string;
   order_index: number;
-  title: string;
   intro_text: string;
   stale: boolean;
   stale_reason: string | null;

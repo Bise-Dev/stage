@@ -209,7 +209,6 @@ mod tests {
                     "id": "22222222-2222-2222-2222-222222222222",
                     "diff_file_path": "src/a.py",
                     "order_index": 0,
-                    "title": "",
                     "intro_text": "why",
                     "stale": false,
                     "stale_reason": null
@@ -248,7 +247,6 @@ mod tests {
                     "id": "22222222-2222-2222-2222-222222222222",
                     "diff_file_path": "src/a.py",
                     "order_index": 0,
-                    "title": "",
                     "intro_text": "why",
                     "stale": false,
                     "stale_reason": null
