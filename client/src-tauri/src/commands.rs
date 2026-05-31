@@ -121,6 +121,21 @@ pub fn git_diff_stats(
 }
 
 #[tauri::command]
+pub fn git_diff_files(
+    state: State<'_, AppState>,
+    base_ref: String,
+    head_ref: String,
+) -> Result<Vec<git::ChangedFile>, AppError> {
+    let path = state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| a.path.clone())
+        .ok_or(AppError::NoActiveRepo)?;
+    git::diff_files(&path, &base_ref, &head_ref)
+}
+
+#[tauri::command]
 pub async fn repo_overview(
     state: tauri::State<'_, AppState>,
     owner: String,
@@ -265,6 +280,31 @@ pub async fn workspace_delete(
     let token = state.require_token()?;
     state.api.workspace_delete(&token, &workspace_id).await?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn storyline_get(
+    state: tauri::State<'_, AppState>,
+    workspace_id: String,
+) -> Result<api::StorylineDto, AppError> {
+    let token = state.require_token()?;
+    let dto = state.api.storyline_get(&token, &workspace_id).await?;
+    Ok(dto)
+}
+
+#[tauri::command]
+pub async fn storyline_update(
+    state: tauri::State<'_, AppState>,
+    workspace_id: String,
+    etag: String,
+    files: Vec<api::StorylineFileWrite>,
+) -> Result<api::StorylineDto, AppError> {
+    let token = state.require_token()?;
+    let dto = state
+        .api
+        .storyline_update(&token, &workspace_id, &etag, &files)
+        .await?;
+    Ok(dto)
 }
 
 #[tauri::command]

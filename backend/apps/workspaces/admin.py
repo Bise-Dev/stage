@@ -29,7 +29,7 @@ class WorkspaceAdmin(ModelAdmin):
 class StorylineFileInline(TabularInline):
     model = StorylineFile
     extra = 0
-    fields = ["order_index", "diff_file_path", "title"]  # noqa: RUF012
+    fields = ["order_index", "diff_file_path"]  # noqa: RUF012
     ordering = ["order_index"]  # noqa: RUF012
 
 
@@ -44,9 +44,9 @@ class StorylineAdmin(ModelAdmin):
 
 @admin.register(StorylineFile)
 class StorylineFileAdmin(ModelAdmin):
-    list_display = ["title", "diff_file_path", "order_index", "storyline"]  # noqa: RUF012
+    list_display = ["diff_file_path", "order_index", "storyline"]  # noqa: RUF012
     list_filter = ["storyline__workspace__repo_owner"]  # noqa: RUF012
-    search_fields = ["title", "diff_file_path"]  # noqa: RUF012
+    search_fields = ["diff_file_path"]  # noqa: RUF012
     autocomplete_fields = ["storyline"]  # noqa: RUF012
     readonly_fields = ["created_at", "updated_at"]  # noqa: RUF012
     ordering = ["storyline", "order_index"]  # noqa: RUF012

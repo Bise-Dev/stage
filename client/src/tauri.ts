@@ -36,6 +36,17 @@ export type DiffStats = { added: number; removed: number };
 export const gitDiffStats = (baseRef: string, headRef: string) =>
   invoke<DiffStats>('git_diff_stats', { baseRef, headRef });
 
+export type ChangedFile = {
+  path: string;
+  /** "A" added · "M" modified · "D" deleted · "?" other. Rename detection is off,
+   * so a rename surfaces as a "D" + "A" pair (see `diff_files` in git.rs). */
+  status: string;
+  added: number;
+  removed: number;
+};
+export const gitDiffFiles = (baseRef: string, headRef: string) =>
+  invoke<ChangedFile[]>('git_diff_files', { baseRef, headRef });
+
 // --- Self-Review diff (see docs/adr/0010, CONTEXT.md "Self-Review") ---
 export type SelfReviewScope = 'workdir' | 'base';
 export type FileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
@@ -172,10 +183,46 @@ export type WorkspaceCreateInput = {
   title: string;
 };
 
-// Returns the created workspace as raw JSON; the caller ignores the body and
-// re-fetches the overview instead (see docs/adr/0009 + the create-workspace spec).
+// The created workspace (subset of WorkspaceOutputSerializer we use to navigate
+// straight into storyline composition). The caller also re-fetches the overview.
+export type WorkspaceCreated = {
+  id: string;
+  repo_owner: string;
+  repo_name: string;
+  head_ref: string;
+  base_ref: string;
+  title: string;
+};
 export const workspaceCreate = (input: WorkspaceCreateInput) =>
-  invoke<unknown>('workspace_create', input);
+  invoke<WorkspaceCreated>('workspace_create', input);
 
 export const workspaceDelete = (workspaceId: string) =>
   invoke<void>('workspace_delete', { workspaceId });
+
+// --- Storyline ---
+// Returned by GET/PUT .../storyline/ (snake_case — matches OverviewRow convention).
+export type StorylineFile = {
+  id: string;
+  diff_file_path: string;
+  order_index: number;
+  intro_text: string;
+  stale: boolean;
+  stale_reason: string | null;
+};
+export type Storyline = {
+  etag: string;
+  head_sha: string | null;
+  files: StorylineFile[];
+};
+// One step sent into storyline_update (camelCase — invoke arg convention).
+export type StorylineFileWrite = {
+  diffFilePath: string;
+  orderIndex: number;
+  introText: string;
+};
+
+export const storylineGet = (workspaceId: string) =>
+  invoke<Storyline>('storyline_get', { workspaceId });
+
+export const storylineUpdate = (workspaceId: string, etag: string, files: StorylineFileWrite[]) =>
+  invoke<Storyline>('storyline_update', { workspaceId, etag, files });

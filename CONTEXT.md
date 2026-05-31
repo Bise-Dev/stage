@@ -41,7 +41,7 @@ An iterative, author-only stage in which the author inspects their own evolving 
 _Avoid_: Local review, pre-flight, draft review.
 
 **Ready to share** (state, gesture):
-The author's explicit "I'm done iterating, now let me prepare what reviewers will see" decision. **Creates the Workspace in the backend** — Self-Review has no Workspace; this gesture is what makes one. After this, the author is in storyline composition.
+The author's explicit "I'm done iterating, now let me prepare what reviewers will see" decision. **Creates the Workspace in the backend** — Self-Review has no Workspace; this gesture is what makes one. After this, the author is in storyline composition. **Implies a committed branch**: by reaching Ready to share the author has committed everything they intend to ship, so storyline composition works against the *settled committed branch diff* — reviewing still-uncommitted, working-tree changes is the earlier Self-Review phase's job, not the storyline's.
 _Avoid_: "share" (overloaded), "publish" (that's the next step).
 
 **Ready to publish** (state, computed):
@@ -66,8 +66,8 @@ For the POC, Stage backend does **not** store a Comment entity. Pre-publish draf
 Discussions on Storyline intros remain a backend entity — github has no equivalent surface.
 
 **Stale step**:
-A Storyline step whose `diff_file_path` no longer matches the current PR head (file removed, renamed, or never existed in the new diff). Detected by the backend on storyline read; surfaced as a flag per step. Backend never auto-fixes; the author edits the storyline to resolve.
-_Avoid_: "broken step", "outdated step" (we use "stale" consistently).
+A Storyline step whose `diff_file_path` is no longer part of the change set the author is composing against (file removed, renamed, or never existed in that change set). One concept, two detection sites depending on lifecycle phase: **pre-publish** the client detects it against the **local branch diff** during storyline composition (no PR exists yet); **post-publish** the backend detects it against the **current PR head** on storyline read. Either way it is surfaced as a flag per step; nothing auto-fixes it — the author edits the storyline to resolve. The two detectors can disagree (the local diff and the eventual PR diff need not match — see *Publish*), which is expected: each reports staleness relative to the change set in view at that phase.
+_Avoid_: "broken step", "outdated step", "orphaned step" (we use "stale" consistently for all detection sites).
 
 **Frozen workspace**:
 A workspace whose github PR is closed or merged. All write endpoints (storyline edit, IntroComment post, github review submission) reject with `409 workspace_frozen`. Reads still work. Re-opening the PR thaws the workspace. There is no manual archive concept; mutability follows the PR's github state strictly.

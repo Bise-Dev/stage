@@ -10,6 +10,7 @@ import {
   type OverviewRow,
   type OverviewWorkspaceRow,
   type User,
+  type WorkspaceCreated,
   type WorkspaceState,
   getActiveRepo,
   gitDiffStats,
@@ -22,6 +23,7 @@ import {
   workspaceCreate,
   workspaceDelete,
 } from '../../tauri';
+import type { StorylineCtx } from '../storyline/Storyline';
 import { relativeTime, relativeTimeFromEpoch } from './data';
 
 type Show = 'all' | 'yours' | 'review';
@@ -58,10 +60,12 @@ export function Workspaces({
   user,
   onChangeRepo,
   onStartSelfReview,
+  onOpenStoryline,
 }: {
   user: User;
   onChangeRepo: () => void;
   onStartSelfReview: () => void;
+  onOpenStoryline: (ctx: StorylineCtx) => void;
 }) {
   const me = user.github_login;
   const [repoSlug, setRepoSlug] = useState<string | null>(null);
@@ -553,8 +557,8 @@ export function Workspaces({
                           key={b.name}
                           b={b}
                           stats={diffStats[b.name]}
-                          onReadyToShare={ghRepo ? openNewWorkspace : undefined}
                           onStartSelfReview={onStartSelfReview}
+                          onReadyToShare={ghRepo ? openNewWorkspace : undefined}
                         />
                       ))}
                     </Bucket>
@@ -573,6 +577,16 @@ export function Workspaces({
                             w={w}
                             stats={wsStats(w)}
                             onBackToSelfReview={ghRepo ? (ws) => setRevertTarget(ws) : undefined}
+                            onOpenStoryline={(ws) =>
+                              onOpenStoryline({
+                                workspaceId: ws.id,
+                                owner: ws.repo_owner,
+                                repo: ws.repo_name,
+                                headRef: ws.head_ref,
+                                baseRef: ws.base_ref,
+                                title: ws.title,
+                              })
+                            }
                           />
                         ))}
                       </Bucket>
@@ -663,7 +677,16 @@ export function Workspaces({
             ghRepo={ghRepo}
             prefillBranch={newWsBranch}
             onClose={() => setNewWsOpen(false)}
-            onCreated={() => loadOverview(ghRepo.owner, ghRepo.repo)}
+            onCreated={(created) =>
+              onOpenStoryline({
+                workspaceId: created.id,
+                owner: created.repo_owner,
+                repo: created.repo_name,
+                headRef: created.head_ref,
+                baseRef: created.base_ref,
+                title: created.title,
+              })
+            }
           />
         )}
         {revertTarget && ghRepo && (
@@ -1091,13 +1114,13 @@ function rowShell(): React.CSSProperties {
 function BranchRowCompact({
   b,
   stats,
-  onReadyToShare,
   onStartSelfReview,
+  onReadyToShare,
 }: {
   b: BranchInfo;
   stats?: DiffStats;
-  onReadyToShare?: (branch: string) => void;
   onStartSelfReview: () => void;
+  onReadyToShare?: (branch: string) => void;
 }) {
   return (
     <div style={rowShell()}>
@@ -1177,11 +1200,13 @@ function WorkspaceRowCompact({
   stats,
   reviewing,
   onBackToSelfReview,
+  onOpenStoryline,
 }: {
   w: OverviewWorkspaceRow;
   stats: { added: number | null; removed: number | null };
   reviewing?: boolean;
   onBackToSelfReview?: (w: OverviewWorkspaceRow) => void;
+  onOpenStoryline?: (w: OverviewWorkspaceRow) => void;
 }) {
   const st = STATES[w.state];
   return (
@@ -1254,6 +1279,17 @@ function WorkspaceRowCompact({
       <div style={{ fontSize: 10.5, color: 'var(--gray-500)', flex: '0 0 auto' }}>
         {relativeTime(w.last_active_at)}
       </div>
+      {onOpenStoryline && (
+        <button
+          type="button"
+          className="btn"
+          onClick={() => onOpenStoryline(w)}
+          title="Open the storyline for this workspace"
+          style={{ flex: '0 0 auto' }}
+        >
+          <Icon name="doc-stack" size={10} color="var(--gray-700)" /> Storyline
+        </button>
+      )}
       {onBackToSelfReview && (
         <button
           type="button"
@@ -1387,7 +1423,7 @@ function NewWorkspaceModal({
   ghRepo: { owner: string; repo: string };
   prefillBranch?: string;
   onClose: () => void;
-  onCreated: () => void | Promise<void>;
+  onCreated: (created: WorkspaceCreated) => void | Promise<void>;
 }) {
   const [headRef, setHeadRef] = useState(prefillBranch ?? branches[0]?.name ?? '');
   const [baseRef, setBaseRef] = useState(defaultBranch ?? 'main');
@@ -1403,17 +1439,15 @@ function NewWorkspaceModal({
     setSubmitting(true);
     setError(null);
     try {
-      await workspaceCreate({
+      const created = await workspaceCreate({
         repoOwner: ghRepo.owner,
         repoName: ghRepo.repo,
         headRef,
         baseRef: baseRef.trim() || 'main',
         title: title.trim(),
       });
-      // Await the refresh so the modal closes only once the new row is in the
-      // list (symmetric with discard); no floating promise.
-      await onCreated();
       onClose();
+      await onCreated(created);
     } catch (e) {
       // Fail loud (CLAUDE.md "Error handling"): surface the backend message
       // verbatim in the modal; never close on a swallowed error.

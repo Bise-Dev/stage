@@ -65,7 +65,6 @@ def storyline_replace(
                 storyline=s,
                 diff_file_path=f["diff_file_path"],
                 order_index=f.get("order_index", idx),
-                title=f.get("title", ""),
                 intro_text=f.get("intro_text", ""),
             )
             for idx, f in enumerate(files)

@@ -11,4 +11,6 @@ mod workspaces;
 
 pub use client::Client;
 pub use error::Error;
-pub use types::{GithubPrSearchItem, SessionData, User};
+pub use types::{
+    GithubPrSearchItem, SessionData, StorylineDto, StorylineFileDto, StorylineFileWrite, User,
+};

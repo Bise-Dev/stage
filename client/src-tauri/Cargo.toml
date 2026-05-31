@@ -33,6 +33,7 @@ rand = "0.8"
 
 [dev-dependencies]
 wiremock = "0.6"
+tempfile = "3"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

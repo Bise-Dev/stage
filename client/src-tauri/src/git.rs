@@ -134,6 +134,82 @@ pub fn diff_stats(repo_path: &Path, base_ref: &str, head_ref: &str) -> Result<Di
 }
 
 #[derive(Serialize)]
+pub struct ChangedFile {
+    pub path: String,
+    /// One of "A" added, "M" modified, "D" deleted, "R" renamed, "C" copied, "?" other.
+    pub status: String,
+    pub added: usize,
+    pub removed: usize,
+}
+
+/// Files changed in `head_ref` since it diverged from `base_ref` (merge-base
+/// tree → head tree), with per-file +/− counts. Same resolution as
+/// [`diff_stats`]; here we enumerate per-file deltas instead of aggregating.
+///
+/// Rename detection is intentionally off (no `find_similar`): a rename surfaces
+/// as a delete + add pair, which is fine for v1's file-ordering UI. Fail-loud
+/// per CLAUDE.md: an unreadable delta/path fails the whole call naming the
+/// offending index rather than silently dropping a file the user can't see.
+pub fn diff_files(
+    repo_path: &Path,
+    base_ref: &str,
+    head_ref: &str,
+) -> Result<Vec<ChangedFile>, AppError> {
+    let repo = Repository::open(repo_path)?;
+    let base_commit = repo.revparse_single(base_ref)?.peel_to_commit()?;
+    let head_commit = repo.revparse_single(head_ref)?.peel_to_commit()?;
+    let merge_base = repo.merge_base(base_commit.id(), head_commit.id())?;
+    let base_tree = repo.find_commit(merge_base)?.tree()?;
+    let head_tree = head_commit.tree()?;
+    let diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), None)?;
+
+    let mut out = Vec::new();
+    for (idx, delta) in diff.deltas().enumerate() {
+        let status = match delta.status() {
+            git2::Delta::Added => "A",
+            git2::Delta::Deleted => "D",
+            git2::Delta::Modified => "M",
+            // No Renamed/Copied: rename detection is off (see the fn doc), so a
+            // rename surfaces as a Deleted + Added pair, never Delta::Renamed.
+            _ => "?",
+        }
+        .to_string();
+        let path = delta
+            .new_file()
+            .path()
+            .or_else(|| delta.old_file().path())
+            .and_then(|p| p.to_str())
+            .ok_or_else(|| {
+                AppError::Backend(format!(
+                    "diff_files: non-UTF-8 or missing path at delta {idx}"
+                ))
+            })?
+            .to_string();
+        let (added, removed) = match git2::Patch::from_diff(&diff, idx) {
+            Ok(Some(patch)) => {
+                let (_context, additions, deletions) = patch.line_stats().map_err(|e| {
+                    AppError::Backend(format!("diff_files: line stats for '{path}' failed: {e}"))
+                })?;
+                (additions, deletions)
+            }
+            Ok(None) => (0, 0), // binary or no textual patch
+            Err(e) => {
+                return Err(AppError::Backend(format!(
+                    "diff_files: patch failed for '{path}': {e}"
+                )))
+            }
+        };
+        out.push(ChangedFile {
+            path,
+            status,
+            added,
+            removed,
+        });
+    }
+    Ok(out)
+}
+
+#[derive(Serialize)]
 pub struct FetchOutcome {
     pub remote: String,
 }
@@ -504,4 +580,57 @@ fn default_branch_for(repo: &Repository) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use git2::{IndexAddOption, Repository, Signature};
+
+    use super::*;
+
+    fn commit_all(repo: &Repository, msg: &str, parent: Option<git2::Oid>) -> git2::Oid {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = Signature::now("t", "t@example.com").unwrap();
+        let parents: Vec<git2::Commit> = parent
+            .map(|p| repo.find_commit(p).unwrap())
+            .into_iter()
+            .collect();
+        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &parent_refs)
+            .unwrap()
+    }
+
+    #[test]
+    fn diff_files_lists_added_modified_and_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+
+        fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        fs::write(dir.path().join("gone.txt"), "bye\n").unwrap();
+        let base = commit_all(&repo, "base", None);
+
+        fs::write(dir.path().join("a.txt"), "one\ntwo\n").unwrap(); // modify
+        fs::write(dir.path().join("b.txt"), "hello\n").unwrap(); // add
+        fs::remove_file(dir.path().join("gone.txt")).unwrap(); // delete
+        let head = commit_all(&repo, "head", Some(base));
+
+        let files = diff_files(dir.path(), &base.to_string(), &head.to_string()).unwrap();
+        let mut got: Vec<(&str, &str)> = files
+            .iter()
+            .map(|f| (f.path.as_str(), f.status.as_str()))
+            .collect();
+        got.sort();
+        assert_eq!(got, vec![("a.txt", "M"), ("b.txt", "A"), ("gone.txt", "D")]);
+
+        let b = files.iter().find(|f| f.path == "b.txt").unwrap();
+        assert_eq!(b.added, 1);
+        assert_eq!(b.removed, 0);
+    }
 }

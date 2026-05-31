@@ -61,7 +61,7 @@ def test_storyline_replace_swaps_files_and_returns_new_etag(author_ws) -> None:
     new = storyline_replace(
         workspace=ws,
         user=user,
-        files=[{"diff_file_path": "new.py", "order_index": 0, "title": "T", "intro_text": "i"}],
+        files=[{"diff_file_path": "new.py", "order_index": 0, "intro_text": "i"}],
         if_match=old,
         gateway=gateway,
     )
@@ -78,7 +78,7 @@ def test_storyline_replace_bumps_last_active(author_ws) -> None:
     storyline_replace(
         workspace=ws,
         user=user,
-        files=[{"diff_file_path": "a.py", "order_index": 0, "title": "", "intro_text": "x"}],
+        files=[{"diff_file_path": "a.py", "order_index": 0, "intro_text": "x"}],
         if_match=ws.storyline.etag,
         gateway=gateway,
     )

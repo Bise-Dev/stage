@@ -60,11 +60,7 @@ def test_storyline_put_writes_files(authed_ws) -> None:
     client, _, ws = authed_ws
     resp = client.put(
         f"/api/v1/workspaces/{ws.id}/storyline/",
-        {
-            "files": [
-                {"diff_file_path": "a.py", "order_index": 0, "title": "Hi", "intro_text": "intro"}
-            ]
-        },
+        {"files": [{"diff_file_path": "a.py", "order_index": 0, "intro_text": "intro"}]},
         format="json",
         HTTP_IF_MATCH=ws.storyline.etag,
     )
