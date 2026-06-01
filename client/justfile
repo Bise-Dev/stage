@@ -13,25 +13,25 @@ build:
 install:
     bun install
 
-# Lint: Biome (TS) + cargo fmt --check
+# Lint: Biome (TS) + cargo fmt --check (whole cargo workspace)
 lint:
     bun run lint
-    cd src-tauri && cargo fmt -- --check
+    cargo fmt --all -- --check
 
 # Clippy (heavier; not on pre-commit, runs via root `just verify` + CI)
 clippy:
-    cd src-tauri && cargo clippy --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
-# Format: Biome (TS) + cargo fmt
+# Format: Biome (TS) + cargo fmt (whole cargo workspace)
 fmt:
     bun run format
-    cd src-tauri && cargo fmt
+    cargo fmt --all
 
-# Typecheck (TS) + cargo check (Rust)
+# Typecheck (TS) + cargo check (whole cargo workspace)
 check:
     bun run typecheck
-    cd src-tauri && cargo check --all-targets
+    cargo check --workspace --all-targets
 
 # Tests
 test:
-    cd src-tauri && cargo test
+    cargo test --workspace

@@ -1,0 +1,23 @@
+[package]
+name = "stage-core"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.77"
+
+[dependencies]
+# `bundled` compiles SQLite from source — no system libsqlite3 dependency, and
+# the same build on every dev machine and in CI.
+rusqlite = { version = "0.40", features = ["bundled"] }
+# Pinned to src-tauri's git2 (0.19) so the workspace links one libgit2-sys.
+git2 = { version = "0.19", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+# Resolves the store directory independently of Tauri (see store::default_store_path).
+directories = "6"
+# Stable hash for the no-remote repo-key fallback. Matches src-tauri's sha2.
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
