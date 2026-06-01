@@ -16,6 +16,9 @@ pub enum StageError {
     /// A domain rule was violated (e.g. a bare repo, an empty payload).
     #[error("{0}")]
     Invalid(String),
+    /// A diff computation failed with extra context beyond the raw git2 error.
+    #[error("{0}")]
+    Diff(String),
     #[error("git: {0}")]
     Git(#[from] git2::Error),
     #[error("store: {0}")]

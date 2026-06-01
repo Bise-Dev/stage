@@ -6,7 +6,7 @@
 //! mirrors the backend Workspace key, easing a future Handoff→Storyline
 //! promotion.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use git2::Repository;
 use sha2::{Digest, Sha256};
@@ -52,9 +52,19 @@ pub fn repo_key_from_cwd(cwd: &Path) -> Result<RepoKey, StageError> {
     })
 }
 
+/// The working-tree root of the git repository containing `cwd`. The `stage`
+/// CLI runs from anywhere inside the repo, so it discovers the root rather than
+/// assuming `cwd` is it; diff helpers want the root.
+pub fn repo_root_from_cwd(cwd: &Path) -> Result<PathBuf, StageError> {
+    let repo = Repository::discover(cwd).map_err(|_| StageError::NotARepo(cwd.to_path_buf()))?;
+    repo.workdir()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| StageError::Invalid("bare repositories have no working tree".into()))
+}
+
 /// The checked-out branch name, a short SHA if HEAD is detached, or a sentinel
-/// for an unborn branch. Mirrors `git.rs::current_branch_name`.
-fn current_branch(repo: &Repository) -> String {
+/// for an unborn branch. Shared with `diff` and mirrored by `git.rs`.
+pub(crate) fn current_branch(repo: &Repository) -> String {
     match repo.head() {
         Ok(h) if h.is_branch() => h.shorthand().unwrap_or("HEAD").to_string(),
         Ok(h) => h
