@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
 import { getActiveRepo, repoSummary } from '../../tauri';
 import { DiffPane, type DiffPaneHandle, type ViewLayout, type ViewMode } from './DiffPane';
 import { FileList } from './FileList';
+import { HandoffRail } from './HandoffRail';
 import { Subheader } from './Subheader';
 import { useSelfReviewComments } from './useSelfReviewComments';
 import { useSelfReviewDiff } from './useSelfReviewDiff';
+import { useSelfReviewHandoff } from './useSelfReviewHandoff';
 import { clearViewed, loadViewed, setViewed } from './viewedStore';
 
 /**
@@ -72,6 +75,32 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
     deleteComment,
     copyAsMarkdown,
   } = useSelfReviewComments(diff);
+
+  // Cycle-1 author↔agent loop: the agent-authored Handoff + the author's
+  // Review notes, both from the local store (ADR-0011). Lives alongside the
+  // ephemeral comments above — comments are the markdown-export scratchpad,
+  // Review notes are the persistent feedback the agent reads back.
+  const {
+    handoff,
+    notes,
+    error: handoffError,
+    createNote,
+    resolveNote,
+    reopenNote,
+  } = useSelfReviewHandoff(repoPath);
+
+  // The rail starts closed and auto-opens once when a Handoff first appears, so
+  // the agent path is discoverable without intruding on the non-agent path.
+  // After that the author's toggle wins (we never auto-close or re-open).
+  const [railOpen, setRailOpen] = useState(false);
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (handoff && !autoOpenedRef.current) {
+      autoOpenedRef.current = true;
+      setRailOpen(true);
+    }
+  }, [handoff]);
+  const openNoteCount = useMemo(() => notes.filter((n) => n.status === 'open').length, [notes]);
 
   // Mark-viewed state, persisted per (repoPath, branch). Reload when either
   // changes. We do NOT clear on scope change (Q8: viewed is sticky across
@@ -203,6 +232,7 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
 
         {bootstrapError && <div style={errorBanner}>{bootstrapError}</div>}
         {error && <div style={errorBanner}>{error}</div>}
+        {handoffError && <div style={errorBanner}>{handoffError}</div>}
 
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           <FileList
@@ -271,6 +301,22 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
                   Unified
                 </button>
               </div>
+              {!railOpen && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setRailOpen(true)}
+                  title="Show the agent Handoff rail"
+                  style={handoff ? { borderColor: 'var(--blue-tint-2)' } : undefined}
+                >
+                  <Icon name="doc-stack" size={12} /> Handoff
+                  {openNoteCount > 0 && (
+                    <span className="badge badge-orange" style={{ marginLeft: 6 }}>
+                      {openNoteCount}
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
             <DiffPane
               ref={diffPaneRef}
@@ -290,6 +336,20 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
               onDeleteComment={deleteComment}
             />
           </div>
+
+          {railOpen && (
+            <HandoffRail
+              handoff={handoff}
+              notes={notes}
+              files={diff?.files ?? []}
+              selectedPath={selectedPath}
+              onSelectFile={onSelectFile}
+              onCreateNote={createNote}
+              onResolveNote={resolveNote}
+              onReopenNote={reopenNote}
+              onClose={() => setRailOpen(false)}
+            />
+          )}
         </div>
       </div>
     </div>
