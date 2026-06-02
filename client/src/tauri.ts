@@ -226,3 +226,70 @@ export const storylineGet = (workspaceId: string) =>
 
 export const storylineUpdate = (workspaceId: string, etag: string, files: StorylineFileWrite[]) =>
   invoke<Storyline>('storyline_update', { workspaceId, etag, files });
+
+// --- Self-Review Handoff (cycle 1: local agent↔author loop; see ADR-0011,
+// CONTEXT.md "Handoff" / "Review note"). All local + auth-free. ---
+
+/** One step of a Handoff: an agent-authored markdown intro for a single file. */
+export type HandoffStep = {
+  file: string;
+  /** Agent-authored markdown — its own commentary on what it did to this file. */
+  intro: string;
+  /** Presentation order, ascending. */
+  order: number;
+};
+
+/** The agent's ordered, annotated account of its own Base-scope changes. */
+export type Handoff = {
+  /** Base branch the diff was composed against (e.g. `"main"`). */
+  base: string;
+  steps: HandoffStep[];
+  /** Epoch seconds, preserved across regenerations. */
+  createdAt: number;
+  /** Epoch seconds. */
+  updatedAt: number;
+};
+
+export type NoteStatus = 'open' | 'addressed' | 'resolved';
+
+/** Where a Review note is anchored: a file path, optionally a line range. */
+export type NoteAnchor = {
+  file: string;
+  lineStart: number | null;
+  lineEnd: number | null;
+};
+
+/** The author's feedback on a Handoff, anchored to a diff location. */
+export type ReviewNote = {
+  id: string;
+  anchor: NoteAnchor;
+  body: string;
+  status: NoteStatus;
+  /** Set when the agent moves the note to `addressed`. */
+  agentReply: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** A ReviewNote plus the app-computed `outdated` flag (its anchored file is no
+ *  longer in the current Base diff — the Stale-step pattern, file granularity). */
+export type ReviewNoteView = ReviewNote & { outdated: boolean };
+
+/** The stored Handoff for the active repo + branch, or `null` if none. */
+export const selfReviewHandoffGet = () => invoke<Handoff | null>('self_review_handoff_get');
+
+/** Review notes for the active repo + branch, optionally filtered by status. */
+export const selfReviewNotesList = (status?: NoteStatus) =>
+  invoke<ReviewNoteView[]>('self_review_notes_list', { status: status ?? null });
+
+/** Create an `open` Review note anchored to a diff location (UUID minted in Rust). */
+export const selfReviewNoteCreate = (anchor: NoteAnchor, body: string) =>
+  invoke<ReviewNote>('self_review_note_create', { anchor, body });
+
+/** Author action: close a note (`resolved`). */
+export const selfReviewNoteResolve = (id: string) =>
+  invoke<ReviewNote>('self_review_note_resolve', { id });
+
+/** Author action: reopen a note (`open`). */
+export const selfReviewNoteReopen = (id: string) =>
+  invoke<ReviewNote>('self_review_note_reopen', { id });

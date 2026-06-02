@@ -31,6 +31,7 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", 
 base64ct = { version = "1", features = ["alloc"] }
 sha2 = "0.10"
 rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 wiremock = "0.6"
