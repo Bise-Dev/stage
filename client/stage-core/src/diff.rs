@@ -423,6 +423,14 @@ pub fn default_base(repo_path: &Path) -> Result<String, StageError> {
     Ok("main".to_string())
 }
 
+/// The set of repo-relative file paths in the Base-scope diff against
+/// `base_ref`. Shared by Handoff `set` validation and Review-note `outdated`
+/// computation, both of which only need the membership, not the patches.
+pub fn base_diff_file_set(repo_path: &Path, base_ref: &str) -> Result<HashSet<String>, StageError> {
+    let diff = self_review_diff(repo_path, SelfReviewScope::Base, Some(base_ref))?;
+    Ok(diff.files.into_iter().map(|f| f.path).collect())
+}
+
 /// Reject any `files` (repo-relative paths) that are not present in the
 /// Base-scope diff against `base_ref`. Fail-loud per CLAUDE.md: a Handoff must
 /// never reference a file the author isn't actually being shown.
@@ -431,12 +439,11 @@ pub fn assert_files_in_base_diff(
     base_ref: &str,
     files: &[String],
 ) -> Result<(), StageError> {
-    let diff = self_review_diff(repo_path, SelfReviewScope::Base, Some(base_ref))?;
-    let present: HashSet<&str> = diff.files.iter().map(|f| f.path.as_str()).collect();
+    let present = base_diff_file_set(repo_path, base_ref)?;
     let mut unknown: Vec<&str> = files
         .iter()
         .map(String::as_str)
-        .filter(|f| !present.contains(f))
+        .filter(|f| !present.contains(*f))
         .collect();
     if !unknown.is_empty() {
         unknown.sort_unstable();

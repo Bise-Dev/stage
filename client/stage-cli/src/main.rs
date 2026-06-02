@@ -7,11 +7,13 @@ use std::io::Read;
 use std::path::Path;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use stage_core::diff::{
-    assert_files_in_base_diff, default_base, self_review_diff, SelfReviewScope,
+    assert_files_in_base_diff, base_diff_file_set, default_base, self_review_diff, SelfReviewScope,
 };
-use stage_core::{repo_key_from_cwd, repo_root_from_cwd, HandoffInput, StageError, Store};
+use stage_core::{
+    repo_key_from_cwd, repo_root_from_cwd, HandoffInput, NoteStatus, StageError, Store,
+};
 
 #[derive(Parser)]
 #[command(name = "stage", about = "Stage — local agent self-review", version)]
@@ -49,6 +51,40 @@ enum SelfReviewCmd {
     Show,
     /// Delete the stored Handoff for the current repo + branch.
     Clear,
+    /// List the author's Review notes for the current repo + branch as JSON,
+    /// each with a computed `outdated` flag (its anchored file left the diff).
+    /// Filter with `--status`; the agent reads `--status open` to find work.
+    Notes {
+        #[arg(long, value_enum)]
+        status: Option<StatusArg>,
+    },
+    /// Mark a Review note `addressed`, recording the agent's reply. Fails loud
+    /// if the note id is unknown or the note is already resolved.
+    Address {
+        /// The note id (from `notes`).
+        id: String,
+        /// The agent's reply describing how it addressed the note.
+        #[arg(long)]
+        reply: String,
+    },
+}
+
+/// `--status` filter for `notes`, mirroring [`NoteStatus`].
+#[derive(Clone, Copy, ValueEnum)]
+enum StatusArg {
+    Open,
+    Addressed,
+    Resolved,
+}
+
+impl From<StatusArg> for NoteStatus {
+    fn from(s: StatusArg) -> Self {
+        match s {
+            StatusArg::Open => NoteStatus::Open,
+            StatusArg::Addressed => NoteStatus::Addressed,
+            StatusArg::Resolved => NoteStatus::Resolved,
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -129,6 +165,32 @@ fn self_review(cmd: SelfReviewCmd, cwd: &Path, root: &Path) -> Result<(), StageE
                     "no handoff to clear"
                 }
             );
+        }
+        SelfReviewCmd::Notes { status } => {
+            let key = repo_key_from_cwd(cwd)?;
+            let store = Store::open_default()?;
+            let notes = store.list_notes(&key, status.map(Into::into))?;
+            // `outdated` is computed against the current Handoff's base (the
+            // diff the notes live on), falling back to the default branch.
+            let base = match store.get_handoff(&key)? {
+                Some(handoff) => handoff.base,
+                None => default_base(root)?,
+            };
+            let present = base_diff_file_set(root, &base)?;
+            let views: Vec<_> = notes
+                .into_iter()
+                .map(|n| {
+                    let outdated = !present.contains(&n.anchor.file);
+                    n.into_view(outdated)
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&views)?);
+        }
+        SelfReviewCmd::Address { id, reply } => {
+            let key = repo_key_from_cwd(cwd)?;
+            let store = Store::open_default()?;
+            let note = store.address_note(&key, &id, &reply)?;
+            println!("{}", serde_json::to_string_pretty(&note)?);
         }
     }
     Ok(())

@@ -66,3 +66,86 @@ impl HandoffInput {
             .collect()
     }
 }
+
+/// Lifecycle of a [`ReviewNote`]: `open` (author left it) → `addressed` (agent
+/// revised and replied) → `resolved` (author closed it). The author may reopen
+/// an addressed note back to `open`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NoteStatus {
+    Open,
+    Addressed,
+    Resolved,
+}
+
+impl NoteStatus {
+    /// The wire/string form stored in SQLite and emitted in JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NoteStatus::Open => "open",
+            NoteStatus::Addressed => "addressed",
+            NoteStatus::Resolved => "resolved",
+        }
+    }
+
+    /// Parse the stored string form back into a status.
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "open" => Some(NoteStatus::Open),
+            "addressed" => Some(NoteStatus::Addressed),
+            "resolved" => Some(NoteStatus::Resolved),
+            _ => None,
+        }
+    }
+}
+
+/// Where a [`ReviewNote`] is anchored in the diff: a file path, optionally a
+/// line range. Anchored to the *diff location*, not a Handoff step, so it
+/// survives the agent regenerating the Handoff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteAnchor {
+    pub file: String,
+    #[serde(default)]
+    pub line_start: Option<u32>,
+    #[serde(default)]
+    pub line_end: Option<u32>,
+}
+
+/// A piece of the author's feedback on a Handoff. The agent reads outstanding
+/// notes, revises, and replies — closing the local author↔agent loop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewNote {
+    /// App-minted UUID.
+    pub id: String,
+    pub anchor: NoteAnchor,
+    /// The author's note text.
+    pub body: String,
+    pub status: NoteStatus,
+    /// The agent's reply, set when it moves the note to `addressed`.
+    pub agent_reply: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl ReviewNote {
+    /// Pair the note with a computed `outdated` flag for emission.
+    pub fn into_view(self, outdated: bool) -> ReviewNoteView {
+        ReviewNoteView {
+            outdated,
+            note: self,
+        }
+    }
+}
+
+/// A [`ReviewNote`] plus its computed `outdated` flag. `outdated` is never
+/// stored — it's derived from whether the note's anchored file is still in the
+/// current Base diff (the **Stale step** pattern, at file granularity).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewNoteView {
+    #[serde(flatten)]
+    pub note: ReviewNote,
+    pub outdated: bool,
+}

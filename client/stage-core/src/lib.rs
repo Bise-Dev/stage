@@ -11,7 +11,9 @@ pub mod error;
 pub mod repo_key;
 pub mod store;
 
-pub use domain::{Handoff, HandoffInput, HandoffStep};
+pub use domain::{
+    Handoff, HandoffInput, HandoffStep, NoteAnchor, NoteStatus, ReviewNote, ReviewNoteView,
+};
 pub use error::StageError;
 pub use repo_key::{repo_key_from_cwd, repo_root_from_cwd, slug_from_remote, RepoKey};
 pub use store::{default_store_path, Store, STORE_PATH_ENV};
