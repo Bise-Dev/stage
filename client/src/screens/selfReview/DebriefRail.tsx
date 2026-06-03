@@ -3,7 +3,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Icon } from '../../components/Icon';
 import type {
-  Handoff,
+  Debrief,
   NoteAnchor,
   NoteStatus,
   ReviewNoteView,
@@ -12,8 +12,8 @@ import type {
 import { Composer } from './Composer';
 
 /**
- * The Handoff rail — the author's view of the agent's self-review (ADR-0011,
- * CONTEXT.md "Handoff"). Lists the agent's ordered steps (file + markdown
+ * The Debrief rail — the author's view of the agent's self-review (ADR-0011,
+ * CONTEXT.md "Debrief"). Lists the agent's ordered steps (file + markdown
  * intro), each driving the diff (click a step → scroll its file into view),
  * and the **Review notes** anchored to each file: their status, the agent's
  * reply, an `outdated` flag, and resolve/reopen actions. The author adds new
@@ -44,8 +44,8 @@ function anchorRange(anchor: NoteAnchor): string | null {
   return `L${anchor.lineStart}–L${anchor.lineEnd}`;
 }
 
-export function HandoffRail({
-  handoff,
+export function DebriefRail({
+  debrief,
   notes,
   files,
   selectedPath,
@@ -55,7 +55,7 @@ export function HandoffRail({
   onReopenNote,
   onClose,
 }: {
-  handoff: Handoff | null;
+  debrief: Debrief | null;
   notes: ReviewNoteView[];
   files: SelfReviewFileChange[];
   selectedPath: string | null;
@@ -82,10 +82,10 @@ export function HandoffRail({
     return m;
   }, [files]);
 
-  const steps = handoff ? [...handoff.steps].sort((a, b) => a.order - b.order) : [];
+  const steps = debrief ? [...debrief.steps].sort((a, b) => a.order - b.order) : [];
   const stepFiles = new Set(steps.map((s) => s.file));
-  // Notes whose file isn't a Handoff step (the agent dropped the file from a
-  // later pass, or the note predates this Handoff) — surface them so feedback
+  // Notes whose file isn't a Debrief step (the agent dropped the file from a
+  // later pass, or the note predates this Debrief) — surface them so feedback
   // is never silently orphaned.
   const orphanFiles = [...notesByFile.keys()].filter((f) => !stepFiles.has(f));
 
@@ -115,12 +115,12 @@ export function HandoffRail({
         }}
       >
         <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--gray-800)' }}>
-          Agent Handoff
+          Agent Debrief
         </span>
-        {handoff && (
+        {debrief && (
           <>
             <span className="badge mono" style={{ background: 'rgba(0,0,0,0.06)' }}>
-              {handoff.base}
+              {debrief.base}
             </span>
             {openCount > 0 && (
               <span className="badge badge-orange">
@@ -134,7 +134,7 @@ export function HandoffRail({
           type="button"
           className="btn btn-ghost"
           onClick={onClose}
-          title="Hide the Handoff rail"
+          title="Hide the Debrief rail"
           style={{ padding: '0 6px' }}
         >
           <Icon name="chevron-right" size={12} color="var(--gray-500)" />
@@ -142,19 +142,19 @@ export function HandoffRail({
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', padding: '10px 12px' }}>
-        {!handoff ? (
+        {!debrief ? (
           <div
             style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5, padding: '8px 2px' }}
           >
-            No Handoff yet for this branch. Ask your coding agent to run the{' '}
-            <span className="mono">self-review-handoff</span> skill — it writes an ordered,
+            No Debrief yet for this branch. Ask your coding agent to run the{' '}
+            <span className="mono">self-review-debrief</span> skill — it writes an ordered,
             annotated account of its changes here for you to review.
           </div>
         ) : (
           <>
             <div style={{ fontSize: 11, color: 'var(--gray-500)', marginBottom: 8 }}>
               {steps.length} step{steps.length === 1 ? '' : 's'} · updated{' '}
-              {formatWhen(handoff.updatedAt)}
+              {formatWhen(debrief.updatedAt)}
             </div>
             {steps.map((step) => (
               <StepCard

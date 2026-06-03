@@ -424,7 +424,7 @@ pub fn default_base(repo_path: &Path) -> Result<String, StageError> {
 }
 
 /// The set of repo-relative file paths in the Base-scope diff against
-/// `base_ref`. Shared by Handoff `set` validation and Review-note `outdated`
+/// `base_ref`. Shared by Debrief `set` validation and Review-note `outdated`
 /// computation, both of which only need the membership, not the patches.
 pub fn base_diff_file_set(repo_path: &Path, base_ref: &str) -> Result<HashSet<String>, StageError> {
     let diff = self_review_diff(repo_path, SelfReviewScope::Base, Some(base_ref))?;
@@ -432,7 +432,7 @@ pub fn base_diff_file_set(repo_path: &Path, base_ref: &str) -> Result<HashSet<St
 }
 
 /// Reject any `files` (repo-relative paths) that are not present in the
-/// Base-scope diff against `base_ref`. Fail-loud per CLAUDE.md: a Handoff must
+/// Base-scope diff against `base_ref`. Fail-loud per CLAUDE.md: a Debrief must
 /// never reference a file the author isn't actually being shown.
 pub fn assert_files_in_base_diff(
     repo_path: &Path,
@@ -449,7 +449,7 @@ pub fn assert_files_in_base_diff(
         unknown.sort_unstable();
         unknown.dedup();
         return Err(StageError::Invalid(format!(
-            "handoff references {} file(s) not in the diff against '{base_ref}': {}",
+            "debrief references {} file(s) not in the diff against '{base_ref}': {}",
             unknown.len(),
             unknown.join(", "),
         )));

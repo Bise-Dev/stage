@@ -1,4 +1,4 @@
-//! Handoff domain types — see `CONTEXT.md` (**Handoff**) and ADR-0011.
+//! Debrief domain types — see `CONTEXT.md` (**Debrief**) and ADR-0011.
 //!
 //! Timestamps are epoch **seconds** (UTC) to match the client's existing
 //! convention (`git.rs::BranchInfo.updated_at`); the webview does the
@@ -6,10 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One step of a [`Handoff`]: an agent-authored intro anchored to a single
+/// One step of a [`Debrief`]: an agent-authored intro anchored to a single
 /// file in the Base-scope diff.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HandoffStep {
+pub struct DebriefStep {
     /// Repo-relative path of a file present in the Base-scope diff.
     pub file: String,
     /// Agent-authored markdown explaining what the agent did to this file.
@@ -18,15 +18,15 @@ pub struct HandoffStep {
     pub order: u32,
 }
 
-/// A stored Handoff: the agent's ordered, annotated account of its own
+/// A stored Debrief: the agent's ordered, annotated account of its own
 /// Base-scope changes, produced for the author to review locally.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Handoff {
+pub struct Debrief {
     /// Base branch the diff was composed against (e.g. `"main"`).
     pub base: String,
     /// Steps in presentation order.
-    pub steps: Vec<HandoffStep>,
+    pub steps: Vec<DebriefStep>,
     /// First-written time, epoch seconds. Preserved across regenerations.
     pub created_at: i64,
     /// Last-written time, epoch seconds.
@@ -38,27 +38,27 @@ pub struct Handoff {
 /// `{ "base": "main", "steps": [{ "file": "...", "intro": "md", "order": 0 }] }`
 /// — `order` is optional; when omitted it defaults to the array index.
 #[derive(Debug, Clone, Deserialize)]
-pub struct HandoffInput {
+pub struct DebriefInput {
     pub base: String,
-    pub steps: Vec<HandoffStepInput>,
+    pub steps: Vec<DebriefStepInput>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct HandoffStepInput {
+pub struct DebriefStepInput {
     pub file: String,
     pub intro: String,
     #[serde(default)]
     pub order: Option<u32>,
 }
 
-impl HandoffInput {
+impl DebriefInput {
     /// Resolve the input into concrete steps, defaulting each missing `order`
     /// to its position in the array.
-    pub fn into_steps(self) -> Vec<HandoffStep> {
+    pub fn into_steps(self) -> Vec<DebriefStep> {
         self.steps
             .into_iter()
             .enumerate()
-            .map(|(i, s)| HandoffStep {
+            .map(|(i, s)| DebriefStep {
                 file: s.file,
                 intro: s.intro,
                 order: s.order.unwrap_or(i as u32),
@@ -100,8 +100,8 @@ impl NoteStatus {
 }
 
 /// Where a [`ReviewNote`] is anchored in the diff: a file path, optionally a
-/// line range. Anchored to the *diff location*, not a Handoff step, so it
-/// survives the agent regenerating the Handoff.
+/// line range. Anchored to the *diff location*, not a Debrief step, so it
+/// survives the agent regenerating the Debrief.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NoteAnchor {
@@ -112,7 +112,7 @@ pub struct NoteAnchor {
     pub line_end: Option<u32>,
 }
 
-/// A piece of the author's feedback on a Handoff. The agent reads outstanding
+/// A piece of the author's feedback on a Debrief. The agent reads outstanding
 /// notes, revises, and replies — closing the local author↔agent loop.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

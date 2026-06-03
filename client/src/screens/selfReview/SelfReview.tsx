@@ -2,13 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
 import { getActiveRepo, repoSummary } from '../../tauri';
+import { DebriefRail } from './DebriefRail';
 import { DiffPane, type DiffPaneHandle, type ViewLayout, type ViewMode } from './DiffPane';
 import { FileList } from './FileList';
-import { HandoffRail } from './HandoffRail';
 import { Subheader } from './Subheader';
 import { useSelfReviewComments } from './useSelfReviewComments';
+import { useSelfReviewDebrief } from './useSelfReviewDebrief';
 import { useSelfReviewDiff } from './useSelfReviewDiff';
-import { useSelfReviewHandoff } from './useSelfReviewHandoff';
 import { clearViewed, loadViewed, setViewed } from './viewedStore';
 
 /**
@@ -76,30 +76,30 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
     copyAsMarkdown,
   } = useSelfReviewComments(diff);
 
-  // Cycle-1 author↔agent loop: the agent-authored Handoff + the author's
+  // Cycle-1 author↔agent loop: the agent-authored Debrief + the author's
   // Review notes, both from the local store (ADR-0011). Lives alongside the
   // ephemeral comments above — comments are the markdown-export scratchpad,
   // Review notes are the persistent feedback the agent reads back.
   const {
-    handoff,
+    debrief,
     notes,
-    error: handoffError,
+    error: debriefError,
     createNote,
     resolveNote,
     reopenNote,
-  } = useSelfReviewHandoff(repoPath);
+  } = useSelfReviewDebrief(repoPath);
 
-  // The rail starts closed and auto-opens once when a Handoff first appears, so
+  // The rail starts closed and auto-opens once when a Debrief first appears, so
   // the agent path is discoverable without intruding on the non-agent path.
   // After that the author's toggle wins (we never auto-close or re-open).
   const [railOpen, setRailOpen] = useState(false);
   const autoOpenedRef = useRef(false);
   useEffect(() => {
-    if (handoff && !autoOpenedRef.current) {
+    if (debrief && !autoOpenedRef.current) {
       autoOpenedRef.current = true;
       setRailOpen(true);
     }
-  }, [handoff]);
+  }, [debrief]);
   const openNoteCount = useMemo(() => notes.filter((n) => n.status === 'open').length, [notes]);
 
   // Mark-viewed state, persisted per (repoPath, branch). Reload when either
@@ -232,7 +232,7 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
 
         {bootstrapError && <div style={errorBanner}>{bootstrapError}</div>}
         {error && <div style={errorBanner}>{error}</div>}
-        {handoffError && <div style={errorBanner}>{handoffError}</div>}
+        {debriefError && <div style={errorBanner}>{debriefError}</div>}
 
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           <FileList
@@ -306,10 +306,10 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
                   type="button"
                   className="btn"
                   onClick={() => setRailOpen(true)}
-                  title="Show the agent Handoff rail"
-                  style={handoff ? { borderColor: 'var(--blue-tint-2)' } : undefined}
+                  title="Show the agent Debrief rail"
+                  style={debrief ? { borderColor: 'var(--blue-tint-2)' } : undefined}
                 >
-                  <Icon name="doc-stack" size={12} /> Handoff
+                  <Icon name="doc-stack" size={12} /> Debrief
                   {openNoteCount > 0 && (
                     <span className="badge badge-orange" style={{ marginLeft: 6 }}>
                       {openNoteCount}
@@ -338,8 +338,8 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
           </div>
 
           {railOpen && (
-            <HandoffRail
-              handoff={handoff}
+            <DebriefRail
+              debrief={debrief}
               notes={notes}
               files={diff?.files ?? []}
               selectedPath={selectedPath}

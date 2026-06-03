@@ -227,11 +227,11 @@ export const storylineGet = (workspaceId: string) =>
 export const storylineUpdate = (workspaceId: string, etag: string, files: StorylineFileWrite[]) =>
   invoke<Storyline>('storyline_update', { workspaceId, etag, files });
 
-// --- Self-Review Handoff (cycle 1: local agent↔author loop; see ADR-0011,
-// CONTEXT.md "Handoff" / "Review note"). All local + auth-free. ---
+// --- Self-Review Debrief (cycle 1: local agent↔author loop; see ADR-0011,
+// CONTEXT.md "Debrief" / "Review note"). All local + auth-free. ---
 
-/** One step of a Handoff: an agent-authored markdown intro for a single file. */
-export type HandoffStep = {
+/** One step of a Debrief: an agent-authored markdown intro for a single file. */
+export type DebriefStep = {
   file: string;
   /** Agent-authored markdown — its own commentary on what it did to this file. */
   intro: string;
@@ -240,10 +240,10 @@ export type HandoffStep = {
 };
 
 /** The agent's ordered, annotated account of its own Base-scope changes. */
-export type Handoff = {
+export type Debrief = {
   /** Base branch the diff was composed against (e.g. `"main"`). */
   base: string;
-  steps: HandoffStep[];
+  steps: DebriefStep[];
   /** Epoch seconds, preserved across regenerations. */
   createdAt: number;
   /** Epoch seconds. */
@@ -259,7 +259,7 @@ export type NoteAnchor = {
   lineEnd: number | null;
 };
 
-/** The author's feedback on a Handoff, anchored to a diff location. */
+/** The author's feedback on a Debrief, anchored to a diff location. */
 export type ReviewNote = {
   id: string;
   anchor: NoteAnchor;
@@ -275,8 +275,8 @@ export type ReviewNote = {
  *  longer in the current Base diff — the Stale-step pattern, file granularity). */
 export type ReviewNoteView = ReviewNote & { outdated: boolean };
 
-/** The stored Handoff for the active repo + branch, or `null` if none. */
-export const selfReviewHandoffGet = () => invoke<Handoff | null>('self_review_handoff_get');
+/** The stored Debrief for the active repo + branch, or `null` if none. */
+export const selfReviewDebriefGet = () => invoke<Debrief | null>('self_review_debrief_get');
 
 /** Review notes for the active repo + branch, optionally filtered by status. */
 export const selfReviewNotesList = (status?: NoteStatus) =>

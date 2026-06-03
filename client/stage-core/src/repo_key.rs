@@ -1,9 +1,9 @@
-//! Deriving the `(repo_owner, repo_name, branch)` key that locates a Handoff.
+//! Deriving the `(repo_owner, repo_name, branch)` key that locates a Debrief.
 //!
 //! This is the single coordination point between the two writers: the `stage`
-//! CLI and the desktop app both call [`repo_key_from_cwd`], so a Handoff the
+//! CLI and the desktop app both call [`repo_key_from_cwd`], so a Debrief the
 //! agent writes and the one the app reads resolve to the same row. The shape
-//! mirrors the backend Workspace key, easing a future Handoff→Storyline
+//! mirrors the backend Workspace key, easing a future Debrief→Storyline
 //! promotion.
 
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::StageError;
 
-/// Identifies a Handoff's repo+branch scope.
+/// Identifies a Debrief's repo+branch scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoKey {
     pub repo_owner: String,
@@ -26,7 +26,7 @@ pub struct RepoKey {
 /// owner/name come from the `origin` remote URL (falling back to the first
 /// configured remote, matching what the app's Workspaces screen shows). With
 /// no usable remote we fall back to a deterministic key derived from the
-/// canonical repo root — so a Handoff still has a stable home for repos that
+/// canonical repo root — so a Debrief still has a stable home for repos that
 /// aren't on GitHub. The branch is the checked-out branch (or a short SHA when
 /// detached).
 pub fn repo_key_from_cwd(cwd: &Path) -> Result<RepoKey, StageError> {

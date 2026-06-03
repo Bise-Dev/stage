@@ -17,9 +17,9 @@ pub struct WatcherHandle(#[allow(dead_code)] Box<dyn std::any::Any + Send + Sync
 ///
 /// - the **repo** itself (recursive) → emits `repo-changed`, driving the diff
 ///   refresh on any working-tree / `.git` change;
-/// - the shared **Handoff store file** → emits `handoff-changed`, so the
+/// - the shared **Debrief store file** → emits `debrief-changed`, so the
 ///   Self-Review screen live-refreshes when the `stage` CLI (or this app)
-///   writes a Handoff or Review note. The store is a SQLite DB outside the repo
+///   writes a Debrief or Review note. The store is a SQLite DB outside the repo
 ///   (ADR-0011).
 ///
 /// We watch the **main DB file specifically, not its directory**. A SQLite read
@@ -27,7 +27,7 @@ pub struct WatcherHandle(#[allow(dead_code)] Box<dyn std::any::Any + Send + Sync
 /// close, which churns the *directory* but leaves the main file's mtime
 /// untouched; a write checkpoints into the main file, moving its mtime. Watching
 /// the directory would therefore make the app's own reads (every reload) emit
-/// `handoff-changed` and feed back into another reload — a loop. Watching the
+/// `debrief-changed` and feed back into another reload — a loop. Watching the
 /// file alone catches writes and filters out read churn. The store is opened
 /// once first so the file exists (and is migrated) before the watch attaches.
 ///
@@ -51,7 +51,7 @@ pub fn spawn(app: AppHandle, repo_path: PathBuf) -> Result<WatcherHandle, AppErr
         app,
         &store_path,
         RecursiveMode::NonRecursive,
-        "handoff-changed",
+        "debrief-changed",
     )?;
 
     Ok(WatcherHandle(Box::new((repo_watch, store_watch))))

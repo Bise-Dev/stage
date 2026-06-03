@@ -6,7 +6,7 @@ use tauri::{AppHandle, State};
 
 use stage_core::diff::{base_diff_file_set, default_base};
 use stage_core::{
-    repo_key_from_cwd, Handoff, NoteAnchor, NoteStatus, ReviewNote, ReviewNoteView, Store,
+    repo_key_from_cwd, Debrief, NoteAnchor, NoteStatus, ReviewNote, ReviewNoteView, Store,
 };
 
 use crate::api;
@@ -18,7 +18,7 @@ use crate::state::{ActiveRepo, AppState, AuthSession};
 use crate::watcher;
 
 /// The active repo's working-tree path, or `NoActiveRepo`. The Self-Review
-/// Handoff commands derive the store key from this (same `(repo, branch)`
+/// Debrief commands derive the store key from this (same `(repo, branch)`
 /// keying the `stage` CLI uses), so they read/write the exact rows the agent
 /// authored. See ADR-0011.
 fn active_repo_path(state: &State<'_, AppState>) -> Result<PathBuf, AppError> {
@@ -335,26 +335,26 @@ pub async fn github_prs(
     Ok(items)
 }
 
-// --- Self-Review Handoff (cycle 1: local agent↔author loop; ADR-0011) ---
+// --- Self-Review Debrief (cycle 1: local agent↔author loop; ADR-0011) ---
 //
 // These read/write the shared SQLite store the `stage` CLI authors into, keyed
 // by the active repo + its current branch. Auth-free and local: no Stage token,
 // no GitHub. `StageError` flows into `AppError` (errors.rs) preserving the
 // message verbatim for the client's banner.
 
-/// The stored Handoff for the active repo + branch, or `None` if the agent
+/// The stored Debrief for the active repo + branch, or `None` if the agent
 /// hasn't authored one.
 #[tauri::command]
-pub fn self_review_handoff_get(state: State<'_, AppState>) -> Result<Option<Handoff>, AppError> {
+pub fn self_review_debrief_get(state: State<'_, AppState>) -> Result<Option<Debrief>, AppError> {
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
-    Ok(store.get_handoff(&key)?)
+    Ok(store.get_debrief(&key)?)
 }
 
 /// Review notes for the active repo + branch (optionally filtered by `status`),
 /// each carrying a computed `outdated` flag. `outdated` is derived against the
-/// current Handoff's base (falling back to the repo default branch) — the same
+/// current Debrief's base (falling back to the repo default branch) — the same
 /// computation as the CLI's `notes` arm, never stored (the **Stale step**
 /// pattern at file granularity).
 #[tauri::command]
@@ -366,8 +366,8 @@ pub fn self_review_notes_list(
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
     let notes = store.list_notes(&key, status)?;
-    let base = match store.get_handoff(&key)? {
-        Some(handoff) => handoff.base,
+    let base = match store.get_debrief(&key)? {
+        Some(debrief) => debrief.base,
         None => default_base(&path)?,
     };
     let present = base_diff_file_set(&path, &base)?;

@@ -1,19 +1,19 @@
 import { listen } from '@tauri-apps/api/event';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  type Handoff,
+  type Debrief,
   type NoteAnchor,
   type ReviewNoteView,
-  selfReviewHandoffGet,
+  selfReviewDebriefGet,
   selfReviewNoteCreate,
   selfReviewNoteReopen,
   selfReviewNoteResolve,
   selfReviewNotesList,
 } from '../../tauri';
 
-export type UseSelfReviewHandoff = {
-  /** The agent-authored Handoff, or null if none has been written. */
-  handoff: Handoff | null;
+export type UseSelfReviewDebrief = {
+  /** The agent-authored Debrief, or null if none has been written. */
+  debrief: Debrief | null;
   /** All Review notes for the active repo+branch, with computed `outdated`. */
   notes: ReviewNoteView[];
   loading: boolean;
@@ -33,12 +33,12 @@ function errMessage(e: unknown): string {
 }
 
 /**
- * Owns the local Handoff + Review notes for the active repo+branch — the
+ * Owns the local Debrief + Review notes for the active repo+branch — the
  * author side of the cycle-1 loop (ADR-0011). Reads the SQLite store the
  * `stage` CLI authors into, and writes Review notes back into it.
  *
  * Live-refreshes on two events:
- *  - `handoff-changed` — the store file changed (the agent ran `set`/`address`,
+ *  - `debrief-changed` — the store file changed (the agent ran `set`/`address`,
  *    or this app created/resolved a note);
  *  - `repo-changed`    — a working-tree edit, which can flip a note's
  *    `outdated` flag (its anchored file leaving/rejoining the Base diff).
@@ -47,28 +47,28 @@ function errMessage(e: unknown): string {
  * surfaces in `error` for the screen to render in a banner; mutations re-throw
  * so callers can react, after recording the message.
  */
-export function useSelfReviewHandoff(repoPath: string | null): UseSelfReviewHandoff {
-  const [handoff, setHandoff] = useState<Handoff | null>(null);
+export function useSelfReviewDebrief(repoPath: string | null): UseSelfReviewDebrief {
+  const [debrief, setDebrief] = useState<Debrief | null>(null);
   const [notes, setNotes] = useState<ReviewNoteView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     if (!repoPath) {
-      setHandoff(null);
+      setDebrief(null);
       setNotes([]);
       setLoading(false);
       return;
     }
     try {
-      const [h, n] = await Promise.all([selfReviewHandoffGet(), selfReviewNotesList()]);
-      setHandoff(h);
+      const [h, n] = await Promise.all([selfReviewDebriefGet(), selfReviewNotesList()]);
+      setDebrief(h);
       setNotes(n);
       setError(null);
     } catch (e) {
-      console.warn('self_review_handoff_load_failed', e);
+      console.warn('self_review_debrief_load_failed', e);
       setError(errMessage(e));
-      // Keep the previous handoff/notes visible — a transient git/store lock
+      // Keep the previous debrief/notes visible — a transient git/store lock
       // shouldn't blank the rail mid-review.
     } finally {
       setLoading(false);
@@ -81,14 +81,14 @@ export function useSelfReviewHandoff(repoPath: string | null): UseSelfReviewHand
   }, [reload]);
 
   useEffect(() => {
-    const unlistenHandoff = listen('handoff-changed', () => {
+    const unlistenDebrief = listen('debrief-changed', () => {
       reload();
     });
     const unlistenRepo = listen('repo-changed', () => {
       reload();
     });
     return () => {
-      unlistenHandoff.then((u) => u());
+      unlistenDebrief.then((u) => u());
       unlistenRepo.then((u) => u());
     };
   }, [reload]);
@@ -129,5 +129,5 @@ export function useSelfReviewHandoff(repoPath: string | null): UseSelfReviewHand
     [mutate],
   );
 
-  return { handoff, notes, loading, error, createNote, resolveNote, reopenNote };
+  return { debrief, notes, loading, error, createNote, resolveNote, reopenNote };
 }
