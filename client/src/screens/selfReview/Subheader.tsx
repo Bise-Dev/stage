@@ -1,3 +1,4 @@
+import { Dropdown } from '../../components/Dropdown';
 import { Icon } from '../../components/Icon';
 import type { BranchInfo, SelfReviewDiff, SelfReviewScope } from '../../tauri';
 
@@ -73,29 +74,24 @@ export function Subheader({
         {scope === 'base' ? (
           <>
             {/* Base picker — the comparison base is author-configurable, not
-                fixed to the default branch. */}
-            <select
-              className="badge mono"
-              aria-label="Comparison base branch"
+                fixed to the default branch. Guard against the resolved base not
+                yet being in the loaded branch list (branches load async). */}
+            <Dropdown
+              mono
+              ariaLabel="Comparison base branch"
               title="Branch to compare against"
               value={base}
-              onChange={(e) => onBaseChange(e.target.value)}
-              style={{
-                background: 'rgba(0,0,0,0.06)',
-                border: 'none',
-                cursor: 'pointer',
-                maxWidth: 220,
-              }}
-            >
-              {/* Guard against the resolved base not yet being in the list
-                  (e.g. branches still loading on mount). */}
-              {!branches.some((b) => b.name === base) && <option value={base}>{base}</option>}
-              {branches.map((b) => (
-                <option key={b.name} value={b.name}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
+              onChange={onBaseChange}
+              style={{ maxWidth: 220 }}
+              options={
+                branches.some((b) => b.name === base)
+                  ? branches.map((b) => ({ value: b.name, label: b.name }))
+                  : [
+                      { value: base, label: base },
+                      ...branches.map((b) => ({ value: b.name, label: b.name })),
+                    ]
+              }
+            />
             <Icon name="arrow-right" size={11} color="var(--gray-400)" />
             <span
               className="badge mono"
