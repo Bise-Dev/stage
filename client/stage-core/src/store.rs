@@ -1,4 +1,4 @@
-//! The local Handoff store: one SQLite database shared by two writers (the
+//! The local Debrief store: one SQLite database shared by two writers (the
 //! `stage` CLI and the desktop app). SQLite — not a flat file — precisely
 //! because of that second writer.
 
@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::domain::{Handoff, HandoffStep, NoteAnchor, NoteStatus, ReviewNote};
+use crate::domain::{Debrief, DebriefStep, NoteAnchor, NoteStatus, ReviewNote};
 use crate::error::StageError;
 use crate::repo_key::RepoKey;
 
@@ -15,7 +15,7 @@ use crate::repo_key::RepoKey;
 /// CLI and app at the same dev DB. When unset, [`default_store_path`] is used.
 pub const STORE_PATH_ENV: &str = "STAGE_STORE_PATH";
 
-/// On-disk location of the shared Handoff store.
+/// On-disk location of the shared Debrief store.
 ///
 /// Deliberately **not** Tauri's `app_data_dir()` (identifier
 /// `dev.stage.client`): the `stage` CLI runs outside Tauri and must derive the
@@ -27,7 +27,7 @@ pub fn default_store_path() -> Result<PathBuf, StageError> {
     }
     let dirs =
         directories::ProjectDirs::from("dev", "stage", "stage").ok_or(StageError::NoDataDir)?;
-    Ok(dirs.data_dir().join("handoff.sqlite3"))
+    Ok(dirs.data_dir().join("debrief.sqlite3"))
 }
 
 /// A handle to the shared store. Cheap to open; holds one SQLite connection.
@@ -53,12 +53,12 @@ impl Store {
         Self::open(&default_store_path()?)
     }
 
-    /// The stored Handoff for `key`, or `None` if the agent hasn't written one.
-    pub fn get_handoff(&self, key: &RepoKey) -> Result<Option<Handoff>, StageError> {
+    /// The stored Debrief for `key`, or `None` if the agent hasn't written one.
+    pub fn get_debrief(&self, key: &RepoKey) -> Result<Option<Debrief>, StageError> {
         let row = self
             .conn
             .query_row(
-                "SELECT base, steps_json, created_at, updated_at FROM handoff \
+                "SELECT base, steps_json, created_at, updated_at FROM debrief \
                  WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
                 params![key.repo_owner, key.repo_name, key.branch],
                 |r| {
@@ -75,8 +75,8 @@ impl Store {
         let Some((base, steps_json, created_at, updated_at)) = row else {
             return Ok(None);
         };
-        let steps: Vec<HandoffStep> = serde_json::from_str(&steps_json)?;
-        Ok(Some(Handoff {
+        let steps: Vec<DebriefStep> = serde_json::from_str(&steps_json)?;
+        Ok(Some(Debrief {
             base,
             steps,
             created_at,
@@ -84,21 +84,21 @@ impl Store {
         }))
     }
 
-    /// Upsert the Handoff for `key`. Steps are stored in ascending `order`.
+    /// Upsert the Debrief for `key`. Steps are stored in ascending `order`.
     /// `created_at` is preserved across regenerations; `updated_at` is bumped.
-    pub fn set_handoff(
+    pub fn set_debrief(
         &self,
         key: &RepoKey,
         base: &str,
-        mut steps: Vec<HandoffStep>,
-    ) -> Result<Handoff, StageError> {
+        mut steps: Vec<DebriefStep>,
+    ) -> Result<Debrief, StageError> {
         steps.sort_by_key(|s| s.order);
         let steps_json = serde_json::to_string(&steps)?;
         let now = now_epoch();
-        let created_at = self.get_handoff(key)?.map(|h| h.created_at).unwrap_or(now);
+        let created_at = self.get_debrief(key)?.map(|h| h.created_at).unwrap_or(now);
 
         self.conn.execute(
-            "INSERT INTO handoff \
+            "INSERT INTO debrief \
                 (repo_owner, repo_name, branch, base, steps_json, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
              ON CONFLICT(repo_owner, repo_name, branch) DO UPDATE SET \
@@ -116,7 +116,7 @@ impl Store {
             ],
         )?;
 
-        Ok(Handoff {
+        Ok(Debrief {
             base: base.to_string(),
             steps,
             created_at,
@@ -124,10 +124,10 @@ impl Store {
         })
     }
 
-    /// Delete the Handoff for `key`. Returns whether a row was removed.
-    pub fn clear_handoff(&self, key: &RepoKey) -> Result<bool, StageError> {
+    /// Delete the Debrief for `key`. Returns whether a row was removed.
+    pub fn clear_debrief(&self, key: &RepoKey) -> Result<bool, StageError> {
         let removed = self.conn.execute(
-            "DELETE FROM handoff WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
+            "DELETE FROM debrief WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
             params![key.repo_owner, key.repo_name, key.branch],
         )?;
         Ok(removed > 0)
@@ -324,9 +324,9 @@ fn configure(conn: &Connection) -> Result<(), StageError> {
 /// many have been applied. Statements use `IF NOT EXISTS` so a re-run after an
 /// interrupted migration is a no-op rather than a hard failure.
 const MIGRATIONS: &[&str] = &[
-    // v1 — Handoff, one row per (repo_owner, repo_name, branch). Steps live as a
-    // JSON array (a Handoff is small and always read/written whole).
-    "CREATE TABLE IF NOT EXISTS handoff (
+    // v1 — Debrief, one row per (repo_owner, repo_name, branch). Steps live as a
+    // JSON array (a Debrief is small and always read/written whole).
+    "CREATE TABLE IF NOT EXISTS debrief (
         repo_owner TEXT    NOT NULL,
         repo_name  TEXT    NOT NULL,
         branch     TEXT    NOT NULL,
@@ -337,8 +337,8 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (repo_owner, repo_name, branch)
     ) WITHOUT ROWID;",
     // v2 — Review notes, keyed by app-minted UUID, scoped to a repo+branch.
-    // Anchored to a diff location (file + optional line range), NOT a Handoff
-    // step, so they survive Handoff regeneration. `outdated` is computed at read
+    // Anchored to a diff location (file + optional line range), NOT a Debrief
+    // step, so they survive Debrief regeneration. `outdated` is computed at read
     // time, never stored.
     "CREATE TABLE IF NOT EXISTS review_note (
         id          TEXT    NOT NULL PRIMARY KEY,
@@ -384,7 +384,7 @@ fn now_epoch() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::HandoffStep;
+    use crate::domain::DebriefStep;
 
     fn key() -> RepoKey {
         RepoKey {
@@ -394,8 +394,8 @@ mod tests {
         }
     }
 
-    fn step(file: &str, order: u32) -> HandoffStep {
-        HandoffStep {
+    fn step(file: &str, order: u32) -> DebriefStep {
+        DebriefStep {
             file: file.into(),
             intro: format!("did stuff to {file}"),
             order,
@@ -403,20 +403,20 @@ mod tests {
     }
 
     #[test]
-    fn handoff_round_trips_and_orders_steps() {
+    fn debrief_round_trips_and_orders_steps() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("handoff.sqlite3")).unwrap();
+        let store = Store::open(&dir.path().join("debrief.sqlite3")).unwrap();
         let k = key();
 
-        assert!(store.get_handoff(&k).unwrap().is_none());
+        assert!(store.get_debrief(&k).unwrap().is_none());
 
         // Set with out-of-order steps; expect them sorted by `order` on read.
         let saved = store
-            .set_handoff(&k, "main", vec![step("b.rs", 1), step("a.rs", 0)])
+            .set_debrief(&k, "main", vec![step("b.rs", 1), step("a.rs", 0)])
             .unwrap();
         assert_eq!(saved.base, "main");
 
-        let got = store.get_handoff(&k).unwrap().expect("handoff present");
+        let got = store.get_debrief(&k).unwrap().expect("debrief present");
         assert_eq!(
             got.steps
                 .iter()
@@ -430,53 +430,53 @@ mod tests {
     #[test]
     fn set_preserves_created_at_and_clear_removes() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("handoff.sqlite3")).unwrap();
+        let store = Store::open(&dir.path().join("debrief.sqlite3")).unwrap();
         let k = key();
 
         let first = store
-            .set_handoff(&k, "main", vec![step("a.rs", 0)])
+            .set_debrief(&k, "main", vec![step("a.rs", 0)])
             .unwrap();
         let second = store
-            .set_handoff(&k, "develop", vec![step("a.rs", 0), step("c.rs", 1)])
+            .set_debrief(&k, "develop", vec![step("a.rs", 0), step("c.rs", 1)])
             .unwrap();
 
         // Regenerating keeps the original created_at and updates the base.
         assert_eq!(second.created_at, first.created_at);
         assert_eq!(second.base, "develop");
-        assert_eq!(store.get_handoff(&k).unwrap().unwrap().steps.len(), 2);
+        assert_eq!(store.get_debrief(&k).unwrap().unwrap().steps.len(), 2);
 
-        assert!(store.clear_handoff(&k).unwrap());
-        assert!(!store.clear_handoff(&k).unwrap()); // idempotent
-        assert!(store.get_handoff(&k).unwrap().is_none());
+        assert!(store.clear_debrief(&k).unwrap());
+        assert!(!store.clear_debrief(&k).unwrap()); // idempotent
+        assert!(store.get_debrief(&k).unwrap().is_none());
     }
 
     #[test]
     fn distinct_keys_are_isolated() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("handoff.sqlite3")).unwrap();
+        let store = Store::open(&dir.path().join("debrief.sqlite3")).unwrap();
         let mut other = key();
         other.branch = "main".into();
 
         store
-            .set_handoff(&key(), "main", vec![step("a.rs", 0)])
+            .set_debrief(&key(), "main", vec![step("a.rs", 0)])
             .unwrap();
-        assert!(store.get_handoff(&other).unwrap().is_none());
+        assert!(store.get_debrief(&other).unwrap().is_none());
     }
 
     #[test]
     fn reopening_an_existing_store_is_a_noop_migration() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("handoff.sqlite3");
+        let path = dir.path().join("debrief.sqlite3");
         let k = key();
         {
             let store = Store::open(&path).unwrap();
             store
-                .set_handoff(&k, "main", vec![step("a.rs", 0)])
+                .set_debrief(&k, "main", vec![step("a.rs", 0)])
                 .unwrap();
         }
         // Re-open: migrations already applied, data survives.
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.get_handoff(&k).unwrap().unwrap().base, "main");
+        assert_eq!(store.get_debrief(&k).unwrap().unwrap().base, "main");
     }
 
     fn anchor(file: &str) -> NoteAnchor {

@@ -1,4 +1,4 @@
-# ADR-0011 · Agent self-review (Handoff) is a local `stage` CLI + app store, not a backend or MCP surface
+# ADR-0011 · Agent self-review (Debrief) is a local `stage` CLI + app store, not a backend or MCP surface
 
 **Status:** accepted
 **Date:** 2026-06-01
@@ -7,7 +7,7 @@
 
 A new capability: let a coding agent (e.g. Claude Code) produce a reviewable account of the work it just did, which the **author** reviews locally, and whose review feedback flows **back** to the agent. This is a second review cycle, distinct from the existing one:
 
-- **Cycle 1 (new):** agent authors a **Handoff** over its own contributions → author reviews it locally and leaves **Review notes** → agent reads the notes, revises, regenerates. A local author↔agent loop.
+- **Cycle 1 (new):** agent authors a **Debrief** over its own contributions → author reviews it locally and leaves **Review notes** → agent reads the notes, revises, regenerates. A local author↔agent loop.
 - **Cycle 2 (existing):** author composes a **Storyline** for external reviewers → Publish. Unchanged.
 
 Two existing facts shape the design:
@@ -22,12 +22,12 @@ The agent is a **separate process** from the Tauri app: it has the filesystem, g
 Cycle 1 is **local-only and auth-free**. Concretely:
 
 - The agent writes through a new **`stage` CLI** (Rust, reusing the existing `stage_client_lib` crate) into an **app-data store** (SQLite) keyed by `(repo, branch)`. No network, no Stage token, no GitHub credentials.
-- The **Tauri app** reads the same store to render the Handoff inside the (enriched) Self-Review screen, and **writes** Review notes into it — making the app a second writer, which is why the store is SQLite rather than a flat file.
-- The Handoff is composed against the existing **Base-scope** diff (`merge-base(base, HEAD)` → working tree) from `git.rs` — no new git code.
-- **Review notes** anchor to a **diff location** (file path + optional line range), not to Handoff step identity, so they survive the agent regenerating the Handoff. Lifecycle: `open → addressed (agent, with a reply) → resolved (author)`. Notes whose anchor no longer matches the current diff are flagged **outdated** and retained, reusing the **Stale step** pattern.
+- The **Tauri app** reads the same store to render the Debrief inside the (enriched) Self-Review screen, and **writes** Review notes into it — making the app a second writer, which is why the store is SQLite rather than a flat file.
+- The Debrief is composed against the existing **Base-scope** diff (`merge-base(base, HEAD)` → working tree) from `git.rs` — no new git code.
+- **Review notes** anchor to a **diff location** (file path + optional line range), not to Debrief step identity, so they survive the agent regenerating the Debrief. Lifecycle: `open → addressed (agent, with a reply) → resolved (author)`. Notes whose anchor no longer matches the current diff are flagged **outdated** and retained, reusing the **Stale step** pattern.
 - The backend **Workspace** / **Storyline** entities and their auth are **untouched**. They keep their meaning: created at Ready-to-share, for reviewers.
 - A future **MCP server** may wrap the same CLI core for nicer agent ergonomics; that is an additive wrapper, not a different storage or auth model.
-- **Promotion** of a Handoff into a Storyline at Ready-to-share is **deferred**; the design does not preclude it (the Handoff persists locally and shares the Storyline's ordered-steps-with-intros shape, so a future bridge is a copy).
+- **Promotion** of a Debrief into a Storyline at Ready-to-share is **deferred**; the design does not preclude it (the Debrief persists locally and shares the Storyline's ordered-steps-with-intros shape, so a future bridge is a copy).
 
 ## Considered alternatives
 
@@ -42,7 +42,7 @@ Cycle 1 is **local-only and auth-free**. Concretely:
 
 - Preserves the local-first, auth-free character of Self-Review; the agent needs no credentials of any kind — the cleanest possible security posture for a process Stage does not control.
 - Reuses `git.rs` Base-scope diffing and the existing per-line comment-thread UI; no backend changes.
-- Clean conceptual separation from cycle 2: Handoff/Review note (local, agent/author) vs Storyline/IntroComment (backend, reviewer-facing).
+- Clean conceptual separation from cycle 2: Debrief/Review note (local, agent/author) vs Storyline/IntroComment (backend, reviewer-facing).
 
 **Negative:**
 
@@ -52,7 +52,7 @@ Cycle 1 is **local-only and auth-free**. Concretely:
 
 ## Reference
 
-- `CONTEXT.md` — **Handoff**, **Review note**, **Self-Review**, **Stale step**.
+- `CONTEXT.md` — **Debrief**, **Review note**, **Self-Review**, **Stale step**.
 - ADR-0001 (three-tier topology; no GitHub credentials on the client).
 - ADR-0010 (self-review diff rendering stack); `client/src-tauri/src/git.rs::self_review_diff` (Base scope).
 - `client/src-tauri/src/api/` — `stage_client_lib`, the crate the `stage` CLI reuses.

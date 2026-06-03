@@ -1,4 +1,4 @@
-//! `stage` — the local CLI a coding agent drives to author a Handoff (and, in
+//! `stage` — the local CLI a coding agent drives to author a Debrief (and, in
 //! later PRs, to read the author's Review notes back). No network, no Stage
 //! token, no GitHub credentials: it writes through `stage-core` into the
 //! app-data store the desktop app shares (ADR-0011).
@@ -12,7 +12,7 @@ use stage_core::diff::{
     assert_files_in_base_diff, base_diff_file_set, default_base, self_review_diff, SelfReviewScope,
 };
 use stage_core::{
-    repo_key_from_cwd, repo_root_from_cwd, HandoffInput, NoteStatus, StageError, Store,
+    repo_key_from_cwd, repo_root_from_cwd, DebriefInput, NoteStatus, StageError, Store,
 };
 
 #[derive(Parser)]
@@ -24,7 +24,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Author or inspect the Handoff for the current repo + branch.
+    /// Author or inspect the Debrief for the current repo + branch.
     #[command(subcommand)]
     SelfReview(SelfReviewCmd),
 }
@@ -33,23 +33,23 @@ enum Command {
 enum SelfReviewCmd {
     /// List the files in the current Base-scope diff (committed branch work +
     /// uncommitted edits, against `--base` or the repo's default branch) as
-    /// JSON — the candidate files for a Handoff.
+    /// JSON — the candidate files for a Debrief.
     Files {
         /// Base branch to diff against. Defaults to the repo's default branch.
         #[arg(long)]
         base: Option<String>,
     },
-    /// Read a Handoff JSON document from stdin and store it. Every `file` must
+    /// Read a Debrief JSON document from stdin and store it. Every `file` must
     /// be in the Base-scope diff against the payload's `base` (else rejected).
-    /// Echoes the stored Handoff (with resolved timestamps) on success.
+    /// Echoes the stored Debrief (with resolved timestamps) on success.
     ///
     /// Stdin shape:
     /// `{ "base": "main", "steps": [{ "file": "...", "intro": "md", "order": 0 }] }`
     Set,
-    /// Print the stored Handoff for the current repo + branch as JSON (or
+    /// Print the stored Debrief for the current repo + branch as JSON (or
     /// `null` if none has been authored).
     Show,
-    /// Delete the stored Handoff for the current repo + branch.
+    /// Delete the stored Debrief for the current repo + branch.
     Clear,
     /// List the author's Review notes for the current repo + branch as JSON,
     /// each with a computed `outdated` flag (its anchored file left the diff).
@@ -138,31 +138,31 @@ fn self_review(cmd: SelfReviewCmd, cwd: &Path, root: &Path) -> Result<(), StageE
             let store = Store::open_default()?;
             let mut raw = String::new();
             std::io::stdin().read_to_string(&mut raw)?;
-            let input: HandoffInput = serde_json::from_str(&raw)?;
+            let input: DebriefInput = serde_json::from_str(&raw)?;
             let base = input.base.clone();
             let files: Vec<String> = input.steps.iter().map(|s| s.file.clone()).collect();
             assert_files_in_base_diff(root, &base, &files)?;
-            let handoff = store.set_handoff(&key, &base, input.into_steps())?;
-            println!("{}", serde_json::to_string_pretty(&handoff)?);
+            let debrief = store.set_debrief(&key, &base, input.into_steps())?;
+            println!("{}", serde_json::to_string_pretty(&debrief)?);
         }
         SelfReviewCmd::Show => {
             let key = repo_key_from_cwd(cwd)?;
             let store = Store::open_default()?;
-            match store.get_handoff(&key)? {
-                Some(handoff) => println!("{}", serde_json::to_string_pretty(&handoff)?),
+            match store.get_debrief(&key)? {
+                Some(debrief) => println!("{}", serde_json::to_string_pretty(&debrief)?),
                 None => println!("null"),
             }
         }
         SelfReviewCmd::Clear => {
             let key = repo_key_from_cwd(cwd)?;
             let store = Store::open_default()?;
-            let removed = store.clear_handoff(&key)?;
+            let removed = store.clear_debrief(&key)?;
             eprintln!(
                 "stage: {}",
                 if removed {
-                    "handoff cleared"
+                    "debrief cleared"
                 } else {
-                    "no handoff to clear"
+                    "no debrief to clear"
                 }
             );
         }
@@ -170,10 +170,10 @@ fn self_review(cmd: SelfReviewCmd, cwd: &Path, root: &Path) -> Result<(), StageE
             let key = repo_key_from_cwd(cwd)?;
             let store = Store::open_default()?;
             let notes = store.list_notes(&key, status.map(Into::into))?;
-            // `outdated` is computed against the current Handoff's base (the
+            // `outdated` is computed against the current Debrief's base (the
             // diff the notes live on), falling back to the default branch.
-            let base = match store.get_handoff(&key)? {
-                Some(handoff) => handoff.base,
+            let base = match store.get_debrief(&key)? {
+                Some(debrief) => debrief.base,
                 None => default_base(root)?,
             };
             let present = base_diff_file_set(root, &base)?;
