@@ -49,7 +49,9 @@ export function DebriefRail({
   notes,
   files,
   selectedPath,
+  viewed,
   onSelectFile,
+  onToggleViewed,
   onCreateNote,
   onResolveNote,
   onReopenNote,
@@ -59,7 +61,10 @@ export function DebriefRail({
   notes: ReviewNoteView[];
   files: SelfReviewFileChange[];
   selectedPath: string | null;
+  /** The shared mark-viewed set (same store the file list + diff use). */
+  viewed: Set<string>;
   onSelectFile: (path: string) => void;
+  onToggleViewed: (path: string) => void;
   onCreateNote: (anchor: NoteAnchor, body: string) => Promise<void>;
   onResolveNote: (id: string) => Promise<void>;
   onReopenNote: (id: string) => Promise<void>;
@@ -164,8 +169,10 @@ export function DebriefRail({
                 meta={fileMeta.get(step.file)}
                 inDiff={fileMeta.has(step.file)}
                 active={step.file === selectedPath}
+                isViewed={viewed.has(step.file)}
                 notes={notesByFile.get(step.file) ?? []}
                 onSelect={() => onSelectFile(step.file)}
+                onToggleViewed={() => onToggleViewed(step.file)}
                 onCreateNote={onCreateNote}
                 onResolveNote={onResolveNote}
                 onReopenNote={onReopenNote}
@@ -188,8 +195,10 @@ export function DebriefRail({
                     meta={fileMeta.get(file)}
                     inDiff={fileMeta.has(file)}
                     active={file === selectedPath}
+                    isViewed={viewed.has(file)}
                     notes={notesByFile.get(file) ?? []}
                     onSelect={() => onSelectFile(file)}
+                    onToggleViewed={() => onToggleViewed(file)}
                     onCreateNote={onCreateNote}
                     onResolveNote={onResolveNote}
                     onReopenNote={onReopenNote}
@@ -210,8 +219,10 @@ function StepCard({
   meta,
   inDiff,
   active,
+  isViewed,
   notes,
   onSelect,
+  onToggleViewed,
   onCreateNote,
   onResolveNote,
   onReopenNote,
@@ -221,8 +232,10 @@ function StepCard({
   meta: SelfReviewFileChange | undefined;
   inDiff: boolean;
   active: boolean;
+  isViewed: boolean;
   notes: ReviewNoteView[];
   onSelect: () => void;
+  onToggleViewed: () => void;
   onCreateNote: (anchor: NoteAnchor, body: string) => Promise<void>;
   onResolveNote: (id: string) => Promise<void>;
   onReopenNote: (id: string) => Promise<void>;
@@ -242,53 +255,94 @@ function StepCard({
         overflow: 'hidden',
       }}
     >
-      {/* File header — click to drive the diff */}
-      <button
-        type="button"
-        onClick={onSelect}
-        title={file}
-        style={{
-          width: '100%',
-          textAlign: 'left',
-          border: 'none',
-          background: active ? 'var(--blue-tint)' : 'transparent',
-          cursor: 'default',
-          display: 'flex',
-          alignItems: 'baseline',
-          gap: 6,
-          padding: '8px 10px',
-          fontFamily: 'inherit',
-        }}
-      >
-        <span
-          className="mono"
+      {/* File header — two rows: filename, then viewed + counts. */}
+      <div style={{ background: active ? 'var(--blue-tint)' : 'transparent' }}>
+        {/* Row 1: filename — click to drive the diff. */}
+        <button
+          type="button"
+          onClick={onSelect}
+          title={file}
           style={{
-            fontSize: 12,
-            fontWeight: 600,
-            color: active ? 'var(--blue-press)' : 'var(--gray-800)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
+            display: 'block',
+            width: '100%',
+            textAlign: 'left',
+            border: 'none',
+            background: 'transparent',
+            cursor: 'default',
+            padding: '8px 10px 2px',
+            fontFamily: 'inherit',
           }}
         >
-          {dir && <span style={{ color: 'var(--gray-400)', fontWeight: 400 }}>{dir}</span>}
-          {name}
-        </span>
-        <div style={{ flex: 1 }} />
-        {meta ? (
-          <span style={{ fontSize: 10.5, color: 'var(--gray-500)', whiteSpace: 'nowrap' }}>
-            <span style={{ color: 'var(--green-d)' }}>+{meta.additions}</span>{' '}
-            <span style={{ color: 'var(--red-d)' }}>−{meta.deletions}</span>
-          </span>
-        ) : (
           <span
-            className="badge badge-orange"
-            title="This file is no longer in the current diff (stale step)"
+            className="mono"
+            style={{
+              display: 'block',
+              fontSize: 12,
+              fontWeight: 600,
+              color: active ? 'var(--blue-press)' : 'var(--gray-800)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
           >
-            stale
+            {dir && <span style={{ color: 'var(--gray-400)', fontWeight: 400 }}>{dir}</span>}
+            {name}
           </span>
-        )}
-      </button>
+        </button>
+        {/* Row 2: viewed checkbox + additions/deletions (or a stale flag). */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px 8px' }}>
+          <span
+            // biome-ignore lint/a11y/useSemanticElements: mirrors the FileList row checkbox; a native checkbox inherits OS styling we don't want.
+            role="checkbox"
+            aria-checked={isViewed}
+            aria-label="Mark viewed"
+            tabIndex={0}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleViewed();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === ' ' || e.key === 'Enter') {
+                e.preventDefault();
+                onToggleViewed();
+              }
+            }}
+            style={{
+              width: 14,
+              height: 14,
+              borderRadius: 3,
+              border: '1px solid var(--gray-300)',
+              background: isViewed ? 'var(--green-d)' : '#fff',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#fff',
+              fontSize: 10,
+              flex: '0 0 14px',
+              cursor: 'default',
+            }}
+          >
+            {isViewed ? '✓' : ''}
+          </span>
+          <span style={{ fontSize: 10.5, color: 'var(--gray-500)' }}>
+            {isViewed ? 'Viewed' : 'Mark viewed'}
+          </span>
+          <div style={{ flex: 1 }} />
+          {meta ? (
+            <span style={{ fontSize: 10.5, color: 'var(--gray-500)', whiteSpace: 'nowrap' }}>
+              <span style={{ color: 'var(--green-d)' }}>+{meta.additions}</span>{' '}
+              <span style={{ color: 'var(--red-d)' }}>−{meta.deletions}</span>
+            </span>
+          ) : (
+            <span
+              className="badge badge-orange"
+              title="This file is no longer in the current diff (stale step)"
+            >
+              stale
+            </span>
+          )}
+        </div>
+      </div>
 
       {/* Agent intro (markdown) */}
       {intro && (
