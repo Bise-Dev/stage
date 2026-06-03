@@ -46,7 +46,7 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: client/src-tauri
+          workspaces: client
       - name: Lint (biome + cargo fmt)
         run: just lint
       - name: Typecheck (tsc + cargo check)

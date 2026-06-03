@@ -4,6 +4,11 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
+use stage_core::diff::{default_base, DiffLineIndex};
+use stage_core::{
+    repo_key_from_cwd, Debrief, NoteAnchor, NoteStatus, ReviewNote, ReviewNoteView, Store,
+};
+
 use crate::api;
 use crate::errors::AppError;
 use crate::git;
@@ -11,6 +16,19 @@ use crate::oauth::{authorize_url, gen_state, pkce_pair, LoopbackListener};
 use crate::recents::RecentRepo;
 use crate::state::{ActiveRepo, AppState, AuthSession};
 use crate::watcher;
+
+/// The active repo's working-tree path, or `NoActiveRepo`. The Self-Review
+/// Debrief commands derive the store key from this (same `(repo, branch)`
+/// keying the `stage` CLI uses), so they read/write the exact rows the agent
+/// authored. See ADR-0011.
+fn active_repo_path(state: &State<'_, AppState>) -> Result<PathBuf, AppError> {
+    state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| a.path.clone())
+        .ok_or(AppError::NoActiveRepo)
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct RepoInfo {
@@ -315,4 +333,114 @@ pub async fn github_prs(
     let token = state.require_token()?;
     let items = state.api.github_prs(&token, &role).await?;
     Ok(items)
+}
+
+// --- Self-Review Debrief (cycle 1: local agent↔author loop; ADR-0011) ---
+//
+// These read/write the shared SQLite store the `stage` CLI authors into, keyed
+// by the active repo + its current branch. Auth-free and local: no Stage token,
+// no GitHub. `StageError` flows into `AppError` (errors.rs) preserving the
+// message verbatim for the client's banner.
+
+/// The stored Debrief for the active repo + branch, or `None` if the agent
+/// hasn't authored one.
+#[tauri::command]
+pub fn self_review_debrief_get(state: State<'_, AppState>) -> Result<Option<Debrief>, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.get_debrief(&key)?)
+}
+
+/// Review notes for the active repo + branch (optionally filtered by `status`),
+/// each carrying its `replies` thread and a computed `outdated` flag.
+/// `outdated` is derived against the current Debrief's base (falling back to the
+/// repo default branch) — the same `DiffLineIndex` computation as the CLI's
+/// `notes` arm so the app and agent agree (ADR-0012), never stored (the
+/// **Stale step** pattern, at line granularity).
+#[tauri::command]
+pub fn self_review_notes_list(
+    state: State<'_, AppState>,
+    status: Option<NoteStatus>,
+) -> Result<Vec<ReviewNoteView>, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    let notes = store.list_notes(&key, status)?;
+    let base = match store.get_debrief(&key)? {
+        Some(debrief) => debrief.base,
+        None => default_base(&path)?,
+    };
+    let index = DiffLineIndex::from_base_diff(&path, &base)?;
+    Ok(notes
+        .into_iter()
+        .map(|n| {
+            let outdated = index.is_outdated(&n.anchor);
+            n.into_view(outdated)
+        })
+        .collect())
+}
+
+/// Create an `open` Review note. `anchor` is `None` for general (un-anchored)
+/// feedback. The UUID is minted here (the app is the only note author; the
+/// store stays uuid-free).
+#[tauri::command]
+pub fn self_review_note_create(
+    state: State<'_, AppState>,
+    anchor: Option<NoteAnchor>,
+    body: String,
+) -> Result<ReviewNote, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    let id = uuid::Uuid::new_v4().to_string();
+    Ok(store.create_note(&key, &id, anchor.as_ref(), &body)?)
+}
+
+/// Author action: append an author reply to a note's thread. Re-raises an
+/// addressed/resolved note to `open`. Fails loud on an unknown id.
+#[tauri::command]
+pub fn self_review_note_reply(
+    state: State<'_, AppState>,
+    id: String,
+    body: String,
+) -> Result<ReviewNote, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.add_author_reply(&key, &id, &body)?)
+}
+
+/// Author action: close a note (`resolved`). Fails loud on an unknown id.
+#[tauri::command]
+pub fn self_review_note_resolve(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<ReviewNote, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.resolve_note(&key, &id)?)
+}
+
+/// Author action: reopen a note (`open`). Fails loud on an unknown id.
+#[tauri::command]
+pub fn self_review_note_reopen(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<ReviewNote, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.reopen_note(&key, &id)?)
+}
+
+/// Author action: permanently delete a note and its thread. Fails loud on an
+/// unknown id.
+#[tauri::command]
+pub fn self_review_note_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.delete_note(&key, &id)?)
 }

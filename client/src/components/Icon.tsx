@@ -3,6 +3,7 @@ type IconName =
   | 'folder'
   | 'chevron-right'
   | 'chevron-left'
+  | 'chevron-down'
   | 'check'
   | 'arrow-right'
   | 'plus'
@@ -80,6 +81,19 @@ export function Icon({ name, size = 14, color = 'currentColor', className }: Ico
           aria-hidden="true"
         >
           <path d="M9 3L5 7l4 4" />
+        </svg>
+      );
+    case 'chevron-down':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <path d="M3 5l4 4 4-4" />
         </svg>
       );
     case 'check':

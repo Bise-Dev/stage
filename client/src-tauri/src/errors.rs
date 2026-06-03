@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use stage_core::StageError;
 use thiserror::Error;
 
 use crate::api;
@@ -32,6 +33,18 @@ pub enum AppError {
 impl serde::Serialize for AppError {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         ser.serialize_str(&self.to_string())
+    }
+}
+
+impl From<StageError> for AppError {
+    fn from(err: StageError) -> Self {
+        match err {
+            StageError::Git(e) => AppError::Git(e),
+            StageError::Io(e) => AppError::Io(e),
+            // Diff/Invalid/etc. carry a complete, user-facing message; preserve
+            // it verbatim — the client renders AppError's Display in a banner.
+            other => AppError::Backend(other.to_string()),
+        }
     }
 }
 

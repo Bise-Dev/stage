@@ -403,8 +403,11 @@ $RECYCLE.BIN/
 # Tauri-generated schemas (regenerated from tauri.conf.json + plugins on build)
 client/src-tauri/gen/
 
-# Tauri app is a binary crate — keep its lockfile.
-!client/src-tauri/Cargo.lock
+# The client cargo workspace ships an app binary — keep its lockfile.
+!client/Cargo.lock
+
+# Planning docs are local working notes, not committed (see CLAUDE.md).
+docs/plans/
 
 # TS incremental build artifacts
 *.tsbuildinfo
