@@ -1,5 +1,6 @@
+import { Dropdown } from '../../components/Dropdown';
 import { Icon } from '../../components/Icon';
-import type { SelfReviewDiff, SelfReviewScope } from '../../tauri';
+import type { BranchInfo, SelfReviewDiff, SelfReviewScope } from '../../tauri';
 
 /**
  * Top bar of the Self-Review screen. Adapts to the scope toggle:
@@ -14,9 +15,12 @@ export function Subheader({
   diff,
   scope,
   defaultBranch,
+  baseRef,
+  branches,
   viewedCount,
   onExit,
   onScopeChange,
+  onBaseChange,
   onCopyAsMarkdown,
   onReadyToShare,
   copyState,
@@ -24,15 +28,20 @@ export function Subheader({
   diff: SelfReviewDiff | null;
   scope: SelfReviewScope;
   defaultBranch: string | null;
+  /** The author-chosen base ref the `base`-scope diff compares against. */
+  baseRef: string | null;
+  /** Local branches backing the base picker. */
+  branches: BranchInfo[];
   viewedCount: number;
   onExit: () => void;
   onScopeChange: (s: SelfReviewScope) => void;
+  onBaseChange: (base: string) => void;
   onCopyAsMarkdown: () => void;
   onReadyToShare: () => void;
   copyState: 'idle' | 'copied' | 'error';
 }) {
   const branch = diff?.currentBranch ?? '…';
-  const base = defaultBranch ?? 'main';
+  const base = baseRef ?? defaultBranch ?? 'main';
   const fileCount = diff?.stats.filesChanged ?? 0;
   const added = diff?.stats.added ?? 0;
   const removed = diff?.stats.removed ?? 0;
@@ -64,9 +73,25 @@ export function Subheader({
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {scope === 'base' ? (
           <>
-            <span className="badge mono" style={{ background: 'rgba(0,0,0,0.06)' }}>
-              {base}
-            </span>
+            {/* Base picker — the comparison base is author-configurable, not
+                fixed to the default branch. Guard against the resolved base not
+                yet being in the loaded branch list (branches load async). */}
+            <Dropdown
+              mono
+              ariaLabel="Comparison base branch"
+              title="Branch to compare against"
+              value={base}
+              onChange={onBaseChange}
+              style={{ maxWidth: 220 }}
+              options={
+                branches.some((b) => b.name === base)
+                  ? branches.map((b) => ({ value: b.name, label: b.name }))
+                  : [
+                      { value: base, label: base },
+                      ...branches.map((b) => ({ value: b.name, label: b.name })),
+                    ]
+              }
+            />
             <Icon name="arrow-right" size={11} color="var(--gray-400)" />
             <span
               className="badge mono"

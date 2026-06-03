@@ -24,6 +24,7 @@ export function FileList({
   onToggleViewed,
   onClearViewed,
   noteCounts,
+  width,
 }: {
   files: SelfReviewFileChange[];
   filter: string;
@@ -35,6 +36,8 @@ export function FileList({
   onToggleViewed: (path: string) => void;
   onClearViewed: () => void;
   noteCounts: Map<string, number>;
+  /** Author-resizable column width (px); see `useColumnWidth`. */
+  width: number;
 }) {
   const q = filter.trim().toLowerCase();
   const filtered = !q
@@ -44,8 +47,8 @@ export function FileList({
   return (
     <div
       style={{
-        width: 260,
-        flex: '0 0 260px',
+        width,
+        flex: `0 0 ${width}px`,
         borderRight: '1px solid var(--hairline)',
         background: '#fbfaf8',
         display: 'flex',

@@ -40,6 +40,7 @@ export function DebriefRail({
   files,
   selectedPath,
   viewed,
+  width,
   onSelectFile,
   onToggleViewed,
   onClose,
@@ -51,6 +52,8 @@ export function DebriefRail({
   selectedPath: string | null;
   /** The shared mark-viewed set (same store the file list + diff use). */
   viewed: Set<string>;
+  /** Author-resizable column width (px); see `useColumnWidth`. */
+  width: number;
   onSelectFile: (path: string) => void;
   onToggleViewed: (path: string) => void;
   onClose: () => void;
@@ -88,8 +91,8 @@ export function DebriefRail({
   return (
     <div
       style={{
-        width: 360,
-        flex: '0 0 360px',
+        width,
+        flex: `0 0 ${width}px`,
         borderLeft: '1px solid var(--hairline)',
         background: '#fbfaf8',
         display: 'flex',
@@ -346,7 +349,7 @@ function StepCard({
             // biome-ignore lint/a11y/useSemanticElements: mirrors the FileList row checkbox; a native checkbox inherits OS styling we don't want.
             role="checkbox"
             aria-checked={isViewed}
-            aria-label="Mark viewed"
+            aria-label="Viewed"
             tabIndex={0}
             onClick={(e) => {
               e.stopPropagation();
@@ -375,9 +378,7 @@ function StepCard({
           >
             {isViewed ? '✓' : ''}
           </span>
-          <span style={{ fontSize: 10.5, color: 'var(--gray-500)' }}>
-            {isViewed ? 'Viewed' : 'Mark viewed'}
-          </span>
+          <span style={{ fontSize: 10.5, color: 'var(--gray-500)' }}>Viewed</span>
           <div style={{ flex: 1 }} />
           {meta ? (
             <span style={{ fontSize: 10.5, color: 'var(--gray-500)', whiteSpace: 'nowrap' }}>
@@ -395,75 +396,84 @@ function StepCard({
         </div>
       </div>
 
-      {/* Agent intro (markdown) */}
-      {intro && (
-        <div
-          className="md"
-          style={{
-            padding: '6px 10px 8px',
-            borderTop: '1px solid var(--hairline-2)',
-            fontSize: 12,
-          }}
-        >
-          <Markdown remarkPlugins={[remarkGfm]}>{intro}</Markdown>
-        </div>
-      )}
+      {/* Card body — intro + notes + add-note. Collapses to header-only once
+          the step is marked viewed (mirrors DiffPane's viewed-file collapse);
+          toggling viewed off expands it back. */}
+      {!isViewed && (
+        <>
+          {/* Agent intro (markdown) */}
+          {intro && (
+            <div
+              className="md"
+              style={{
+                padding: '6px 10px 8px',
+                borderTop: '1px solid var(--hairline-2)',
+                fontSize: 12,
+              }}
+            >
+              <Markdown remarkPlugins={[remarkGfm]}>{intro}</Markdown>
+            </div>
+          )}
 
-      {/* Review notes for this file */}
-      {notes.length > 0 && (
-        <div style={{ padding: '4px 10px 2px', borderTop: '1px solid var(--hairline-2)' }}>
-          {notes.map((n) => (
-            <Thread
-              key={n.id}
-              note={n}
-              onReply={onReplyNote}
-              onResolve={onResolveNote}
-              onReopen={onReopenNote}
-              onDelete={onDeleteNote}
-            />
-          ))}
-        </div>
-      )}
+          {/* Review notes for this file */}
+          {notes.length > 0 && (
+            <div style={{ padding: '4px 10px 2px', borderTop: '1px solid var(--hairline-2)' }}>
+              {notes.map((n) => (
+                <Thread
+                  key={n.id}
+                  note={n}
+                  onReply={onReplyNote}
+                  onResolve={onResolveNote}
+                  onReopen={onReopenNote}
+                  onDelete={onDeleteNote}
+                />
+              ))}
+            </div>
+          )}
 
-      {/* Add-note affordance */}
-      <div style={{ padding: '4px 10px 8px', borderTop: '1px solid var(--hairline-2)' }}>
-        {adding ? (
-          <Composer
-            placeholder={`Review note on ${name}…`}
-            autoFocus
-            onSave={(body) => {
-              const trimmed = body.trim();
-              if (!trimmed) {
-                setAdding(false);
-                return;
-              }
-              onCreateNote({ file, lineStart: null, lineEnd: null, side: null }, trimmed)
-                .then(() => setAdding(false))
-                .catch(() => {
-                  // Error surfaced via the hook's banner; keep the composer
-                  // open so the author doesn't lose what they typed.
-                });
-            }}
-            onCancel={() => setAdding(false)}
-          />
-        ) : (
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => setAdding(true)}
-            disabled={!inDiff}
-            title={inDiff ? 'Add a Review note on this file' : 'File is not in the current diff'}
-            style={{
-              color: 'var(--blue)',
-              padding: '0 4px',
-              height: 22,
-              opacity: inDiff ? 1 : 0.5,
-            }}
-          >
-            <Icon name="plus" size={11} color="var(--blue)" /> Review note
-          </button>
-        )}
-      </div>
+          {/* Add-note affordance */}
+          <div style={{ padding: '4px 10px 8px', borderTop: '1px solid var(--hairline-2)' }}>
+            {adding ? (
+              <Composer
+                placeholder={`Review note on ${name}…`}
+                autoFocus
+                onSave={(body) => {
+                  const trimmed = body.trim();
+                  if (!trimmed) {
+                    setAdding(false);
+                    return;
+                  }
+                  onCreateNote({ file, lineStart: null, lineEnd: null, side: null }, trimmed)
+                    .then(() => setAdding(false))
+                    .catch(() => {
+                      // Error surfaced via the hook's banner; keep the composer
+                      // open so the author doesn't lose what they typed.
+                    });
+                }}
+                onCancel={() => setAdding(false)}
+              />
+            ) : (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setAdding(true)}
+                disabled={!inDiff}
+                title={
+                  inDiff ? 'Add a Review note on this file' : 'File is not in the current diff'
+                }
+                style={{
+                  color: 'var(--blue)',
+                  padding: '0 4px',
+                  height: 22,
+                  opacity: inDiff ? 1 : 0.5,
+                }}
+              >
+                <Icon name="plus" size={11} color="var(--blue)" /> Review note
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
