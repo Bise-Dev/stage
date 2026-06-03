@@ -42,3 +42,13 @@ Forward-looking goals that we are deliberately *not* building yet, but are aimin
 **Why we're not doing it now:** Building a real sync engine (queues, conflict resolution, retry semantics, idempotency keys for GitHub writes) is a multi-week effort that does not earn its keep at POC stage. Write-through gets the storyline experience in front of users with a fraction of the code.
 
 **Implication for today's design:** Keep the client's review-action code path behind a thin interface in the backend client so that today's "POST and wait" can later be swapped for "enqueue, optimistically render, reconcile" without touching the UI.
+
+## Unify Debrief and Storyline terminology
+
+**Today (POC):** Cycle-1 introduced the **Debrief** (agent → author, local, regenerated each pass; lives in `stage-core`) alongside the existing **Storyline** (author → reviewers, backend, hand-curated). They share the same shape — an ordered sequence of steps, each pointing at part of the diff and carrying an intro — but are separate types, stores, and glossary entries (see `CONTEXT.md`). Promotion (Debrief → Storyline) is deferred (ADR-0011).
+
+**Goal:** Once promotion exists, reconcile the two onto **shared terminology** (and likely a shared "ordered steps + intros over a diff" core type) so a Debrief can become a Storyline without a lossy translation, and the glossary stops carrying two near-parallel definitions.
+
+**Why we're not doing it now:** Producer, audience, storage, and lifecycle differ enough that forcing a shared abstraction before the promotion bridge exists would be premature — the overlap isn't concrete yet.
+
+**Implication for today's design:** Keep the Debrief step shape (`file` + `intro` + `order`) aligned with the Storyline step shape, so a future merge is a rename rather than a reshape.

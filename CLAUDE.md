@@ -2,6 +2,8 @@
 
 Project-specific guidance for code generation in this monorepo. For domain language and architectural decisions, see [CONTEXT.md](./CONTEXT.md) and [docs/adr/](./docs/adr/).
 
+**Implementation plans are local working notes** — keep them under `docs/plans/` (gitignored), not committed. They're scratch for the task at hand; durable decisions belong in an ADR (`docs/adr/`) or `CONTEXT.md`, never a committed plan file.
+
 ## After every change
 
 Run the verify pipeline before declaring any task done:
