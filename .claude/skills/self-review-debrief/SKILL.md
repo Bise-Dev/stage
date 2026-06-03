@@ -14,11 +14,11 @@ It is **local and auth-free**: no network, no tokens. You write through the `sta
 The CLI is a debug build in this repo's cargo workspace — **not on `PATH`**. Build it (incremental; a near-instant no-op when nothing changed), then call it by path. Always build first so the binary matches the current source:
 
 ```sh
-cargo build -p stage-cli --manifest-path client/Cargo.toml
+(cd client && cargo build -p stage-cli)   # build from client/ — see note
 BIN=client/target/debug/stage
 ```
 
-Run every command below as `"$BIN" self-review …` from the **repo root**. The CLI discovers the repo and current branch itself; it keys the Debrief by `(repo, branch)`, so just be on the right branch.
+**Build from inside `client/`** (the `(cd client && …)` above), not from the repo root with `--manifest-path`: the Rust toolchain is pinned in `client/rust-toolchain.toml`, and `rustup` selects the toolchain from the *current directory*, not the manifest path. Building from the repo root silently uses the default toolchain and can fail to compile dependencies (e.g. `libsqlite3-sys`). The compiled binary has no such constraint — run it from the **repo root** as `"$BIN" self-review …`. The CLI discovers the repo and current branch itself; it keys the Debrief by `(repo, branch)`, so just be on the right branch.
 
 ## Step 1 — pick the mode
 
