@@ -11,8 +11,10 @@ pub mod error;
 pub mod repo_key;
 pub mod store;
 
+pub use diff::DiffLineIndex;
 pub use domain::{
-    Debrief, DebriefInput, DebriefStep, NoteAnchor, NoteStatus, ReviewNote, ReviewNoteView,
+    Debrief, DebriefInput, DebriefStep, NoteAnchor, NoteReply, NoteStatus, ReplyAuthor, ReviewNote,
+    ReviewNoteView, Side,
 };
 pub use error::StageError;
 pub use repo_key::{repo_key_from_cwd, repo_root_from_cwd, slug_from_remote, RepoKey};

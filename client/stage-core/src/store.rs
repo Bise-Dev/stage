@@ -7,7 +7,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::domain::{Debrief, DebriefStep, NoteAnchor, NoteStatus, ReviewNote};
+use crate::domain::{
+    Debrief, DebriefStep, NoteAnchor, NoteReply, NoteStatus, ReplyAuthor, ReviewNote, Side,
+};
 use crate::error::StageError;
 use crate::repo_key::RepoKey;
 
@@ -134,28 +136,34 @@ impl Store {
     }
 
     /// Create an `open` Review note with the given app-minted `id`. The desktop
-    /// app mints the UUID; the store does not, to avoid a uuid dependency here.
+    /// app mints the note UUID; the store does not, to avoid a uuid dependency
+    /// here. `anchor` is `None` for general (un-anchored) feedback.
     pub fn create_note(
         &self,
         key: &RepoKey,
         id: &str,
-        anchor: &NoteAnchor,
+        anchor: Option<&NoteAnchor>,
         body: &str,
     ) -> Result<ReviewNote, StageError> {
         let now = now_epoch();
+        let file = anchor.map(|a| a.file.as_str());
+        let line_start = anchor.and_then(|a| a.line_start);
+        let line_end = anchor.and_then(|a| a.line_end);
+        let side = anchor.and_then(|a| a.side).map(Side::as_str);
         self.conn.execute(
             "INSERT INTO review_note \
-                (id, repo_owner, repo_name, branch, file, line_start, line_end, \
-                 body, status, agent_reply, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?10)",
+                (id, repo_owner, repo_name, branch, file, line_start, line_end, side, \
+                 body, status, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
             params![
                 id,
                 key.repo_owner,
                 key.repo_name,
                 key.branch,
-                anchor.file,
-                anchor.line_start,
-                anchor.line_end,
+                file,
+                line_start,
+                line_end,
+                side,
                 body,
                 NoteStatus::Open.as_str(),
                 now,
@@ -166,13 +174,14 @@ impl Store {
     }
 
     /// Review notes for `key`, optionally filtered by `status`, newest first.
+    /// Each note's thread (`replies`) is hydrated from `review_note_reply`.
     pub fn list_notes(
         &self,
         key: &RepoKey,
         status: Option<NoteStatus>,
     ) -> Result<Vec<ReviewNote>, StageError> {
         let mut sql = String::from(
-            "SELECT id, file, line_start, line_end, body, status, agent_reply, \
+            "SELECT id, file, line_start, line_end, side, body, status, \
                     created_at, updated_at FROM review_note \
              WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
         );
@@ -182,62 +191,120 @@ impl Store {
         sql.push_str(" ORDER BY created_at DESC, id");
 
         let mut stmt = self.conn.prepare(&sql)?;
-        // `note_from_row` is a fn item (Copy), so it can be passed to whichever
-        // branch runs. A bad status string surfaces as a loud rusqlite error.
-        let notes = if let Some(s) = status {
+        // `bare_note_from_row` is a fn item (Copy), so it can be passed to
+        // whichever branch runs. A bad status string is a loud rusqlite error.
+        let bare = if let Some(s) = status {
             stmt.query_map(
                 params![key.repo_owner, key.repo_name, key.branch, s.as_str()],
-                note_from_row,
+                bare_note_from_row,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?
         } else {
             stmt.query_map(
                 params![key.repo_owner, key.repo_name, key.branch],
-                note_from_row,
+                bare_note_from_row,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?
         };
-        Ok(notes)
+        bare.into_iter().map(|n| self.hydrate(n)).collect()
     }
 
-    /// A single Review note by id (within `key`'s scope), or `None`.
+    /// A single Review note by id (within `key`'s scope), or `None`. Thread
+    /// hydrated.
     pub fn get_note(&self, key: &RepoKey, id: &str) -> Result<Option<ReviewNote>, StageError> {
-        Ok(self
+        let bare = self
             .conn
             .query_row(
-                "SELECT id, file, line_start, line_end, body, status, agent_reply, \
+                "SELECT id, file, line_start, line_end, side, body, status, \
                         created_at, updated_at FROM review_note \
                  WHERE id = ?1 AND repo_owner = ?2 AND repo_name = ?3 AND branch = ?4",
                 params![id, key.repo_owner, key.repo_name, key.branch],
-                note_from_row,
+                bare_note_from_row,
             )
-            .optional()?)
+            .optional()?;
+        match bare {
+            Some(n) => Ok(Some(self.hydrate(n)?)),
+            None => Ok(None),
+        }
     }
 
-    /// Agent action: move a note to `addressed` with `reply`. Allowed from
-    /// `open` or `addressed` (re-reply); fails loud on a `resolved` or unknown
-    /// note (CLAUDE.md fail-loud — the agent must not silently no-op).
+    /// Attach a note's thread (`replies`, oldest first) loaded from the
+    /// `review_note_reply` table.
+    fn hydrate(&self, mut note: ReviewNote) -> Result<ReviewNote, StageError> {
+        // Order by insertion (`rowid`), not `id`: reply ids are random, and
+        // `created_at` is second-granularity, so two replies in the same second
+        // would otherwise sort non-deterministically. `rowid` is monotonic with
+        // insertion, giving stable thread order.
+        let mut stmt = self.conn.prepare(
+            "SELECT id, author, body, created_at FROM review_note_reply \
+             WHERE note_id = ?1 ORDER BY rowid",
+        )?;
+        note.replies = stmt
+            .query_map(params![note.id], reply_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(note)
+    }
+
+    /// Agent action: append an agent reply to a note's thread, moving it to
+    /// `addressed`. Allowed from `open` or `addressed` (re-reply); fails loud on
+    /// a `resolved` or unknown note (CLAUDE.md fail-loud — the agent must not
+    /// silently no-op).
     pub fn address_note(
         &self,
         key: &RepoKey,
         id: &str,
         reply: &str,
     ) -> Result<ReviewNote, StageError> {
+        self.append_reply(key, id, ReplyAuthor::Agent, reply)
+    }
+
+    /// Author action: append an author reply to a note's thread. On an
+    /// `addressed` or `resolved` note this re-raises it to `open` (the author is
+    /// pushing back / reopening with a reason); on an `open` note it stays open.
+    pub fn add_author_reply(
+        &self,
+        key: &RepoKey,
+        id: &str,
+        body: &str,
+    ) -> Result<ReviewNote, StageError> {
+        self.append_reply(key, id, ReplyAuthor::Author, body)
+    }
+
+    /// Append a thread entry and reconcile the note's status (ADR-0012):
+    /// an `agent` reply → `addressed` (rejected on a `resolved` note); an
+    /// `author` reply → `open`. Reply ids are store-minted (unlike note ids):
+    /// a reply has no public identity, so the store mints it via `randomblob`
+    /// rather than taking a uuid dependency.
+    fn append_reply(
+        &self,
+        key: &RepoKey,
+        id: &str,
+        author: ReplyAuthor,
+        body: &str,
+    ) -> Result<ReviewNote, StageError> {
         let note = self
             .get_note(key, id)?
             .ok_or_else(|| StageError::Invalid(format!("no review note with id '{id}'")))?;
-        if note.status == NoteStatus::Resolved {
+        if author == ReplyAuthor::Agent && note.status == NoteStatus::Resolved {
             return Err(StageError::Invalid(format!(
                 "review note '{id}' is already resolved and cannot be addressed"
             )));
         }
+        let next_status = match author {
+            ReplyAuthor::Agent => NoteStatus::Addressed,
+            ReplyAuthor::Author => NoteStatus::Open,
+        };
         let now = now_epoch();
         self.conn.execute(
-            "UPDATE review_note SET status = ?1, agent_reply = ?2, updated_at = ?3 \
-             WHERE id = ?4 AND repo_owner = ?5 AND repo_name = ?6 AND branch = ?7",
+            "INSERT INTO review_note_reply (id, note_id, author, body, created_at) \
+             VALUES ('r_' || lower(hex(randomblob(8))), ?1, ?2, ?3, ?4)",
+            params![id, author.as_str(), body, now],
+        )?;
+        self.conn.execute(
+            "UPDATE review_note SET status = ?1, updated_at = ?2 \
+             WHERE id = ?3 AND repo_owner = ?4 AND repo_name = ?5 AND branch = ?6",
             params![
-                NoteStatus::Addressed.as_str(),
-                reply,
+                next_status.as_str(),
                 now,
                 id,
                 key.repo_owner,
@@ -247,6 +314,25 @@ impl Store {
         )?;
         self.get_note(key, id)?
             .ok_or_else(|| StageError::Invalid(format!("note {id} vanished after update")))
+    }
+
+    /// Author action: permanently delete a note and its thread. Fails loud on an
+    /// unknown note. The thread is removed in the same transaction (the
+    /// note↔reply relationship is code-enforced — no SQL foreign key, see
+    /// MIGRATIONS).
+    pub fn delete_note(&self, key: &RepoKey, id: &str) -> Result<(), StageError> {
+        self.get_note(key, id)?
+            .ok_or_else(|| StageError::Invalid(format!("no review note with id '{id}'")))?;
+        self.conn.execute(
+            "DELETE FROM review_note_reply WHERE note_id = ?1",
+            params![id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM review_note \
+             WHERE id = ?1 AND repo_owner = ?2 AND repo_name = ?3 AND branch = ?4",
+            params![id, key.repo_owner, key.repo_name, key.branch],
+        )?;
+        Ok(())
     }
 
     /// Author action: close a note (`resolved`). Fails loud on an unknown note.
@@ -285,29 +371,67 @@ impl Store {
     }
 }
 
-/// Map a `review_note` row to a [`ReviewNote`]. A bad `status` string is a loud
-/// failure (rusqlite error), never a silent default.
-fn note_from_row(r: &rusqlite::Row) -> rusqlite::Result<ReviewNote> {
-    let status_str: String = r.get(5)?;
+/// Map a `review_note` row to a [`ReviewNote`] **without** its thread — callers
+/// hydrate `replies` via [`Store::hydrate`]. Column order:
+/// `id, file, line_start, line_end, side, body, status, created_at, updated_at`.
+/// A bad `status`/`side` string is a loud failure, never a silent default.
+fn bare_note_from_row(r: &rusqlite::Row) -> rusqlite::Result<ReviewNote> {
+    let file: Option<String> = r.get(1)?;
+    let line_start: Option<u32> = r.get(2)?;
+    let line_end: Option<u32> = r.get(3)?;
+    let side_str: Option<String> = r.get(4)?;
+    let side = match side_str {
+        Some(s) => Some(Side::from_db_str(&s).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                4,
+                rusqlite::types::Type::Text,
+                format!("unknown review_note.side '{s}'").into(),
+            )
+        })?),
+        None => None,
+    };
+    let anchor = file.map(|file| NoteAnchor {
+        file,
+        line_start,
+        line_end,
+        side,
+    });
+
+    let status_str: String = r.get(6)?;
     let status = NoteStatus::from_db_str(&status_str).ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(
-            5,
+            6,
             rusqlite::types::Type::Text,
             format!("unknown review_note.status '{status_str}'").into(),
         )
     })?;
     Ok(ReviewNote {
         id: r.get(0)?,
-        anchor: NoteAnchor {
-            file: r.get(1)?,
-            line_start: r.get(2)?,
-            line_end: r.get(3)?,
-        },
-        body: r.get(4)?,
+        anchor,
+        body: r.get(5)?,
         status,
-        agent_reply: r.get(6)?,
+        replies: Vec::new(),
         created_at: r.get(7)?,
         updated_at: r.get(8)?,
+    })
+}
+
+/// Map a `review_note_reply` row to a [`NoteReply`]. Column order:
+/// `id, author, body, created_at`. A bad `author` string is a loud failure.
+fn reply_from_row(r: &rusqlite::Row) -> rusqlite::Result<NoteReply> {
+    let author_str: String = r.get(1)?;
+    let author = ReplyAuthor::from_db_str(&author_str).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            1,
+            rusqlite::types::Type::Text,
+            format!("unknown review_note_reply.author '{author_str}'").into(),
+        )
+    })?;
+    Ok(NoteReply {
+        id: r.get(0)?,
+        author,
+        body: r.get(2)?,
+        created_at: r.get(3)?,
     })
 }
 
@@ -354,6 +478,53 @@ const MIGRATIONS: &[&str] = &[
         created_at  INTEGER NOT NULL,
         updated_at  INTEGER NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS review_note_scope
+        ON review_note (repo_owner, repo_name, branch, status);",
+    // v3 — Unify diff annotations into the Review note (ADR-0012):
+    //   * threads: a `review_note_reply` table replaces the single `agent_reply`
+    //     column (existing replies backfilled as one `agent` entry each);
+    //   * optional anchor: `file` becomes nullable (general feedback);
+    //   * line side: a `side` column ('left'|'right', null for file-level).
+    // The note↔reply link is code-enforced (no SQL foreign key) so this rebuild
+    // of `review_note` needs no FK juggling and `delete_note` removes replies
+    // explicitly.
+    "CREATE TABLE IF NOT EXISTS review_note_reply (
+        id         TEXT    NOT NULL PRIMARY KEY,
+        note_id    TEXT    NOT NULL,
+        author     TEXT    NOT NULL,
+        body       TEXT    NOT NULL,
+        created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS review_note_reply_note
+        ON review_note_reply (note_id, created_at);
+
+    INSERT INTO review_note_reply (id, note_id, author, body, created_at)
+        SELECT 'r_' || lower(hex(randomblob(8))), id, 'agent', agent_reply, updated_at
+        FROM review_note
+        WHERE agent_reply IS NOT NULL AND agent_reply <> '';
+
+    CREATE TABLE review_note_v3 (
+        id          TEXT    NOT NULL PRIMARY KEY,
+        repo_owner  TEXT    NOT NULL,
+        repo_name   TEXT    NOT NULL,
+        branch      TEXT    NOT NULL,
+        file        TEXT,
+        line_start  INTEGER,
+        line_end    INTEGER,
+        side        TEXT,
+        body        TEXT    NOT NULL,
+        status      TEXT    NOT NULL,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+    );
+    INSERT INTO review_note_v3
+        (id, repo_owner, repo_name, branch, file, line_start, line_end, side,
+         body, status, created_at, updated_at)
+        SELECT id, repo_owner, repo_name, branch, file, line_start, line_end, NULL,
+               body, status, created_at, updated_at
+        FROM review_note;
+    DROP TABLE review_note;
+    ALTER TABLE review_note_v3 RENAME TO review_note;
     CREATE INDEX IF NOT EXISTS review_note_scope
         ON review_note (repo_owner, repo_name, branch, status);",
 ];
@@ -484,6 +655,7 @@ mod tests {
             file: file.into(),
             line_start: Some(1),
             line_end: Some(3),
+            side: Some(Side::Right),
         }
     }
 
@@ -494,18 +666,23 @@ mod tests {
         let k = key();
 
         let note = store
-            .create_note(&k, "n1", &anchor("a.rs"), "please rename")
+            .create_note(&k, "n1", Some(&anchor("a.rs")), "please rename")
             .unwrap();
         assert_eq!(note.status, NoteStatus::Open);
-        assert!(note.agent_reply.is_none());
+        assert!(note.replies.is_empty());
+        assert_eq!(note.anchor.as_ref().unwrap().side, Some(Side::Right));
 
         let addressed = store.address_note(&k, "n1", "renamed it").unwrap();
         assert_eq!(addressed.status, NoteStatus::Addressed);
-        assert_eq!(addressed.agent_reply.as_deref(), Some("renamed it"));
+        assert_eq!(addressed.replies.len(), 1);
+        assert_eq!(addressed.replies[0].author, ReplyAuthor::Agent);
+        assert_eq!(addressed.replies[0].body, "renamed it");
 
-        // Re-addressing an addressed note updates the reply (agent's 2nd pass).
+        // Re-addressing appends a *second* agent reply (threads accumulate now,
+        // they don't overwrite — ADR-0012).
         let re = store.address_note(&k, "n1", "renamed again").unwrap();
-        assert_eq!(re.agent_reply.as_deref(), Some("renamed again"));
+        assert_eq!(re.replies.len(), 2);
+        assert_eq!(re.replies[1].body, "renamed again");
 
         let resolved = store.resolve_note(&k, "n1").unwrap();
         assert_eq!(resolved.status, NoteStatus::Resolved);
@@ -518,6 +695,100 @@ mod tests {
             store.reopen_note(&k, "n1").unwrap().status,
             NoteStatus::Open
         );
+    }
+
+    #[test]
+    fn author_reply_re_raises_addressed_to_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.sqlite3")).unwrap();
+        let k = key();
+
+        store
+            .create_note(&k, "n1", Some(&anchor("a.rs")), "rename this")
+            .unwrap();
+        store.address_note(&k, "n1", "done").unwrap();
+
+        // Author pushes back on the agent's fix → note re-opens, thread grows.
+        let reraised = store.add_author_reply(&k, "n1", "not quite").unwrap();
+        assert_eq!(reraised.status, NoteStatus::Open);
+        assert_eq!(reraised.replies.len(), 2);
+        assert_eq!(reraised.replies[1].author, ReplyAuthor::Author);
+
+        // An author reply on a resolved note reopens it.
+        store.resolve_note(&k, "n1").unwrap();
+        let reopened = store
+            .add_author_reply(&k, "n1", "actually, also this")
+            .unwrap();
+        assert_eq!(reopened.status, NoteStatus::Open);
+    }
+
+    #[test]
+    fn anchorless_note_round_trips_and_is_never_outdated() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.sqlite3")).unwrap();
+        let k = key();
+
+        let note = store
+            .create_note(&k, "g1", None, "the overall approach is off")
+            .unwrap();
+        assert!(note.anchor.is_none());
+        let got = store.get_note(&k, "g1").unwrap().unwrap();
+        assert!(got.anchor.is_none());
+        assert_eq!(got.body, "the overall approach is off");
+    }
+
+    #[test]
+    fn delete_note_removes_note_and_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.sqlite3")).unwrap();
+        let k = key();
+        store
+            .create_note(&k, "n1", Some(&anchor("a.rs")), "x")
+            .unwrap();
+        store.address_note(&k, "n1", "fixed").unwrap();
+
+        store.delete_note(&k, "n1").unwrap();
+        assert!(store.get_note(&k, "n1").unwrap().is_none());
+        // Deleting again fails loud (unknown note).
+        assert!(store.delete_note(&k, "n1").is_err());
+    }
+
+    #[test]
+    fn migration_v3_upgrades_a_v2_store_and_backfills_agent_reply() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.sqlite3");
+        // Hand-build a v2 store: apply the v1 + v2 DDL, insert a note carrying
+        // the old single `agent_reply` column, and stamp user_version = 2.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.execute_batch(MIGRATIONS[1]).unwrap();
+            conn.execute(
+                "INSERT INTO review_note \
+                    (id, repo_owner, repo_name, branch, file, line_start, line_end, \
+                     body, status, agent_reply, created_at, updated_at) \
+                 VALUES ('n1','octo','stage','feat/x','a.rs',1,3,'rename it','addressed','renamed it',100,200)",
+                [],
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 2i64).unwrap();
+        }
+
+        // Re-open through Store: migrate() applies v3 (table rebuild + backfill).
+        let store = Store::open(&path).unwrap();
+        let note = store
+            .get_note(&key(), "n1")
+            .unwrap()
+            .expect("note survived migration");
+        assert_eq!(note.status, NoteStatus::Addressed);
+        let a = note.anchor.expect("anchor survived");
+        assert_eq!(a.file, "a.rs");
+        assert_eq!(a.line_start, Some(1));
+        assert_eq!(a.side, None); // v2 rows had no side
+                                  // The single legacy agent_reply is now one `agent` thread entry.
+        assert_eq!(note.replies.len(), 1);
+        assert_eq!(note.replies[0].author, ReplyAuthor::Agent);
+        assert_eq!(note.replies[0].body, "renamed it");
     }
 
     #[test]
@@ -535,8 +806,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("h.sqlite3")).unwrap();
         let k = key();
-        store.create_note(&k, "n1", &anchor("a.rs"), "one").unwrap();
-        store.create_note(&k, "n2", &anchor("b.rs"), "two").unwrap();
+        store
+            .create_note(&k, "n1", Some(&anchor("a.rs")), "one")
+            .unwrap();
+        store
+            .create_note(&k, "n2", Some(&anchor("b.rs")), "two")
+            .unwrap();
         store.address_note(&k, "n2", "done").unwrap();
 
         assert_eq!(store.list_notes(&k, None).unwrap().len(), 2);
@@ -550,6 +825,8 @@ mod tests {
             addressed.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
             vec!["n2"]
         );
+        // The addressed note's thread is hydrated in the list view.
+        assert_eq!(addressed[0].replies.len(), 1);
 
         let mut other = key();
         other.branch = "main".into();

@@ -68,8 +68,9 @@ impl DebriefInput {
 }
 
 /// Lifecycle of a [`ReviewNote`]: `open` (author left it) → `addressed` (agent
-/// revised and replied) → `resolved` (author closed it). The author may reopen
-/// an addressed note back to `open`.
+/// replied) → `resolved` (author closed it, terminal). An author reply on an
+/// addressed note re-raises it to `open`; the author may also reopen explicitly
+/// (ADR-0012).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteStatus {
@@ -99,9 +100,39 @@ impl NoteStatus {
     }
 }
 
+/// Which side of the diff a line anchor targets: `left` = a deleted line (old
+/// file), `right` = an added/context line (new file). Mirrors the webview's
+/// `Side` and `@git-diff-view`'s `SplitSide`. Only meaningful with a line range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Side {
+    Left,
+    Right,
+}
+
+impl Side {
+    /// The wire/string form stored in SQLite and emitted in JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Side::Left => "left",
+            Side::Right => "right",
+        }
+    }
+
+    /// Parse the stored string form back into a side.
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "left" => Some(Side::Left),
+            "right" => Some(Side::Right),
+            _ => None,
+        }
+    }
+}
+
 /// Where a [`ReviewNote`] is anchored in the diff: a file path, optionally a
-/// line range. Anchored to the *diff location*, not a Debrief step, so it
-/// survives the agent regenerating the Debrief.
+/// line range on a given [`Side`]. Anchored to the *diff location*, not a
+/// Debrief step, so it survives the agent regenerating the Debrief. A note may
+/// have no anchor at all (general feedback) — see [`ReviewNote::anchor`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NoteAnchor {
@@ -110,21 +141,69 @@ pub struct NoteAnchor {
     pub line_start: Option<u32>,
     #[serde(default)]
     pub line_end: Option<u32>,
+    /// Which diff side the line range targets; `None` for a file-level anchor.
+    #[serde(default)]
+    pub side: Option<Side>,
 }
 
-/// A piece of the author's feedback on a Debrief. The agent reads outstanding
-/// notes, revises, and replies — closing the local author↔agent loop.
+/// Who authored a thread entry on a [`ReviewNote`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReplyAuthor {
+    Author,
+    Agent,
+}
+
+impl ReplyAuthor {
+    /// The wire/string form stored in SQLite and emitted in JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReplyAuthor::Author => "author",
+            ReplyAuthor::Agent => "agent",
+        }
+    }
+
+    /// Parse the stored string form back into an author.
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "author" => Some(ReplyAuthor::Author),
+            "agent" => Some(ReplyAuthor::Agent),
+            _ => None,
+        }
+    }
+}
+
+/// A follow-up entry on a [`ReviewNote`]'s thread, after the opening `body`.
+/// Either party can append: an agent reply marks the note `addressed`; an
+/// author reply on an addressed note re-raises it to `open` (see ADR-0012).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteReply {
+    /// App-minted UUID.
+    pub id: String,
+    pub author: ReplyAuthor,
+    pub body: String,
+    pub created_at: i64,
+}
+
+/// The author's annotation on a diff location, made during Self-Review. A
+/// threaded conversation: the opening author `body` plus `replies` from either
+/// party. The agent reads outstanding notes, revises, and replies — closing the
+/// local author↔agent loop (ADR-0012).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewNote {
     /// App-minted UUID.
     pub id: String,
-    pub anchor: NoteAnchor,
-    /// The author's note text.
+    /// The diff location, or `None` for general (un-anchored) feedback.
+    #[serde(default)]
+    pub anchor: Option<NoteAnchor>,
+    /// The author's opening note text.
     pub body: String,
     pub status: NoteStatus,
-    /// The agent's reply, set when it moves the note to `addressed`.
-    pub agent_reply: Option<String>,
+    /// Follow-up thread entries, oldest first.
+    #[serde(default)]
+    pub replies: Vec<NoteReply>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -140,8 +219,10 @@ impl ReviewNote {
 }
 
 /// A [`ReviewNote`] plus its computed `outdated` flag. `outdated` is never
-/// stored — it's derived from whether the note's anchored file is still in the
-/// current Base diff (the **Stale step** pattern, at file granularity).
+/// stored — it's derived from whether the note's anchor still matches the
+/// current Base diff: file gone, or (line-anchored) its line range on its side
+/// is gone. Anchorless notes are never outdated. The **Stale step** pattern,
+/// at line granularity (ADR-0012); see [`crate::diff::DiffLineIndex`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewNoteView {

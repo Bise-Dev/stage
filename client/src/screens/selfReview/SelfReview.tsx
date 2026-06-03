@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
-import { getActiveRepo, repoSummary } from '../../tauri';
+import { type BranchInfo, getActiveRepo, gitLocalBranches, repoSummary } from '../../tauri';
+import { DebriefRail } from './DebriefRail';
 import { DiffPane, type DiffPaneHandle, type ViewLayout, type ViewMode } from './DiffPane';
 import { FileList } from './FileList';
 import { Subheader } from './Subheader';
-import { useSelfReviewComments } from './useSelfReviewComments';
+import { ResizeHandle, useColumnWidth } from './columnResize';
+import { notesToMarkdown } from './markdown';
+import { useSelfReviewDebrief } from './useSelfReviewDebrief';
 import { useSelfReviewDiff } from './useSelfReviewDiff';
 import { clearViewed, loadViewed, setViewed } from './viewedStore';
 
@@ -17,6 +21,7 @@ import { clearViewed, loadViewed, setViewed } from './viewedStore';
  * Workspaces.
  */
 const LAYOUT_KEY = 'selfReview:viewLayout';
+const BASE_KEY_PREFIX = 'selfReview:base:';
 
 function loadLayout(): ViewLayout {
   return localStorage.getItem(LAYOUT_KEY) === 'single' ? 'single' : 'scroll';
@@ -25,6 +30,11 @@ function loadLayout(): ViewLayout {
 export function SelfReview({ onExit }: { onExit: () => void }) {
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
+  // The base ref the `base`-scope diff compares against. Defaults to the
+  // repo's default branch but is an author-chosen branch picker (note: the
+  // comparison should be configurable). `null` until bootstrap resolves it.
+  const [baseRef, setBaseRefState] = useState<string | null>(null);
+  const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('unified');
   const [viewLayout, setViewLayoutState] = useState<ViewLayout>(loadLayout);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -38,6 +48,10 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
     localStorage.setItem(LAYOUT_KEY, v);
     setViewLayoutState(v);
   }, []);
+
+  // Resizable file-list + Debrief-rail columns (persisted, clamped).
+  const fileListCol = useColumnWidth('selfReview:fileListWidth', 260, 180, 480, 'right');
+  const railCol = useColumnWidth('selfReview:railWidth', 360, 280, 560, 'left');
 
   // Resolve active repo + default branch on mount. Fail loud per CLAUDE.md:
   // surface the message instead of falling back to "main".
@@ -53,6 +67,11 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
         setRepoPath(r.path);
         const sum = await repoSummary(r.path);
         setDefaultBranch(sum.defaultBranch);
+        // Resolve the base: a previously-picked branch wins, else the repo
+        // default. The branch list backs the Subheader's picker.
+        const persisted = localStorage.getItem(`${BASE_KEY_PREFIX}${r.path}`);
+        setBaseRefState(persisted ?? sum.defaultBranch);
+        setBranches(await gitLocalBranches());
       } catch (e) {
         console.warn('self_review_bootstrap_failed', e);
         setBootstrapError(String(e));
@@ -60,18 +79,44 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
     })();
   }, []);
 
-  const { diff, scope, setScope, loading, error } = useSelfReviewDiff(repoPath, defaultBranch);
+  const setBaseRef = useCallback(
+    (b: string) => {
+      if (repoPath) localStorage.setItem(`${BASE_KEY_PREFIX}${repoPath}`, b);
+      setBaseRefState(b);
+    },
+    [repoPath],
+  );
+
+  const { diff, scope, setScope, loading, error } = useSelfReviewDiff(repoPath, baseRef);
+
+  // Cycle-1 author↔agent loop: the agent-authored Debrief + the author's
+  // Review notes, both from the local store (ADR-0011/0012). Review notes are
+  // the single annotation concept — every diff comment is one, persisted and
+  // agent-readable. The markdown export is a secondary convenience sourced from
+  // these same notes.
   const {
-    comments,
-    composer,
-    startFileComment,
-    startReply,
-    saveCurrent,
-    saveLineComment,
-    cancelComposer,
-    deleteComment,
-    copyAsMarkdown,
-  } = useSelfReviewComments(diff);
+    debrief,
+    notes,
+    error: debriefError,
+    createNote,
+    replyNote,
+    resolveNote,
+    reopenNote,
+    deleteNote,
+  } = useSelfReviewDebrief(repoPath);
+
+  // The rail starts closed and auto-opens once when a Debrief first appears, so
+  // the agent path is discoverable without intruding on the non-agent path.
+  // After that the author's toggle wins (we never auto-close or re-open).
+  const [railOpen, setRailOpen] = useState(false);
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (debrief && !autoOpenedRef.current) {
+      autoOpenedRef.current = true;
+      setRailOpen(true);
+    }
+  }, [debrief]);
+  const openNoteCount = useMemo(() => notes.filter((n) => n.status === 'open').length, [notes]);
 
   // Mark-viewed state, persisted per (repoPath, branch). Reload when either
   // changes. We do NOT clear on scope change (Q8: viewed is sticky across
@@ -79,8 +124,9 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
   // state). We intentionally key on `diff?.currentBranch` rather than `diff`:
   // a watcher-driven refresh keeps the same currentBranch and shouldn't
   // re-read the store on every keystroke.
+  // Branch-keyed by design: we depend on the derived `branchKey`, not `diff`,
+  // so a watcher refresh that keeps the same branch doesn't re-read the store.
   const branchKey = diff?.currentBranch ?? null;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: branch-keyed by design (see comment)
   useEffect(() => {
     if (!repoPath || !branchKey) return;
     let cancelled = false;
@@ -157,17 +203,22 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
     [viewLayout],
   );
 
-  const commentCounts = useMemo(() => {
+  // Per-file note counts for the sidebar badge — anchored notes only (general
+  // notes have no file to attribute to).
+  const noteCounts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const c of comments) {
-      m.set(c.anchor.filePath, (m.get(c.anchor.filePath) ?? 0) + 1);
+    for (const n of notes) {
+      const file = n.anchor?.file;
+      if (file) m.set(file, (m.get(file) ?? 0) + 1);
     }
     return m;
-  }, [comments]);
+  }, [notes]);
 
   const onCopy = useCallback(async () => {
+    if (!diff) return;
     try {
-      await copyAsMarkdown();
+      const md = notesToMarkdown(diff, notes);
+      await navigator.clipboard.writeText(md);
       setCopyState('copied');
       setTimeout(() => setCopyState('idle'), 1500);
     } catch (e) {
@@ -175,7 +226,7 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
       setCopyState('error');
       setTimeout(() => setCopyState('idle'), 2000);
     }
-  }, [copyAsMarkdown]);
+  }, [diff, notes]);
 
   const onReadyToShare = useCallback(() => {
     // Stubbed entry to the future Workspace-creation flow (see CONTEXT.md
@@ -193,9 +244,12 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
           diff={diff}
           scope={scope}
           defaultBranch={defaultBranch}
+          baseRef={baseRef}
+          branches={branches}
           viewedCount={viewed.size}
           onExit={onExit}
           onScopeChange={setScope}
+          onBaseChange={setBaseRef}
           onCopyAsMarkdown={onCopy}
           onReadyToShare={onReadyToShare}
           copyState={copyState}
@@ -203,6 +257,7 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
 
         {bootstrapError && <div style={errorBanner}>{bootstrapError}</div>}
         {error && <div style={errorBanner}>{error}</div>}
+        {debriefError && <div style={errorBanner}>{debriefError}</div>}
 
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           <FileList
@@ -215,7 +270,13 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
             viewed={viewed}
             onToggleViewed={toggleViewed}
             onClearViewed={onClearViewed}
-            commentCounts={commentCounts}
+            noteCounts={noteCounts}
+            width={fileListCol.width}
+          />
+          <ResizeHandle
+            onResizeStart={fileListCol.onResizeStart}
+            onResizeKey={fileListCol.onResizeKey}
+            ariaLabel="Resize file list"
           />
 
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -271,6 +332,22 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
                   Unified
                 </button>
               </div>
+              {!railOpen && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setRailOpen(true)}
+                  title="Show the agent Debrief rail"
+                  style={debrief ? { borderColor: 'var(--blue-tint-2)' } : undefined}
+                >
+                  <Icon name="doc-stack" size={12} /> Debrief
+                  {openNoteCount > 0 && (
+                    <span className="badge badge-orange" style={{ marginLeft: 6 }}>
+                      {openNoteCount}
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
             <DiffPane
               ref={diffPaneRef}
@@ -280,16 +357,40 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
               viewMode={viewMode}
               viewed={viewed}
               onToggleViewed={toggleViewed}
-              comments={comments}
-              composer={composer}
-              onStartFileComment={startFileComment}
-              onStartReply={startReply}
-              onSaveComposer={saveCurrent}
-              onSaveLineComment={saveLineComment}
-              onCancelComposer={cancelComposer}
-              onDeleteComment={deleteComment}
+              notes={notes}
+              onCreateNote={createNote}
+              onReplyNote={replyNote}
+              onResolveNote={resolveNote}
+              onReopenNote={reopenNote}
+              onDeleteNote={deleteNote}
             />
           </div>
+
+          {railOpen && (
+            <ResizeHandle
+              onResizeStart={railCol.onResizeStart}
+              onResizeKey={railCol.onResizeKey}
+              ariaLabel="Resize Debrief rail"
+            />
+          )}
+          {railOpen && (
+            <DebriefRail
+              debrief={debrief}
+              notes={notes}
+              files={diff?.files ?? []}
+              selectedPath={selectedPath}
+              viewed={viewed}
+              width={railCol.width}
+              onSelectFile={onSelectFile}
+              onToggleViewed={toggleViewed}
+              onCreateNote={createNote}
+              onReplyNote={replyNote}
+              onResolveNote={resolveNote}
+              onReopenNote={reopenNote}
+              onDeleteNote={deleteNote}
+              onClose={() => setRailOpen(false)}
+            />
+          )}
         </div>
       </div>
     </div>

@@ -302,6 +302,86 @@ body {
   font-size: 13px;
 }
 
+/* Dropdown (custom select) — modern popover-style menu, replaces the
+   native <select> chrome so it matches the app's controls. */
+.dropdown {
+  position: relative;
+  display: inline-flex;
+}
+.dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px 0 8px;
+  border-radius: var(--r-sm);
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.02);
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--gray-800);
+  cursor: pointer;
+}
+.dropdown-trigger:hover {
+  background: var(--gray-50);
+}
+.dropdown-trigger:focus-visible,
+.dropdown-trigger[aria-expanded="true"] {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--blue-tint);
+}
+.dropdown-trigger .dropdown-caret {
+  margin-left: 2px;
+  flex: 0 0 auto;
+  transition: transform 0.12s ease;
+}
+.dropdown-trigger[aria-expanded="true"] .dropdown-caret {
+  transform: rotate(180deg);
+}
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 100%;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  background: #fff;
+  border-radius: var(--r-md);
+  box-shadow: var(--sh-pop);
+}
+.dropdown-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  border-radius: var(--r-sm);
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--gray-800);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dropdown-option:hover,
+.dropdown-option.active {
+  background: var(--blue-tint);
+  color: var(--blue-press);
+}
+.dropdown-option[aria-selected="true"] {
+  font-weight: 600;
+}
+.dropdown-option .dropdown-check {
+  flex: 0 0 14px;
+  width: 14px;
+}
+
 /* Section label */
 .section-label {
   font-size: 10.5px;

@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use stage_core::diff::{
-    assert_files_in_base_diff, base_diff_file_set, default_base, self_review_diff, SelfReviewScope,
+    assert_files_in_base_diff, default_base, self_review_diff, DiffLineIndex, SelfReviewScope,
 };
 use stage_core::{
     repo_key_from_cwd, repo_root_from_cwd, DebriefInput, NoteStatus, StageError, Store,
@@ -52,14 +52,15 @@ enum SelfReviewCmd {
     /// Delete the stored Debrief for the current repo + branch.
     Clear,
     /// List the author's Review notes for the current repo + branch as JSON,
-    /// each with a computed `outdated` flag (its anchored file left the diff).
-    /// Filter with `--status`; the agent reads `--status open` to find work.
+    /// each carrying its `replies` thread and a computed `outdated` flag (its
+    /// anchored file left the diff, or its anchored line range is gone). Filter
+    /// with `--status`; the agent reads `--status open` to find work.
     Notes {
         #[arg(long, value_enum)]
         status: Option<StatusArg>,
     },
-    /// Mark a Review note `addressed`, recording the agent's reply. Fails loud
-    /// if the note id is unknown or the note is already resolved.
+    /// Append the agent's reply to a Review note's thread, marking it
+    /// `addressed`. Fails loud if the note id is unknown or already resolved.
     Address {
         /// The note id (from `notes`).
         id: String,
@@ -171,16 +172,18 @@ fn self_review(cmd: SelfReviewCmd, cwd: &Path, root: &Path) -> Result<(), StageE
             let store = Store::open_default()?;
             let notes = store.list_notes(&key, status.map(Into::into))?;
             // `outdated` is computed against the current Debrief's base (the
-            // diff the notes live on), falling back to the default branch.
+            // diff the notes live on), falling back to the default branch. The
+            // line index is built once and shared across notes — and matches the
+            // app's computation (ADR-0012) so the agent and author never disagree.
             let base = match store.get_debrief(&key)? {
                 Some(debrief) => debrief.base,
                 None => default_base(root)?,
             };
-            let present = base_diff_file_set(root, &base)?;
+            let index = DiffLineIndex::from_base_diff(root, &base)?;
             let views: Vec<_> = notes
                 .into_iter()
                 .map(|n| {
-                    let outdated = !present.contains(&n.anchor.file);
+                    let outdated = index.is_outdated(&n.anchor);
                     n.into_view(outdated)
                 })
                 .collect();

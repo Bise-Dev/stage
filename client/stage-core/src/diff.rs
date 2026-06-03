@@ -3,13 +3,14 @@
 //! `git.rs` so the CLI can compute the same diff without compiling Tauri; the
 //! app re-exports these from `git.rs` (ADR-0010, ADR-0011).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use git2::{Diff, DiffOptions, Repository};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::domain::{NoteAnchor, Side};
 use crate::error::StageError;
 use crate::repo_key::current_branch;
 
@@ -457,6 +458,135 @@ pub fn assert_files_in_base_diff(
     Ok(())
 }
 
+/// Per-file present line numbers (per side) for a Base-scope diff, used to
+/// compute a Review note's `outdated` flag at **line** granularity. Built once
+/// per note-list call and shared by the CLI and the desktop app so both agree
+/// (ADR-0012) — the **Stale step** pattern, extended from files to lines.
+pub struct DiffLineIndex {
+    /// file path → (left lines present, right lines present).
+    files: HashMap<String, (HashSet<u32>, HashSet<u32>)>,
+    /// Files present in the diff but whose patch can't be line-indexed (binary
+    /// or truncated). A line anchor on one of these is treated as **live** — we
+    /// can't prove it stale, and falsely flagging a valid note is worse.
+    unverifiable: HashSet<String>,
+}
+
+impl DiffLineIndex {
+    /// Build the index from an already-computed Base-scope diff.
+    pub fn from_diff(diff: &SelfReviewDiff) -> Self {
+        let mut files = HashMap::new();
+        let mut unverifiable = HashSet::new();
+        for f in &diff.files {
+            if f.is_binary || f.is_truncated {
+                unverifiable.insert(f.path.clone());
+            } else {
+                files.insert(f.path.clone(), index_patch_lines(&f.patch));
+            }
+        }
+        Self {
+            files,
+            unverifiable,
+        }
+    }
+
+    /// Build directly from the repo's Base-scope diff against `base_ref`.
+    pub fn from_base_diff(repo_path: &Path, base_ref: &str) -> Result<Self, StageError> {
+        let diff = self_review_diff(repo_path, SelfReviewScope::Base, Some(base_ref))?;
+        Ok(Self::from_diff(&diff))
+    }
+
+    /// Whether a note's anchor is outdated against this diff. Anchorless →
+    /// never. File-level anchor → outdated iff the file is gone. Line anchor →
+    /// outdated iff the file is gone or any line in the range is absent on its
+    /// side.
+    pub fn is_outdated(&self, anchor: &Option<NoteAnchor>) -> bool {
+        let Some(anchor) = anchor else {
+            return false;
+        };
+        let in_diff =
+            self.files.contains_key(&anchor.file) || self.unverifiable.contains(&anchor.file);
+        if !in_diff {
+            return true;
+        }
+        // File-level anchor (no line range): fresh as long as the file is here.
+        let (Some(start), Some(end)) = (anchor.line_start, anchor.line_end) else {
+            return false;
+        };
+        // Line anchor on a binary/truncated file: unverifiable → treat as live.
+        let Some((left, right)) = self.files.get(&anchor.file) else {
+            return false;
+        };
+        let set = match anchor.side {
+            Some(Side::Left) => left,
+            // No side with a line range shouldn't happen, but default to the
+            // new-file side (where the author most often comments).
+            Some(Side::Right) | None => right,
+        };
+        (start..=end).any(|n| !set.contains(&n))
+    }
+}
+
+/// Walk a unified patch and collect the line numbers present per side. Ported
+/// from the webview's `indexFileLines` (ADR-0012): `+` lines advance the
+/// new-file (right) counter, `-` the old-file (left), context lines both.
+fn index_patch_lines(patch: &str) -> (HashSet<u32>, HashSet<u32>) {
+    let mut left = HashSet::new();
+    let mut right = HashSet::new();
+    let mut left_no = 0u32;
+    let mut right_no = 0u32;
+    for raw in patch.split('\n') {
+        if let Some((l, r)) = parse_hunk_header(raw) {
+            left_no = l;
+            right_no = r;
+            continue;
+        }
+        if raw.starts_with('\\') {
+            continue; // "\ No newline at end of file"
+        }
+        if raw.starts_with('+') && !raw.starts_with("+++") {
+            right.insert(right_no);
+            right_no += 1;
+        } else if raw.starts_with('-') && !raw.starts_with("---") {
+            left.insert(left_no);
+            left_no += 1;
+        } else if raw.starts_with(' ') {
+            // Context line — present on both sides. A blank context line is
+            // `" "` (space prefix), so this branch covers it; a bare `""` only
+            // comes from the patch's trailing newline and must NOT be counted
+            // (it would phantom an extra line onto each side).
+            left.insert(left_no);
+            right.insert(right_no);
+            left_no += 1;
+            right_no += 1;
+        }
+    }
+    (left, right)
+}
+
+/// Parse a hunk header `@@ -l[,s] +r[,s] @@ …` into `(left_start, right_start)`.
+/// Returns `None` for any non-header line. Anchored at column 0 (a context line
+/// is space-prefixed, an add/remove `+`/`-`-prefixed), so real code lines that
+/// happen to contain `@@` never misparse.
+fn parse_hunk_header(line: &str) -> Option<(u32, u32)> {
+    let rest = line.strip_prefix("@@ ")?;
+    let mut it = rest.split_whitespace();
+    let left = it
+        .next()?
+        .strip_prefix('-')?
+        .split(',')
+        .next()?
+        .parse()
+        .ok()?;
+    let right = it
+        .next()?
+        .strip_prefix('+')?
+        .split(',')
+        .next()?
+        .parse()
+        .ok()?;
+    Some((left, right))
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -547,5 +677,79 @@ mod tests {
             !msg.contains("new.txt"),
             "message lists only offenders: {msg}"
         );
+    }
+
+    fn file_change(path: &str, patch: &str) -> FileChange {
+        FileChange {
+            path: path.into(),
+            old_path: None,
+            status: FileStatus::Modified,
+            additions: 0,
+            deletions: 0,
+            patch: patch.into(),
+            is_binary: false,
+            is_truncated: false,
+        }
+    }
+
+    fn diff_with(files: Vec<FileChange>) -> SelfReviewDiff {
+        SelfReviewDiff {
+            current_branch: "feat".into(),
+            scope: SelfReviewScope::Base,
+            base_ref: Some("main".into()),
+            head_sha: "0000000".into(),
+            files,
+            stats: SelfReviewStats {
+                added: 0,
+                removed: 0,
+                files_changed: 0,
+            },
+        }
+    }
+
+    fn line_anchor(file: &str, start: u32, end: u32, side: Side) -> Option<NoteAnchor> {
+        Some(NoteAnchor {
+            file: file.into(),
+            line_start: Some(start),
+            line_end: Some(end),
+            side: Some(side),
+        })
+    }
+
+    #[test]
+    fn line_index_marks_outdated_at_line_granularity() {
+        // right present {1,2,3,4}; left present {1,2,3}
+        let patch = "@@ -1,3 +1,4 @@\n ctx1\n-old2\n+new2\n+new3\n ctx4\n";
+        let index = DiffLineIndex::from_diff(&diff_with(vec![file_change("a.rs", patch)]));
+
+        // Present lines on each side → fresh.
+        assert!(!index.is_outdated(&line_anchor("a.rs", 2, 2, Side::Right)));
+        assert!(!index.is_outdated(&line_anchor("a.rs", 3, 3, Side::Left)));
+        // A right-side line beyond the patch → outdated.
+        assert!(index.is_outdated(&line_anchor("a.rs", 5, 5, Side::Right)));
+        // File-level anchor on a present file → fresh.
+        assert!(!index.is_outdated(&Some(NoteAnchor {
+            file: "a.rs".into(),
+            line_start: None,
+            line_end: None,
+            side: None,
+        })));
+        // Anchor to a file not in the diff → outdated.
+        assert!(index.is_outdated(&line_anchor("gone.rs", 1, 1, Side::Right)));
+        // Anchorless (general) note → never outdated.
+        assert!(!index.is_outdated(&None));
+    }
+
+    #[test]
+    fn line_anchor_on_binary_or_truncated_file_is_treated_as_live() {
+        let mut binary = file_change("img.png", "");
+        binary.is_binary = true;
+        let mut truncated = file_change("big.rs", "@@ -1,1 +1,1 @@\n+x\n");
+        truncated.is_truncated = true;
+        let index = DiffLineIndex::from_diff(&diff_with(vec![binary, truncated]));
+
+        // File present but unindexable → can't prove stale → live (not outdated).
+        assert!(!index.is_outdated(&line_anchor("img.png", 1, 1, Side::Right)));
+        assert!(!index.is_outdated(&line_anchor("big.rs", 99, 99, Side::Right)));
     }
 }

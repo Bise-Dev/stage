@@ -2,11 +2,10 @@ import { DiffModeEnum, DiffViewWithMultiSelect, SplitSide } from '@git-diff-view
 import '@git-diff-view/react/styles/diff-view.css';
 import { type Ref, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Icon } from '../../components/Icon';
-import type { SelfReviewFileChange } from '../../tauri';
+import type { NoteAnchor, ReviewNoteView, SelfReviewFileChange, Side } from '../../tauri';
 import { Composer } from './Composer';
 import { Thread } from './Thread';
 import { inferDiffLanguage } from './markdown';
-import type { Comment, ComposerTarget, LineAnchor, Side } from './types';
 
 const STATUS_BADGE = {
   added: { label: 'added', cls: 'badge-green' },
@@ -23,7 +22,17 @@ export type DiffPaneHandle = {
   scrollFileIntoView(path: string): void;
 };
 
-type DiffPaneProps = {
+/** The note operations DiffPane needs — a subset of the Debrief hook. */
+type NoteOps = {
+  /** Create a note; `anchor` is null for general feedback. */
+  onCreateNote(anchor: NoteAnchor | null, body: string): Promise<void>;
+  onReplyNote(id: string, body: string): Promise<void>;
+  onResolveNote(id: string): Promise<void>;
+  onReopenNote(id: string): Promise<void>;
+  onDeleteNote(id: string): Promise<void>;
+};
+
+type DiffPaneProps = NoteOps & {
   files: SelfReviewFileChange[];
   viewLayout: ViewLayout;
   /** Which file the sidebar has selected; in 'single' layout determines what
@@ -32,15 +41,8 @@ type DiffPaneProps = {
   viewMode: ViewMode;
   viewed: Set<string>;
   onToggleViewed(path: string): void;
-  comments: Comment[];
-  composer: ComposerTarget | null;
-  onStartFileComment(filePath: string): void;
-  onStartReply(parentId: string): void;
-  onSaveComposer(body: string): void;
-  /** Bypasses the composer state — used by the library's widget slot. */
-  onSaveLineComment(anchor: LineAnchor, body: string): void;
-  onCancelComposer(): void;
-  onDeleteComment(id: string): void;
+  /** All Review notes for the branch; DiffPane buckets them by file/anchor. */
+  notes: ReviewNoteView[];
   /** React 19 ref-as-prop. Parent supplies a `useRef<DiffPaneHandle>(null)`. */
   ref?: Ref<DiffPaneHandle>;
 };
@@ -57,6 +59,10 @@ type DiffPaneProps = {
  * Each FileBlock owns its own `DiffViewWithMultiSelect` and memoizes its
  * `data` prop, so a parent re-render doesn't rebuild the underlying
  * DiffFile or wipe the library's widget store.
+ *
+ * Diff annotations are **Review notes** (ADR-0012): the gutter drag and the
+ * file-header "Note" button create line- and file-anchored notes; the rail
+ * shows the same notes plus general (un-anchored) ones.
  */
 export function DiffPane({
   files,
@@ -65,14 +71,12 @@ export function DiffPane({
   viewMode,
   viewed,
   onToggleViewed,
-  comments,
-  composer,
-  onStartFileComment,
-  onStartReply,
-  onSaveComposer,
-  onSaveLineComment,
-  onCancelComposer,
-  onDeleteComment,
+  notes,
+  onCreateNote,
+  onReplyNote,
+  onResolveNote,
+  onReopenNote,
+  onDeleteNote,
   ref,
 }: DiffPaneProps) {
   const fileRefs = useRef(new Map<string, HTMLDivElement>());
@@ -88,6 +92,14 @@ export function DiffPane({
 
   const visibleFiles =
     viewLayout === 'scroll' ? files : files.filter((f) => f.path === selectedPath);
+
+  const noteOps: NoteOps = {
+    onCreateNote,
+    onReplyNote,
+    onResolveNote,
+    onReopenNote,
+    onDeleteNote,
+  };
 
   return (
     <div
@@ -132,14 +144,8 @@ export function DiffPane({
               collapsed={collapsed}
               isViewed={isViewed}
               onToggleViewed={() => onToggleViewed(f.path)}
-              comments={comments.filter((c) => c.anchor.filePath === f.path)}
-              composer={composer}
-              onStartFileComment={onStartFileComment}
-              onStartReply={onStartReply}
-              onSaveComposer={onSaveComposer}
-              onSaveLineComment={onSaveLineComment}
-              onCancelComposer={onCancelComposer}
-              onDeleteComment={onDeleteComment}
+              notes={notes.filter((n) => n.anchor?.file === f.path)}
+              {...noteOps}
             />
           );
         })
@@ -155,7 +161,7 @@ export function DiffPane({
  * composer noticeably laggy. Each file now starts as a fixed-height
  * placeholder and swaps in the real FileBlock once it crosses near the
  * viewport (IntersectionObserver with a 600px rootMargin). Once mounted
- * it stays mounted — unmounting would lose composer state and comments
+ * it stays mounted — unmounting would lose composer state and notes
  * in flight.
  */
 type LazyFileBlockProps = Omit<FileBlockProps, 'file'> & {
@@ -259,7 +265,7 @@ function LazyFileBlock({ registerRef, ...rest }: LazyFileBlockProps) {
   );
 }
 
-type FileBlockProps = {
+type FileBlockProps = NoteOps & {
   file: SelfReviewFileChange;
   viewMode: ViewMode;
   /** When true, render only the header row — the user has marked the file
@@ -267,14 +273,8 @@ type FileBlockProps = {
   collapsed: boolean;
   isViewed: boolean;
   onToggleViewed(): void;
-  comments: Comment[];
-  composer: ComposerTarget | null;
-  onStartFileComment(filePath: string): void;
-  onStartReply(parentId: string): void;
-  onSaveComposer(body: string): void;
-  onSaveLineComment(anchor: LineAnchor, body: string): void;
-  onCancelComposer(): void;
-  onDeleteComment(id: string): void;
+  /** Notes anchored to this file (line- or file-level). */
+  notes: ReviewNoteView[];
 };
 
 function FileBlock({
@@ -283,16 +283,19 @@ function FileBlock({
   collapsed,
   isViewed,
   onToggleViewed,
-  comments,
-  composer,
-  onStartFileComment,
-  onStartReply,
-  onSaveComposer,
-  onSaveLineComment,
-  onCancelComposer,
-  onDeleteComment,
+  notes,
+  onCreateNote,
+  onReplyNote,
+  onResolveNote,
+  onReopenNote,
+  onDeleteNote,
 }: FileBlockProps) {
   const badge = STATUS_BADGE[file.status];
+  // A file-level note composer toggled by the header "Note" button. Line-level
+  // creation goes through the library's widget slot (renderWidgetLine) and
+  // reply composers live inside each Thread, so this is the only local
+  // composer state the block needs.
+  const [addingFile, setAddingFile] = useState(false);
 
   // Header-only render when collapsed. We keep the same chrome so the
   // toggle stays in place — clicking "Viewed" again expands the file back.
@@ -326,9 +329,9 @@ function FileBlock({
           <span style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>
             +{file.additions} −{file.deletions}
           </span>
-          {comments.length > 0 && (
+          {notes.length > 0 && (
             <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>
-              · {comments.length} comment{comments.length === 1 ? '' : 's'}
+              · {notes.length} note{notes.length === 1 ? '' : 's'}
             </span>
           )}
           <div style={{ flex: 1 }} />
@@ -345,9 +348,15 @@ function FileBlock({
     );
   }
 
-  const fileLevel = comments.filter((c) => c.anchor.kind === 'file');
-  const dangling = comments.filter((c) => c.anchor.kind === 'dangling');
-  const lineComments = comments.filter((c) => c.anchor.kind === 'line');
+  // Partition the file's notes:
+  //  - inline line notes: a fresh line anchor renders at its line via extendData;
+  //  - band notes: file-level notes (no line range) and *outdated* line notes
+  //    whose anchored lines are gone — they have no inline slot, so they sit in
+  //    a band above the diff (they also live in the rail).
+  const lineNotes = notes.filter((n) => n.anchor?.lineStart != null && !n.outdated);
+  const fileLevel = notes.filter((n) => n.anchor != null && n.anchor.lineStart == null);
+  const outdated = notes.filter((n) => n.anchor?.lineStart != null && n.outdated);
+  const bandNotes = [...fileLevel, ...outdated];
 
   // Memoize the `data` prop. The library's internal useMemo deps on `data`
   // by reference (line 1593 of the lib bundle); a fresh object literal every
@@ -367,21 +376,23 @@ function FileBlock({
     };
   }, [file.path, file.oldPath, file.patch]);
 
-  // Bucket inline comments by side + line for the library's extendData API.
+  // Bucket inline notes by side + line for the library's extendData API.
   const extendData = useMemo(() => {
-    const oldFile: Record<string, { data: { commentIds: string[]; lineNumber: number } }> = {};
-    const newFile: Record<string, { data: { commentIds: string[]; lineNumber: number } }> = {};
-    for (const c of lineComments) {
-      if (c.anchor.kind !== 'line') continue;
-      const target = c.anchor.side === 'left' ? oldFile : newFile;
-      // Attach to the *end* of the range (Q10-B: widget below the last line).
-      const key = String(c.anchor.lineEnd);
-      const bucket = target[key]?.data ?? { commentIds: [], lineNumber: c.anchor.lineEnd };
-      bucket.commentIds.push(c.id);
+    const oldFile: Record<string, { data: { noteIds: string[]; lineNumber: number } }> = {};
+    const newFile: Record<string, { data: { noteIds: string[]; lineNumber: number } }> = {};
+    for (const n of lineNotes) {
+      const a = n.anchor;
+      if (!a || a.lineStart == null) continue;
+      const lineEnd = a.lineEnd ?? a.lineStart;
+      const target = a.side === 'left' ? oldFile : newFile;
+      // Attach to the *end* of the range (widget below the last line).
+      const key = String(lineEnd);
+      const bucket = target[key]?.data ?? { noteIds: [], lineNumber: lineEnd };
+      bucket.noteIds.push(n.id);
       target[key] = { data: bucket };
     }
     return { oldFile, newFile };
-  }, [lineComments]);
+  }, [lineNotes]);
 
   // The library passes us its SplitSide enum; map to our 'left'|'right'.
   const sideToOurs = (s: SplitSide): Side => (s === SplitSide.old ? 'left' : 'right');
@@ -485,10 +496,10 @@ function FileBlock({
         <button
           type="button"
           className="btn"
-          onClick={() => onStartFileComment(file.path)}
-          title="Add a file-level comment"
+          onClick={() => setAddingFile(true)}
+          title="Add a file-level Review note"
         >
-          <Icon name="comment-fill" size={11} /> Comment
+          <Icon name="comment-fill" size={11} /> Note
         </button>
         <button
           type="button"
@@ -502,8 +513,8 @@ function FileBlock({
         </button>
       </div>
 
-      {/* Dangling band */}
-      {dangling.length > 0 && (
+      {/* Outdated band */}
+      {outdated.length > 0 && (
         <div
           style={{
             padding: '6px 14px',
@@ -513,35 +524,45 @@ function FileBlock({
             color: '#b56500',
           }}
         >
-          {dangling.length} comment{dangling.length === 1 ? '' : 's'} no longer attached — anchor
-          lines were edited or removed. Copy them out (Copy as markdown) or delete below.
+          {outdated.length} note{outdated.length === 1 ? '' : 's'} lost their anchor — the lines
+          were edited or removed. Resolve or delete below (they also remain in the rail).
         </div>
       )}
 
-      {/* File-level + dangling threads above the diff */}
-      {(fileLevel.length > 0 ||
-        dangling.length > 0 ||
-        composer?.kind === 'new-file' ||
-        (composer?.kind === 'reply' &&
-          [...fileLevel, ...dangling].some((c) => c.id === composer.parentId))) && (
+      {/* File-level + outdated notes above the diff */}
+      {(bandNotes.length > 0 || addingFile) && (
         <div style={{ padding: '8px 14px', borderBottom: '1px solid var(--hairline-2)' }}>
-          {[...fileLevel, ...dangling].map((c) => (
+          {bandNotes.map((n) => (
             <Thread
-              key={c.id}
-              comment={c}
-              composer={composer}
-              onStartReply={onStartReply}
-              onSaveComposer={onSaveComposer}
-              onCancelComposer={onCancelComposer}
-              onDelete={onDeleteComment}
+              key={n.id}
+              note={n}
+              onReply={onReplyNote}
+              onResolve={onResolveNote}
+              onReopen={onReopenNote}
+              onDelete={onDeleteNote}
             />
           ))}
-          {composer?.kind === 'new-file' && composer.anchor.filePath === file.path && (
+          {addingFile && (
             <Composer
-              placeholder="File-level comment…"
-              onSave={onSaveComposer}
-              onCancel={onCancelComposer}
+              placeholder="File-level note…"
               autoFocus
+              onSave={(body) => {
+                const trimmed = body.trim();
+                if (!trimmed) {
+                  setAddingFile(false);
+                  return;
+                }
+                onCreateNote(
+                  { file: file.path, lineStart: null, lineEnd: null, side: null },
+                  trimmed,
+                )
+                  .then(() => setAddingFile(false))
+                  .catch(() => {
+                    // Error surfaced via the hook's banner; keep the composer
+                    // open so the author doesn't lose what they typed.
+                  });
+              }}
+              onCancel={() => setAddingFile(false)}
             />
           )}
         </div>
@@ -600,23 +621,33 @@ function FileBlock({
                 <div style={{ padding: '4px 12px' }}>
                   <Composer
                     label={rangeLabel}
-                    placeholder="Leave a comment…"
+                    placeholder="Leave a note…"
                     onSave={(b) => {
-                      onSaveLineComment(
+                      const trimmed = b.trim();
+                      if (!trimmed) {
+                        pendingRangeRef.current = null;
+                        onClose();
+                        return;
+                      }
+                      onCreateNote(
                         {
-                          kind: 'line',
-                          filePath: file.path,
-                          side: ourSide,
+                          file: file.path,
                           lineStart: start,
                           lineEnd: end,
+                          side: ourSide,
                         },
-                        b,
-                      );
-                      pendingRangeRef.current = null;
-                      onClose();
+                        trimmed,
+                      )
+                        .then(() => {
+                          pendingRangeRef.current = null;
+                          onClose();
+                        })
+                        .catch(() => {
+                          // Error surfaced via the hook's banner; keep the
+                          // composer open so the note text isn't lost.
+                        });
                     }}
                     onCancel={() => {
-                      onCancelComposer();
                       pendingRangeRef.current = null;
                       onClose();
                     }}
@@ -626,22 +657,21 @@ function FileBlock({
               );
             }}
             renderExtendLine={({ data }) => {
-              const ids: string[] = data?.commentIds ?? [];
+              const ids: string[] = data?.noteIds ?? [];
               const threads = ids
-                .map((id) => lineComments.find((c) => c.id === id))
-                .filter((c): c is Comment => Boolean(c));
+                .map((id) => lineNotes.find((n) => n.id === id))
+                .filter((n): n is ReviewNoteView => Boolean(n));
               if (threads.length === 0) return null;
               return (
                 <div style={{ padding: '4px 12px' }}>
-                  {threads.map((c) => (
+                  {threads.map((n) => (
                     <Thread
-                      key={c.id}
-                      comment={c}
-                      composer={composer}
-                      onStartReply={onStartReply}
-                      onSaveComposer={onSaveComposer}
-                      onCancelComposer={onCancelComposer}
-                      onDelete={onDeleteComment}
+                      key={n.id}
+                      note={n}
+                      onReply={onReplyNote}
+                      onResolve={onResolveNote}
+                      onReopen={onReopenNote}
+                      onDelete={onDeleteNote}
                     />
                   ))}
                 </div>

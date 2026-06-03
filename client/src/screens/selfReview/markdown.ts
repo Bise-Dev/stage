@@ -1,25 +1,33 @@
 /**
- * Comments → markdown. This *is* the Self-Review output artifact (Q5): the
- * user copies this and pastes it into a coding agent. Format defined in the
- * grill session; snippets capped at SNIPPET_LINE_CAP.
+ * Review notes → markdown. A secondary convenience export (ADR-0012): the
+ * store/CLI is the primary channel the agent reads, but "Copy as markdown"
+ * still serves agents/contexts not wired to the `stage` CLI. Renders *all*
+ * notes (with status tags + threads); snippets capped at SNIPPET_LINE_CAP.
  */
-import type { SelfReviewDiff, SelfReviewFileChange } from '../../tauri';
-import type { Comment, Side } from './types';
+import type { ReviewNoteView, SelfReviewDiff, SelfReviewFileChange, Side } from '../../tauri';
 
 const SNIPPET_LINE_CAP = 20;
 
-export function commentsToMarkdown(diff: SelfReviewDiff, comments: Comment[]): string {
+const STATUS_TAG: Record<ReviewNoteView['status'], string> = {
+  open: 'open',
+  addressed: 'addressed',
+  resolved: 'resolved',
+};
+
+export function notesToMarkdown(diff: SelfReviewDiff, notes: ReviewNoteView[]): string {
   const scopeLabel = diff.scope === 'workdir' ? 'uncommitted' : `vs ${diff.baseRef ?? 'base'}`;
-  const fileCount = new Set(comments.map((c) => c.anchor.filePath)).size;
+  const anchored = notes.filter((n) => n.anchor !== null);
+  const general = notes.filter((n) => n.anchor === null);
+  const fileCount = new Set(anchored.map((n) => n.anchor?.file)).size;
   const today = new Date().toISOString().slice(0, 10);
 
   const out: string[] = [];
   out.push(`# Self-Review — ${diff.currentBranch} (${scopeLabel})`);
-  out.push(`${fileCount} files · ${comments.length} comments · ${today}`);
+  out.push(`${fileCount} files · ${notes.length} notes · ${today}`);
   out.push('');
 
-  if (comments.length === 0) {
-    out.push('(no comments)');
+  if (notes.length === 0) {
+    out.push('(no notes)');
     return `${out.join('\n')}\n`;
   }
 
@@ -27,11 +35,13 @@ export function commentsToMarkdown(diff: SelfReviewDiff, comments: Comment[]): s
   // scan of the markdown matches the screen scan.
   const fileOrder = new Map<string, number>();
   diff.files.forEach((f, i) => fileOrder.set(f.path, i));
-  const byFile = new Map<string, Comment[]>();
-  for (const c of comments) {
-    const arr = byFile.get(c.anchor.filePath) ?? [];
-    arr.push(c);
-    byFile.set(c.anchor.filePath, arr);
+  const byFile = new Map<string, ReviewNoteView[]>();
+  for (const n of anchored) {
+    const file = n.anchor?.file;
+    if (!file) continue;
+    const arr = byFile.get(file) ?? [];
+    arr.push(n);
+    byFile.set(file, arr);
   }
   const orderedPaths = [...byFile.keys()].sort(
     (a, b) =>
@@ -41,9 +51,16 @@ export function commentsToMarkdown(diff: SelfReviewDiff, comments: Comment[]): s
   for (const path of orderedPaths) {
     out.push(`## ${path}`);
     const file = diff.files.find((f) => f.path === path);
-    const list = byFile.get(path) ?? [];
-    for (const c of list) {
-      for (const line of renderComment(c, file)) out.push(line);
+    for (const n of byFile.get(path) ?? []) {
+      for (const line of renderNote(n, file)) out.push(line);
+    }
+    out.push('');
+  }
+
+  if (general.length > 0) {
+    out.push('## General');
+    for (const n of general) {
+      for (const line of renderNote(n, undefined)) out.push(line);
     }
     out.push('');
   }
@@ -51,16 +68,25 @@ export function commentsToMarkdown(diff: SelfReviewDiff, comments: Comment[]): s
   return `${out.join('\n').trimEnd()}\n`;
 }
 
-function renderComment(c: Comment, file: SelfReviewFileChange | undefined): string[] {
-  const a = c.anchor;
+function renderNote(n: ReviewNoteView, file: SelfReviewFileChange | undefined): string[] {
   const lines: string[] = [];
+  const a = n.anchor;
+  const tags = `[${STATUS_TAG[n.status]}${n.outdated ? ', outdated' : ''}]`;
 
-  if (a.kind === 'line') {
-    const range = a.lineStart === a.lineEnd ? `L${a.lineStart}` : `L${a.lineStart}–${a.lineEnd}`;
+  if (a && a.lineStart != null) {
+    const range =
+      a.lineEnd == null || a.lineEnd === a.lineStart
+        ? `L${a.lineStart}`
+        : `L${a.lineStart}–${a.lineEnd}`;
     const statusTag = file ? ` (${file.status})` : '';
-    lines.push(`- **${range}**${statusTag}: ${c.body}`);
+    lines.push(`- **${range}**${statusTag} ${tags}: ${n.body}`);
     if (file?.patch && !file.isBinary) {
-      const snippet = extractSnippet(file.patch, a.side, a.lineStart, a.lineEnd);
+      const snippet = extractSnippet(
+        file.patch,
+        a.side ?? 'right',
+        a.lineStart,
+        a.lineEnd ?? a.lineStart,
+      );
       if (snippet && snippet.length > 0) {
         const lang = inferLanguage(file.path);
         const fence = '```';
@@ -69,15 +95,14 @@ function renderComment(c: Comment, file: SelfReviewFileChange | undefined): stri
         lines.push(`  ${fence}`);
       }
     }
-  } else if (a.kind === 'file') {
-    lines.push(`- **file-level**: ${c.body}`);
+  } else if (a) {
+    lines.push(`- **file-level** ${tags}: ${n.body}`);
   } else {
-    const orig = a.originalAnchor;
-    const tag = orig.kind === 'line' ? `L${orig.lineStart}–${orig.lineEnd}` : 'file-level';
-    lines.push(`- **${tag}** (dangling): ${c.body}`);
+    lines.push(`- **general** ${tags}: ${n.body}`);
   }
 
-  for (const r of c.replies) lines.push(`  - reply: ${r.body}`);
+  // The thread: each reply tagged by author.
+  for (const r of n.replies) lines.push(`  - ${r.author}: ${r.body}`);
   return lines;
 }
 
@@ -122,12 +147,12 @@ function extractSnippet(
       leftNo += 1;
       if (side !== 'left') continue;
       collectOne(raw.slice(1), lineNo);
-    } else if (raw.startsWith(' ') || raw === '') {
+    } else if (raw.startsWith(' ')) {
       // Context: present on both sides; advance both counters.
       const lineNo = side === 'left' ? leftNo : rightNo;
       leftNo += 1;
       rightNo += 1;
-      collectOne(raw.startsWith(' ') ? raw.slice(1) : raw, lineNo);
+      collectOne(raw.slice(1), lineNo);
     }
   }
 
