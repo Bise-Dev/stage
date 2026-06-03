@@ -4,7 +4,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
-use stage_core::diff::{base_diff_file_set, default_base};
+use stage_core::diff::{default_base, DiffLineIndex};
 use stage_core::{
     repo_key_from_cwd, Debrief, NoteAnchor, NoteStatus, ReviewNote, ReviewNoteView, Store,
 };
@@ -353,10 +353,11 @@ pub fn self_review_debrief_get(state: State<'_, AppState>) -> Result<Option<Debr
 }
 
 /// Review notes for the active repo + branch (optionally filtered by `status`),
-/// each carrying a computed `outdated` flag. `outdated` is derived against the
-/// current Debrief's base (falling back to the repo default branch) — the same
-/// computation as the CLI's `notes` arm, never stored (the **Stale step**
-/// pattern at file granularity).
+/// each carrying its `replies` thread and a computed `outdated` flag.
+/// `outdated` is derived against the current Debrief's base (falling back to the
+/// repo default branch) — the same `DiffLineIndex` computation as the CLI's
+/// `notes` arm so the app and agent agree (ADR-0012), never stored (the
+/// **Stale step** pattern, at line granularity).
 #[tauri::command]
 pub fn self_review_notes_list(
     state: State<'_, AppState>,
@@ -370,29 +371,44 @@ pub fn self_review_notes_list(
         Some(debrief) => debrief.base,
         None => default_base(&path)?,
     };
-    let present = base_diff_file_set(&path, &base)?;
+    let index = DiffLineIndex::from_base_diff(&path, &base)?;
     Ok(notes
         .into_iter()
         .map(|n| {
-            let outdated = !present.contains(&n.anchor.file);
+            let outdated = index.is_outdated(&n.anchor);
             n.into_view(outdated)
         })
         .collect())
 }
 
-/// Create an `open` Review note anchored to a diff location. The UUID is minted
-/// here (the app is the only note author; the store stays uuid-free).
+/// Create an `open` Review note. `anchor` is `None` for general (un-anchored)
+/// feedback. The UUID is minted here (the app is the only note author; the
+/// store stays uuid-free).
 #[tauri::command]
 pub fn self_review_note_create(
     state: State<'_, AppState>,
-    anchor: NoteAnchor,
+    anchor: Option<NoteAnchor>,
     body: String,
 ) -> Result<ReviewNote, AppError> {
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
     let id = uuid::Uuid::new_v4().to_string();
-    Ok(store.create_note(&key, &id, &anchor, &body)?)
+    Ok(store.create_note(&key, &id, anchor.as_ref(), &body)?)
+}
+
+/// Author action: append an author reply to a note's thread. Re-raises an
+/// addressed/resolved note to `open`. Fails loud on an unknown id.
+#[tauri::command]
+pub fn self_review_note_reply(
+    state: State<'_, AppState>,
+    id: String,
+    body: String,
+) -> Result<ReviewNote, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.add_author_reply(&key, &id, &body)?)
 }
 
 /// Author action: close a note (`resolved`). Fails loud on an unknown id.
@@ -417,4 +433,14 @@ pub fn self_review_note_reopen(
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
     Ok(store.reopen_note(&key, &id)?)
+}
+
+/// Author action: permanently delete a note and its thread. Fails loud on an
+/// unknown id.
+#[tauri::command]
+pub fn self_review_note_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.delete_note(&key, &id)?)
 }

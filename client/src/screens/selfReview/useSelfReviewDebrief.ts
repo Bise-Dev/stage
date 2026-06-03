@@ -6,7 +6,9 @@ import {
   type ReviewNoteView,
   selfReviewDebriefGet,
   selfReviewNoteCreate,
+  selfReviewNoteDelete,
   selfReviewNoteReopen,
+  selfReviewNoteReply,
   selfReviewNoteResolve,
   selfReviewNotesList,
 } from '../../tauri';
@@ -18,12 +20,16 @@ export type UseSelfReviewDebrief = {
   notes: ReviewNoteView[];
   loading: boolean;
   error: string | null;
-  /** Create an `open` Review note anchored to a diff location. */
-  createNote: (anchor: NoteAnchor, body: string) => Promise<void>;
+  /** Create an `open` Review note; `anchor` is null for general feedback. */
+  createNote: (anchor: NoteAnchor | null, body: string) => Promise<void>;
+  /** Author action: append an author reply (re-raises addressed/resolved → open). */
+  replyNote: (id: string, body: string) => Promise<void>;
   /** Author action: close a note (`resolved`). */
   resolveNote: (id: string) => Promise<void>;
   /** Author action: reopen a note (`open`). */
   reopenNote: (id: string) => Promise<void>;
+  /** Author action: permanently delete a note and its thread. */
+  deleteNote: (id: string) => Promise<void>;
 };
 
 function errMessage(e: unknown): string {
@@ -111,8 +117,14 @@ export function useSelfReviewDebrief(repoPath: string | null): UseSelfReviewDebr
   );
 
   const createNote = useCallback(
-    async (anchor: NoteAnchor, body: string) => {
+    async (anchor: NoteAnchor | null, body: string) => {
       await mutate(() => selfReviewNoteCreate(anchor, body), 'self_review_note_create_failed');
+    },
+    [mutate],
+  );
+  const replyNote = useCallback(
+    async (id: string, body: string) => {
+      await mutate(() => selfReviewNoteReply(id, body), 'self_review_note_reply_failed');
     },
     [mutate],
   );
@@ -128,6 +140,22 @@ export function useSelfReviewDebrief(repoPath: string | null): UseSelfReviewDebr
     },
     [mutate],
   );
+  const deleteNote = useCallback(
+    async (id: string) => {
+      await mutate(() => selfReviewNoteDelete(id), 'self_review_note_delete_failed');
+    },
+    [mutate],
+  );
 
-  return { debrief, notes, loading, error, createNote, resolveNote, reopenNote };
+  return {
+    debrief,
+    notes,
+    loading,
+    error,
+    createNote,
+    replyNote,
+    resolveNote,
+    reopenNote,
+    deleteNote,
+  };
 }

@@ -6,7 +6,7 @@ import { DebriefRail } from './DebriefRail';
 import { DiffPane, type DiffPaneHandle, type ViewLayout, type ViewMode } from './DiffPane';
 import { FileList } from './FileList';
 import { Subheader } from './Subheader';
-import { useSelfReviewComments } from './useSelfReviewComments';
+import { notesToMarkdown } from './markdown';
 import { useSelfReviewDebrief } from './useSelfReviewDebrief';
 import { useSelfReviewDiff } from './useSelfReviewDiff';
 import { clearViewed, loadViewed, setViewed } from './viewedStore';
@@ -64,29 +64,21 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
   }, []);
 
   const { diff, scope, setScope, loading, error } = useSelfReviewDiff(repoPath, defaultBranch);
-  const {
-    comments,
-    composer,
-    startFileComment,
-    startReply,
-    saveCurrent,
-    saveLineComment,
-    cancelComposer,
-    deleteComment,
-    copyAsMarkdown,
-  } = useSelfReviewComments(diff);
 
   // Cycle-1 author↔agent loop: the agent-authored Debrief + the author's
-  // Review notes, both from the local store (ADR-0011). Lives alongside the
-  // ephemeral comments above — comments are the markdown-export scratchpad,
-  // Review notes are the persistent feedback the agent reads back.
+  // Review notes, both from the local store (ADR-0011/0012). Review notes are
+  // the single annotation concept — every diff comment is one, persisted and
+  // agent-readable. The markdown export is a secondary convenience sourced from
+  // these same notes.
   const {
     debrief,
     notes,
     error: debriefError,
     createNote,
+    replyNote,
     resolveNote,
     reopenNote,
+    deleteNote,
   } = useSelfReviewDebrief(repoPath);
 
   // The rail starts closed and auto-opens once when a Debrief first appears, so
@@ -108,8 +100,9 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
   // state). We intentionally key on `diff?.currentBranch` rather than `diff`:
   // a watcher-driven refresh keeps the same currentBranch and shouldn't
   // re-read the store on every keystroke.
+  // Branch-keyed by design: we depend on the derived `branchKey`, not `diff`,
+  // so a watcher refresh that keeps the same branch doesn't re-read the store.
   const branchKey = diff?.currentBranch ?? null;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: branch-keyed by design (see comment)
   useEffect(() => {
     if (!repoPath || !branchKey) return;
     let cancelled = false;
@@ -186,17 +179,22 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
     [viewLayout],
   );
 
-  const commentCounts = useMemo(() => {
+  // Per-file note counts for the sidebar badge — anchored notes only (general
+  // notes have no file to attribute to).
+  const noteCounts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const c of comments) {
-      m.set(c.anchor.filePath, (m.get(c.anchor.filePath) ?? 0) + 1);
+    for (const n of notes) {
+      const file = n.anchor?.file;
+      if (file) m.set(file, (m.get(file) ?? 0) + 1);
     }
     return m;
-  }, [comments]);
+  }, [notes]);
 
   const onCopy = useCallback(async () => {
+    if (!diff) return;
     try {
-      await copyAsMarkdown();
+      const md = notesToMarkdown(diff, notes);
+      await navigator.clipboard.writeText(md);
       setCopyState('copied');
       setTimeout(() => setCopyState('idle'), 1500);
     } catch (e) {
@@ -204,7 +202,7 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
       setCopyState('error');
       setTimeout(() => setCopyState('idle'), 2000);
     }
-  }, [copyAsMarkdown]);
+  }, [diff, notes]);
 
   const onReadyToShare = useCallback(() => {
     // Stubbed entry to the future Workspace-creation flow (see CONTEXT.md
@@ -245,7 +243,7 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
             viewed={viewed}
             onToggleViewed={toggleViewed}
             onClearViewed={onClearViewed}
-            commentCounts={commentCounts}
+            noteCounts={noteCounts}
           />
 
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -326,14 +324,12 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
               viewMode={viewMode}
               viewed={viewed}
               onToggleViewed={toggleViewed}
-              comments={comments}
-              composer={composer}
-              onStartFileComment={startFileComment}
-              onStartReply={startReply}
-              onSaveComposer={saveCurrent}
-              onSaveLineComment={saveLineComment}
-              onCancelComposer={cancelComposer}
-              onDeleteComment={deleteComment}
+              notes={notes}
+              onCreateNote={createNote}
+              onReplyNote={replyNote}
+              onResolveNote={resolveNote}
+              onReopenNote={reopenNote}
+              onDeleteNote={deleteNote}
             />
           </div>
 
@@ -347,8 +343,10 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
               onSelectFile={onSelectFile}
               onToggleViewed={toggleViewed}
               onCreateNote={createNote}
+              onReplyNote={replyNote}
               onResolveNote={resolveNote}
               onReopenNote={reopenNote}
+              onDeleteNote={deleteNote}
               onClose={() => setRailOpen(false)}
             />
           )}

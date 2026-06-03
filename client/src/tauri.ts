@@ -252,27 +252,48 @@ export type Debrief = {
 
 export type NoteStatus = 'open' | 'addressed' | 'resolved';
 
-/** Where a Review note is anchored: a file path, optionally a line range. */
+/** Which diff side a line anchor targets: `left` = a deleted line (old file),
+ *  `right` = an added/context line (new file). Maps to @git-diff-view's
+ *  SplitSide. Only meaningful with a line range. */
+export type Side = 'left' | 'right';
+
+/** Where a Review note is anchored: a file path, optionally a line range on a
+ *  given side. */
 export type NoteAnchor = {
   file: string;
   lineStart: number | null;
   lineEnd: number | null;
+  side: Side | null;
 };
 
-/** The author's feedback on a Debrief, anchored to a diff location. */
+/** Who authored a thread entry on a Review note. */
+export type ReplyAuthor = 'author' | 'agent';
+
+/** A follow-up entry on a Review note's thread, after the opening `body`. */
+export type NoteReply = {
+  id: string;
+  author: ReplyAuthor;
+  body: string;
+  createdAt: number;
+};
+
+/** The author's annotation on a diff location — a threaded conversation
+ *  (ADR-0012). `anchor` is null for general (un-anchored) feedback. */
 export type ReviewNote = {
   id: string;
-  anchor: NoteAnchor;
+  anchor: NoteAnchor | null;
   body: string;
   status: NoteStatus;
-  /** Set when the agent moves the note to `addressed`. */
-  agentReply: string | null;
+  /** Follow-up thread entries, oldest first (author and/or agent). */
+  replies: NoteReply[];
   createdAt: number;
   updatedAt: number;
 };
 
-/** A ReviewNote plus the app-computed `outdated` flag (its anchored file is no
- *  longer in the current Base diff — the Stale-step pattern, file granularity). */
+/** A ReviewNote plus the app-computed `outdated` flag: its anchor no longer
+ *  matches the current Base diff (file gone, or its line range on its side is
+ *  gone). Anchorless notes are never outdated. The Stale-step pattern, at line
+ *  granularity (ADR-0012). */
 export type ReviewNoteView = ReviewNote & { outdated: boolean };
 
 /** The stored Debrief for the active repo + branch, or `null` if none. */
@@ -282,9 +303,15 @@ export const selfReviewDebriefGet = () => invoke<Debrief | null>('self_review_de
 export const selfReviewNotesList = (status?: NoteStatus) =>
   invoke<ReviewNoteView[]>('self_review_notes_list', { status: status ?? null });
 
-/** Create an `open` Review note anchored to a diff location (UUID minted in Rust). */
-export const selfReviewNoteCreate = (anchor: NoteAnchor, body: string) =>
+/** Create an `open` Review note. `anchor` is null for general feedback (UUID
+ *  minted in Rust). */
+export const selfReviewNoteCreate = (anchor: NoteAnchor | null, body: string) =>
   invoke<ReviewNote>('self_review_note_create', { anchor, body });
+
+/** Author action: append an author reply to a note's thread (re-raises an
+ *  addressed/resolved note to `open`). */
+export const selfReviewNoteReply = (id: string, body: string) =>
+  invoke<ReviewNote>('self_review_note_reply', { id, body });
 
 /** Author action: close a note (`resolved`). */
 export const selfReviewNoteResolve = (id: string) =>
@@ -293,3 +320,6 @@ export const selfReviewNoteResolve = (id: string) =>
 /** Author action: reopen a note (`open`). */
 export const selfReviewNoteReopen = (id: string) =>
   invoke<ReviewNote>('self_review_note_reopen', { id });
+
+/** Author action: permanently delete a note and its thread. */
+export const selfReviewNoteDelete = (id: string) => invoke<void>('self_review_note_delete', { id });

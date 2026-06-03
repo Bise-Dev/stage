@@ -2,31 +2,27 @@ import { useMemo, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Icon } from '../../components/Icon';
-import type {
-  Debrief,
-  NoteAnchor,
-  NoteStatus,
-  ReviewNoteView,
-  SelfReviewFileChange,
-} from '../../tauri';
+import type { Debrief, NoteAnchor, ReviewNoteView, SelfReviewFileChange } from '../../tauri';
 import { Composer } from './Composer';
+import { Thread } from './Thread';
 
 /**
  * The Debrief rail — the author's view of the agent's self-review (ADR-0011,
  * CONTEXT.md "Debrief"). Lists the agent's ordered steps (file + markdown
  * intro), each driving the diff (click a step → scroll its file into view),
- * and the **Review notes** anchored to each file: their status, the agent's
- * reply, an `outdated` flag, and resolve/reopen actions. The author adds new
- * notes here; the agent reads them back via the `stage` CLI.
- *
- * Note creation is file-anchored in this first cut (the data model + commands
- * carry an optional line range; a line-level gutter affordance is a follow-up).
+ * and the **Review notes** anchored to each file. It is also the home for
+ * notes with no inline anchor: general (un-anchored) feedback and notes whose
+ * anchored lines left the diff (ADR-0012). Anchored notes also render inline in
+ * the diff; the rail is the index + overview.
  */
 
-const NOTE_STATUS: Record<NoteStatus, { label: string; cls: string }> = {
-  open: { label: 'open', cls: 'badge-orange' },
-  addressed: { label: 'addressed', cls: 'badge-blue' },
-  resolved: { label: 'resolved', cls: 'badge-green' },
+/** Note operations the rail forwards to each Thread / composer. */
+type NoteOps = {
+  onCreateNote: (anchor: NoteAnchor | null, body: string) => Promise<void>;
+  onReplyNote: (id: string, body: string) => Promise<void>;
+  onResolveNote: (id: string) => Promise<void>;
+  onReopenNote: (id: string) => Promise<void>;
+  onDeleteNote: (id: string) => Promise<void>;
 };
 
 function formatWhen(epochSeconds: number): string {
@@ -38,12 +34,6 @@ function formatWhen(epochSeconds: number): string {
   });
 }
 
-function anchorRange(anchor: NoteAnchor): string | null {
-  if (anchor.lineStart == null) return null;
-  if (anchor.lineEnd == null || anchor.lineEnd === anchor.lineStart) return `L${anchor.lineStart}`;
-  return `L${anchor.lineStart}–L${anchor.lineEnd}`;
-}
-
 export function DebriefRail({
   debrief,
   notes,
@@ -52,11 +42,9 @@ export function DebriefRail({
   viewed,
   onSelectFile,
   onToggleViewed,
-  onCreateNote,
-  onResolveNote,
-  onReopenNote,
   onClose,
-}: {
+  ...noteOps
+}: NoteOps & {
   debrief: Debrief | null;
   notes: ReviewNoteView[];
   files: SelfReviewFileChange[];
@@ -65,21 +53,22 @@ export function DebriefRail({
   viewed: Set<string>;
   onSelectFile: (path: string) => void;
   onToggleViewed: (path: string) => void;
-  onCreateNote: (anchor: NoteAnchor, body: string) => Promise<void>;
-  onResolveNote: (id: string) => Promise<void>;
-  onReopenNote: (id: string) => Promise<void>;
   onClose: () => void;
 }) {
-  // Path → notes, in store order (newest first from the backend).
+  // Path → anchored notes, in store order (newest first from the backend).
   const notesByFile = useMemo(() => {
     const m = new Map<string, ReviewNoteView[]>();
     for (const n of notes) {
-      const arr = m.get(n.anchor.file) ?? [];
+      const file = n.anchor?.file;
+      if (!file) continue;
+      const arr = m.get(file) ?? [];
       arr.push(n);
-      m.set(n.anchor.file, arr);
+      m.set(file, arr);
     }
     return m;
   }, [notes]);
+
+  const general = useMemo(() => notes.filter((n) => n.anchor === null), [notes]);
 
   const fileMeta = useMemo(() => {
     const m = new Map<string, SelfReviewFileChange>();
@@ -123,16 +112,14 @@ export function DebriefRail({
           Agent Debrief
         </span>
         {debrief && (
-          <>
-            <span className="badge mono" style={{ background: 'rgba(0,0,0,0.06)' }}>
-              {debrief.base}
-            </span>
-            {openCount > 0 && (
-              <span className="badge badge-orange">
-                {openCount} open note{openCount === 1 ? '' : 's'}
-              </span>
-            )}
-          </>
+          <span className="badge mono" style={{ background: 'rgba(0,0,0,0.06)' }}>
+            {debrief.base}
+          </span>
+        )}
+        {openCount > 0 && (
+          <span className="badge badge-orange">
+            {openCount} open note{openCount === 1 ? '' : 's'}
+          </span>
         )}
         <div style={{ flex: 1 }} />
         <button
@@ -147,6 +134,8 @@ export function DebriefRail({
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', padding: '10px 12px' }}>
+        <GeneralNotes notes={general} {...noteOps} />
+
         {!debrief ? (
           <div
             style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5, padding: '8px 2px' }}
@@ -173,9 +162,7 @@ export function DebriefRail({
                 notes={notesByFile.get(step.file) ?? []}
                 onSelect={() => onSelectFile(step.file)}
                 onToggleViewed={() => onToggleViewed(step.file)}
-                onCreateNote={onCreateNote}
-                onResolveNote={onResolveNote}
-                onReopenNote={onReopenNote}
+                {...noteOps}
               />
             ))}
 
@@ -199,9 +186,7 @@ export function DebriefRail({
                     notes={notesByFile.get(file) ?? []}
                     onSelect={() => onSelectFile(file)}
                     onToggleViewed={() => onToggleViewed(file)}
-                    onCreateNote={onCreateNote}
-                    onResolveNote={onResolveNote}
-                    onReopenNote={onReopenNote}
+                    {...noteOps}
                   />
                 ))}
               </>
@@ -209,6 +194,73 @@ export function DebriefRail({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** General (un-anchored) feedback — the rail is its only home (ADR-0012). */
+function GeneralNotes({
+  notes,
+  onCreateNote,
+  onReplyNote,
+  onResolveNote,
+  onReopenNote,
+  onDeleteNote,
+}: NoteOps & { notes: ReviewNoteView[] }) {
+  const [adding, setAdding] = useState(false);
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 2px 4px',
+        }}
+      >
+        <span className="section-label" style={{ color: 'var(--gray-500)' }}>
+          General notes
+        </span>
+        <div style={{ flex: 1 }} />
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => setAdding(true)}
+          title="Add general feedback (not tied to a file)"
+          style={{ color: 'var(--blue)', padding: '0 4px', height: 20 }}
+        >
+          <Icon name="plus" size={11} color="var(--blue)" /> Note
+        </button>
+      </div>
+      {notes.map((n) => (
+        <Thread
+          key={n.id}
+          note={n}
+          onReply={onReplyNote}
+          onResolve={onResolveNote}
+          onReopen={onReopenNote}
+          onDelete={onDeleteNote}
+        />
+      ))}
+      {adding && (
+        <Composer
+          placeholder="General feedback on the whole change…"
+          autoFocus
+          onSave={(body) => {
+            const trimmed = body.trim();
+            if (!trimmed) {
+              setAdding(false);
+              return;
+            }
+            onCreateNote(null, trimmed)
+              .then(() => setAdding(false))
+              .catch(() => {
+                // Error surfaced via the hook's banner; keep the composer open.
+              });
+          }}
+          onCancel={() => setAdding(false)}
+        />
+      )}
     </div>
   );
 }
@@ -224,9 +276,11 @@ function StepCard({
   onSelect,
   onToggleViewed,
   onCreateNote,
+  onReplyNote,
   onResolveNote,
   onReopenNote,
-}: {
+  onDeleteNote,
+}: NoteOps & {
   file: string;
   intro: string | null;
   meta: SelfReviewFileChange | undefined;
@@ -236,9 +290,6 @@ function StepCard({
   notes: ReviewNoteView[];
   onSelect: () => void;
   onToggleViewed: () => void;
-  onCreateNote: (anchor: NoteAnchor, body: string) => Promise<void>;
-  onResolveNote: (id: string) => Promise<void>;
-  onReopenNote: (id: string) => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false);
   const name = file.split('/').pop() ?? file;
@@ -362,11 +413,13 @@ function StepCard({
       {notes.length > 0 && (
         <div style={{ padding: '4px 10px 2px', borderTop: '1px solid var(--hairline-2)' }}>
           {notes.map((n) => (
-            <NoteCard
+            <Thread
               key={n.id}
               note={n}
-              onResolve={() => onResolveNote(n.id)}
-              onReopen={() => onReopenNote(n.id)}
+              onReply={onReplyNote}
+              onResolve={onResolveNote}
+              onReopen={onReopenNote}
+              onDelete={onDeleteNote}
             />
           ))}
         </div>
@@ -384,7 +437,7 @@ function StepCard({
                 setAdding(false);
                 return;
               }
-              onCreateNote({ file, lineStart: null, lineEnd: null }, trimmed)
+              onCreateNote({ file, lineStart: null, lineEnd: null, side: null }, trimmed)
                 .then(() => setAdding(false))
                 .catch(() => {
                   // Error surfaced via the hook's banner; keep the composer
@@ -408,105 +461,6 @@ function StepCard({
             }}
           >
             <Icon name="plus" size={11} color="var(--blue)" /> Review note
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function NoteCard({
-  note,
-  onResolve,
-  onReopen,
-}: {
-  note: ReviewNoteView;
-  onResolve: () => void;
-  onReopen: () => void;
-}) {
-  const status = NOTE_STATUS[note.status];
-  const range = anchorRange(note.anchor);
-  const resolved = note.status === 'resolved';
-
-  return (
-    <div
-      style={{
-        border: '1px solid var(--hairline)',
-        borderRadius: 'var(--r-sm)',
-        padding: '6px 8px',
-        margin: '6px 0',
-        background: resolved ? 'var(--gray-50)' : '#fff',
-        fontSize: 12,
-        color: 'var(--gray-800)',
-        opacity: resolved ? 0.75 : 1,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-        <span className={`badge ${status.cls}`}>{status.label}</span>
-        {range && (
-          <span className="mono" style={{ fontSize: 10.5, color: 'var(--blue-press)' }}>
-            {range}
-          </span>
-        )}
-        {note.outdated && (
-          <span
-            className="badge badge-orange"
-            title="The anchored file left the diff — this feedback may be obsolete"
-          >
-            outdated
-          </span>
-        )}
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 10, color: 'var(--gray-400)' }}>{formatWhen(note.createdAt)}</span>
-      </div>
-      <div style={{ whiteSpace: 'pre-wrap' }}>{note.body}</div>
-
-      {note.agentReply && (
-        <div
-          style={{
-            marginTop: 6,
-            paddingTop: 6,
-            borderTop: '1px solid var(--hairline-2)',
-            whiteSpace: 'pre-wrap',
-            color: 'var(--gray-600)',
-          }}
-        >
-          <span
-            style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--green-d)', marginRight: 6 }}
-          >
-            AGENT
-          </span>
-          {note.agentReply}
-        </div>
-      )}
-
-      <div
-        style={{
-          display: 'flex',
-          gap: 6,
-          marginTop: 6,
-          paddingTop: 6,
-          borderTop: '1px solid var(--hairline-2)',
-        }}
-      >
-        <div style={{ flex: 1 }} />
-        {resolved ? (
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={onReopen}
-            style={{ color: 'var(--blue)', padding: '0 4px', height: 20 }}
-          >
-            Reopen
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={onResolve}
-            style={{ color: 'var(--green-d)', padding: '0 4px', height: 20 }}
-          >
-            <Icon name="check" size={10} color="var(--green-d)" /> Resolve
           </button>
         )}
       </div>

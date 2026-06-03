@@ -101,8 +101,10 @@ pub fn run() {
             commands::self_review_debrief_get,
             commands::self_review_notes_list,
             commands::self_review_note_create,
+            commands::self_review_note_reply,
             commands::self_review_note_resolve,
             commands::self_review_note_reopen,
+            commands::self_review_note_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

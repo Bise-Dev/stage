@@ -23,7 +23,7 @@ export function FileList({
   viewed,
   onToggleViewed,
   onClearViewed,
-  commentCounts,
+  noteCounts,
 }: {
   files: SelfReviewFileChange[];
   filter: string;
@@ -34,7 +34,7 @@ export function FileList({
   viewed: Set<string>;
   onToggleViewed: (path: string) => void;
   onClearViewed: () => void;
-  commentCounts: Map<string, number>;
+  noteCounts: Map<string, number>;
 }) {
   const q = filter.trim().toLowerCase();
   const filtered = !q
@@ -101,7 +101,7 @@ export function FileList({
             file={f}
             active={f.path === selectedPath}
             isViewed={viewed.has(f.path)}
-            commentCount={commentCounts.get(f.path) ?? 0}
+            noteCount={noteCounts.get(f.path) ?? 0}
             onSelect={() => onSelect(f.path)}
             onToggleViewed={() => onToggleViewed(f.path)}
           />
@@ -136,14 +136,14 @@ function FileRow({
   file,
   active,
   isViewed,
-  commentCount,
+  noteCount,
   onSelect,
   onToggleViewed,
 }: {
   file: SelfReviewFileChange;
   active: boolean;
   isViewed: boolean;
-  commentCount: number;
+  noteCount: number;
   onSelect: () => void;
   onToggleViewed: () => void;
 }) {
@@ -203,7 +203,7 @@ function FileRow({
           </div>
         )}
       </div>
-      {commentCount > 0 && (
+      {noteCount > 0 && (
         <span
           style={{
             display: 'inline-flex',
@@ -212,13 +212,14 @@ function FileRow({
             fontSize: 10.5,
             color: active ? 'var(--blue-press)' : 'var(--gray-500)',
           }}
+          title={`${noteCount} Review note${noteCount === 1 ? '' : 's'}`}
         >
           <Icon
             name="comment-fill"
             size={10}
             color={active ? 'var(--blue-press)' : 'var(--gray-400)'}
           />
-          {commentCount}
+          {noteCount}
         </span>
       )}
       <span
