@@ -4,6 +4,7 @@ mod errors;
 mod git;
 pub mod oauth;
 mod recents;
+mod session;
 mod state;
 mod watcher;
 
@@ -14,7 +15,8 @@ use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
 use crate::recents::RecentsStore;
-use crate::state::AppState;
+use crate::session::SessionStore;
+use crate::state::{AppState, AuthSession};
 
 pub fn run() {
     let _ = tracing_subscriber::fmt()
@@ -36,6 +38,10 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
 
             let recents = RecentsStore::open(&data_dir)?;
+            let sessions = SessionStore::open(&data_dir)?;
+            // Seed the runtime token from disk (ADR-0013). It's validated lazily
+            // via `auth_bootstrap` (auth_me); a dead token is cleared there.
+            let initial_token = sessions.token();
 
             let backend_url = app
                 .config()
@@ -67,8 +73,9 @@ pub fn run() {
             app.manage(AppState {
                 active: Mutex::new(None),
                 recents: Arc::new(recents),
+                sessions: Arc::new(sessions),
                 api: api_client,
-                auth: Mutex::new(None),
+                auth: Mutex::new(initial_token.map(|token| AuthSession { token })),
                 auth_in_flight: Mutex::new(None),
                 github_app_client_id,
             });
@@ -96,6 +103,7 @@ pub fn run() {
             commands::auth_sign_in,
             commands::auth_sign_in_cancel,
             commands::auth_me,
+            commands::auth_bootstrap,
             commands::auth_logout,
             commands::github_prs,
             commands::self_review_debrief_get,

@@ -10,9 +10,14 @@ type SignInState = { kind: 'idle' } | { kind: 'signing-in' } | { kind: 'error'; 
 
 type Props = {
   onAuthenticated: (user: User) => void;
+  /**
+   * Enter local-only mode (ADR-0013): no Stage session, local features only.
+   * Not sticky — signing in later upgrades to the full signed-in experience.
+   */
+  onStayOffline: () => void;
 };
 
-export function SignIn({ onAuthenticated }: Props) {
+export function SignIn({ onAuthenticated, onStayOffline }: Props) {
   const [state, setState] = useState<SignInState>({ kind: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
 
@@ -125,24 +130,46 @@ export function SignIn({ onAuthenticated }: Props) {
           </div>
 
           {state.kind === 'idle' && (
-            <button
-              type="button"
-              onClick={startSignIn}
-              className="flex items-center justify-center gap-1.5 w-full cursor-default"
-              style={{
-                height: 38,
-                borderRadius: 'var(--r-sm)',
-                background: '#1a1917',
-                color: '#fff',
-                border: 'none',
-                fontSize: 13,
-                fontWeight: 600,
-                fontFamily: 'inherit',
-              }}
-            >
-              <Icon name="gh" size={14} color="#fff" />
-              Continue with GitHub
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={startSignIn}
+                className="flex items-center justify-center gap-1.5 w-full cursor-default"
+                style={{
+                  height: 38,
+                  borderRadius: 'var(--r-sm)',
+                  background: '#1a1917',
+                  color: '#fff',
+                  border: 'none',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  fontFamily: 'inherit',
+                }}
+              >
+                <Icon name="gh" size={14} color="#fff" />
+                Continue with GitHub
+              </button>
+              {/* Local-only path (ADR-0013): work without a Stage session.
+                  Not sticky — signing in later unlocks the backend features. */}
+              <button
+                type="button"
+                onClick={onStayOffline}
+                className="w-full cursor-default"
+                style={{
+                  marginTop: 10,
+                  height: 32,
+                  borderRadius: 'var(--r-sm)',
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--gray-600)',
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  fontFamily: 'inherit',
+                }}
+              >
+                Stay offline — review locally without signing in
+              </button>
+            </>
           )}
 
           {state.kind === 'signing-in' && (

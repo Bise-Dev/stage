@@ -61,11 +61,13 @@ export function Workspaces({
   onChangeRepo,
   onStartSelfReview,
   onOpenStoryline,
+  onSignOut,
 }: {
   user: User;
   onChangeRepo: () => void;
   onStartSelfReview: () => void;
   onOpenStoryline: (ctx: StorylineCtx) => void;
+  onSignOut: () => void;
 }) {
   const me = user.github_login;
   const [repoSlug, setRepoSlug] = useState<string | null>(null);
@@ -399,7 +401,12 @@ export function Workspaces({
             <div className="section-label" style={{ marginTop: 14, padding: '0 6px' }}>
               Repository
             </div>
-            <RepoMenu slug={repoSlug} path={repoPath} onChangeRepo={onChangeRepo} />
+            <RepoMenu
+              slug={repoSlug}
+              path={repoPath}
+              onChangeRepo={onChangeRepo}
+              onSignOut={onSignOut}
+            />
           </div>
 
           {/* Resizable divider */}
@@ -721,10 +728,12 @@ function RepoMenu({
   slug,
   path,
   onChangeRepo,
+  onSignOut,
 }: {
   slug: string | null;
   path: string | null;
   onChangeRepo: () => void;
+  onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -844,6 +853,18 @@ function RepoMenu({
             }}
           >
             Reveal in Finder
+          </MenuItem>
+          <div
+            aria-hidden="true"
+            style={{ height: 1, background: 'var(--hairline)', margin: '4px 0' }}
+          />
+          <MenuItem
+            onClick={() => {
+              setOpen(false);
+              onSignOut();
+            }}
+          >
+            Sign out
           </MenuItem>
         </div>
       )}
