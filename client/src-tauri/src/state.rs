@@ -21,6 +21,28 @@ pub struct AppState {
     pub auth: Mutex<Option<AuthSession>>,
     pub auth_in_flight: Mutex<Option<AbortHandle>>,
     pub github_app_client_id: String,
+    /// A pending `stage open` request (ADR-0014): on cold start it is parsed
+    /// from this process's argv in `setup`; on warm start the single-instance
+    /// callback writes it here and emits `open-intent`. The webview drains it
+    /// once via `take_open_intent` and routes to Self-Review for `repo`.
+    pub pending_open: Mutex<Option<OpenIntent>>,
+}
+
+/// What `stage open` asks the GUI to do. Only the repo root is carried — the
+/// branch is rediscovered from that working tree (ADR-0014).
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenIntent {
+    pub repo: PathBuf,
+    pub mode: OpenMode,
+}
+
+/// The screen `stage open` lands on. Self-Review only today; an enum so adding
+/// a mode later is a non-breaking change. Serializes as `"selfReview"`.
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OpenMode {
+    SelfReview,
 }
 
 pub struct ActiveRepo {

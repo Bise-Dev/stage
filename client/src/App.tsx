@@ -5,7 +5,15 @@ import { SignIn } from './screens/onboarding/SignIn';
 import { SelfReview } from './screens/selfReview/SelfReview';
 import { Storyline, type StorylineCtx } from './screens/storyline/Storyline';
 import { Workspaces } from './screens/workspaces/Workspaces';
-import { type User, authBootstrap, authLogout } from './tauri';
+import {
+  type OpenIntent,
+  type User,
+  authBootstrap,
+  authLogout,
+  onOpenIntent,
+  setActiveRepo,
+  takeOpenIntent,
+} from './tauri';
 
 type View = 'signIn' | 'openRepo' | 'workspaces' | 'selfReview' | 'storyline';
 
@@ -24,39 +32,112 @@ export function App() {
   const [localOnly, setLocalOnly] = useState(false);
   const [hasRepo, setHasRepo] = useState(false);
   const [storylineCtx, setStorylineCtx] = useState<StorylineCtx | null>(null);
+  // A `stage open` intent that arrived with no valid session (ADR-0013/0014):
+  // we show SignIn first and retain it here so the author's auth choice — sign
+  // in *or* "Stay offline" — then lands directly in Self-Review for the repo.
+  const [pendingOpen, setPendingOpen] = useState<OpenIntent | null>(null);
+  // True when Self-Review was reached via `stage open`: seed its base from the
+  // Debrief's base, overriding the per-repo localStorage default (ADR-0014).
+  const [seedBase, setSeedBase] = useState(false);
 
-  // Boot: validate any persisted session token. A valid token skips SignIn;
-  // anything else (no token / dead session) lands on SignIn, which offers the
-  // "Stay offline" path into local-only mode.
+  // Set the active repo and route to Self-Review for a `stage open` intent.
+  // Fail-loud (CLAUDE.md): a bad repo path surfaces and falls back to the repo
+  // picker rather than wedging on a blank screen.
+  const routeToIntent = useCallback(async (intent: OpenIntent) => {
+    try {
+      await setActiveRepo(intent.repo);
+      setHasRepo(true);
+      setSeedBase(true);
+      setView('selfReview');
+    } catch (e) {
+      console.warn('open_intent_set_repo_failed', e);
+      setView('openRepo');
+    }
+  }, []);
+
+  // Boot: validate any persisted session token, and drain any `stage open`
+  // intent for this (cold) launch. With a valid session an intent goes straight
+  // to Self-Review; with no session we land on SignIn and retain the intent
+  // (ADR-0013's boot table), honoring it after the auth choice. A plain launch
+  // with a valid token skips SignIn to the repo picker.
   useEffect(() => {
-    authBootstrap()
-      .then((u) => {
-        if (u) {
-          setUser(u);
-          setView('openRepo');
-        }
-      })
-      .catch((e) => {
+    (async () => {
+      let u: User | null = null;
+      try {
+        u = await authBootstrap();
+      } catch (e) {
         // A connectivity failure at boot is the network axis, explicitly out of
         // scope for local-only (the auth axis). Surface it for visibility and
         // fall back to SignIn; the token stays on disk (only a 401 clears it,
         // on the Rust side), so a later launch can still validate it.
         console.warn('auth_bootstrap_failed', e);
-      })
-      .finally(() => setBooting(false));
-  }, []);
+      }
+      let intent: OpenIntent | null = null;
+      try {
+        intent = await takeOpenIntent();
+      } catch (e) {
+        console.warn('take_open_intent_failed', e);
+      }
+      if (u) setUser(u);
+      if (intent) {
+        if (u) {
+          await routeToIntent(intent);
+        } else {
+          // No session: SignIn is shown (its "Stay offline" path included); the
+          // intent waits to be honored once the author picks.
+          setPendingOpen(intent);
+        }
+      } else if (u) {
+        setView('openRepo');
+      }
+      setBooting(false);
+    })();
+  }, [routeToIntent]);
 
-  const onAuthenticated = useCallback((u: User) => {
-    setUser(u);
-    setLocalOnly(false);
-    setView('openRepo');
-  }, []);
+  // Warm start: a later `stage open` forwards its intent to this running app.
+  // If the author has already chosen (signed-in or local-only), focus+navigate
+  // straight to Self-Review; if they're still on SignIn, retain it like a cold
+  // no-session launch.
+  useEffect(() => {
+    const unlisten = onOpenIntent((intent) => {
+      if (user || localOnly) {
+        void routeToIntent(intent);
+      } else {
+        setPendingOpen(intent);
+      }
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, [user, localOnly, routeToIntent]);
 
-  // "Stay offline" from SignIn → local-only mode, home is the repo picker.
+  const onAuthenticated = useCallback(
+    (u: User) => {
+      setUser(u);
+      setLocalOnly(false);
+      if (pendingOpen) {
+        const intent = pendingOpen;
+        setPendingOpen(null);
+        void routeToIntent(intent);
+      } else {
+        setView('openRepo');
+      }
+    },
+    [pendingOpen, routeToIntent],
+  );
+
+  // "Stay offline" from SignIn → local-only mode. A retained `stage open` intent
+  // routes straight to Self-Review; otherwise the home is the repo picker.
   const enterLocalOnly = useCallback(() => {
     setLocalOnly(true);
-    setView('openRepo');
-  }, []);
+    if (pendingOpen) {
+      const intent = pendingOpen;
+      setPendingOpen(null);
+      void routeToIntent(intent);
+    } else {
+      setView('openRepo');
+    }
+  }, [pendingOpen, routeToIntent]);
 
   const onRepoOpened = useCallback(() => {
     setHasRepo(true);
@@ -66,7 +147,12 @@ export function App() {
   }, [localOnly]);
 
   const changeRepo = useCallback(() => setView('openRepo'), []);
-  const startSelfReview = useCallback(() => setView('selfReview'), []);
+  // Manual entry from Workspaces: respect the author's persisted base (don't
+  // seed from the Debrief — that's only for the `stage open` path, ADR-0014).
+  const startSelfReview = useCallback(() => {
+    setSeedBase(false);
+    setView('selfReview');
+  }, []);
   // Exit Self-Review: signed-in → Workspaces; local-only → repo picker (its home).
   const exitSelfReview = useCallback(
     () => setView(localOnly ? 'openRepo' : 'workspaces'),
@@ -113,7 +199,7 @@ export function App() {
     );
   }
   if (view === 'selfReview') {
-    return <SelfReview onExit={exitSelfReview} />;
+    return <SelfReview onExit={exitSelfReview} seedBaseFromDebrief={seedBase} />;
   }
   if (!user) {
     // Defensive: should be unreachable (storyline/workspaces are signed-in

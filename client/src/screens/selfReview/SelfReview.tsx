@@ -27,7 +27,10 @@ function loadLayout(): ViewLayout {
   return localStorage.getItem(LAYOUT_KEY) === 'single' ? 'single' : 'scroll';
 }
 
-export function SelfReview({ onExit }: { onExit: () => void }) {
+export function SelfReview({
+  onExit,
+  seedBaseFromDebrief = false,
+}: { onExit: () => void; seedBaseFromDebrief?: boolean }) {
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
   // The base ref the `base`-scope diff compares against. Defaults to the
@@ -104,6 +107,18 @@ export function SelfReview({ onExit }: { onExit: () => void }) {
     reopenNote,
     deleteNote,
   } = useSelfReviewDebrief(repoPath);
+
+  // `stage open` path (ADR-0014): seed the base from the Debrief's stored base
+  // so the author sees the same Base-scope diff the agent narrated, overriding
+  // the per-repo localStorage default. Non-persisting (for this open only) and
+  // applied once, when the Debrief first loads.
+  const seededBaseRef = useRef(false);
+  useEffect(() => {
+    if (seedBaseFromDebrief && debrief && !seededBaseRef.current) {
+      seededBaseRef.current = true;
+      setBaseRefState(debrief.base);
+    }
+  }, [seedBaseFromDebrief, debrief]);
 
   // The rail starts closed and auto-opens once when a Debrief first appears, so
   // the agent path is discoverable without intruding on the non-agent path.

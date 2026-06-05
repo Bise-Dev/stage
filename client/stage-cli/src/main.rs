@@ -4,8 +4,8 @@
 //! app-data store the desktop app shares (ADR-0011).
 
 use std::io::Read;
-use std::path::Path;
-use std::process::ExitCode;
+use std::path::{Path, PathBuf};
+use std::process::{ExitCode, Stdio};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use stage_core::diff::{
@@ -27,6 +27,11 @@ enum Command {
     /// Author or inspect the Debrief for the current repo + branch.
     #[command(subcommand)]
     SelfReview(SelfReviewCmd),
+    /// Open (or focus) the Stage desktop app in Self-Review for the current
+    /// repo. Spawns the GUI and forwards the repo root; a running instance is
+    /// brought to front and navigated there (ADR-0014). Fails loud (nonzero) if
+    /// the GUI binary can't be located — set `STAGE_GUI_BIN` to override.
+    Open,
 }
 
 #[derive(Subcommand)]
@@ -106,6 +111,117 @@ fn run(cli: Cli) -> Result<(), StageError> {
     let root = repo_root_from_cwd(&cwd)?;
     match cli.command {
         Command::SelfReview(cmd) => self_review(cmd, &cwd, &root),
+        Command::Open => open_gui(&root),
+    }
+}
+
+/// The bundled GUI binary's name (the Tauri app), a sibling of this CLI in the
+/// shared `target/` dir and inside the installed app bundle.
+const GUI_BIN_NAME: &str = "stage-client";
+
+/// Launch the Stage desktop app in Self-Review for `root` (ADR-0014). Spawns
+/// detached and returns: on a cold start the GUI keeps running; on a warm start
+/// `tauri-plugin-single-instance` forwards this argv to the live app (which
+/// focuses + navigates) and the spawned child exits on its own.
+fn open_gui(root: &Path) -> Result<(), StageError> {
+    let bin = resolve_gui_binary()?;
+    // Detach the GUI's stdio from this terminal. Inheriting it floods the
+    // caller's shell with the app's own logging (and any backend error bodies
+    // it renders) — a launcher must stay quiet. The GUI surfaces its own errors
+    // in-app; on a cold start it keeps running after this process exits.
+    std::process::Command::new(&bin)
+        .arg("open")
+        .arg(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    eprintln!("stage: opening Stage at {}", root.display());
+    Ok(())
+}
+
+/// Locate the Stage GUI binary: `STAGE_GUI_BIN` override → a sibling of this CLI
+/// in the same `target/` dir (dev / `tauri dev`) → an installed app bundle.
+fn resolve_gui_binary() -> Result<PathBuf, StageError> {
+    if let Some(p) = std::env::var_os("STAGE_GUI_BIN").filter(|v| !v.is_empty()) {
+        let p = PathBuf::from(p);
+        if p.exists() {
+            return Ok(p);
+        }
+        return Err(StageError::Invalid(format!(
+            "STAGE_GUI_BIN points at {} which does not exist",
+            p.display()
+        )));
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // Locate this CLI in its target dir. Canonicalize first so an install
+    // symlink (e.g. ~/.local/bin/stage -> target/release/stage) resolves to the
+    // real target dir — `current_exe` returns the *invoked* path (the symlink)
+    // on macOS, not the resolved target.
+    if let Ok(exe) = std::env::current_exe() {
+        let exe = exe.canonicalize().unwrap_or(exe);
+        if let Some(dir) = exe.parent() {
+            // Prefer a co-located build bundle (e.g. `just install-cli` produces
+            // target/<profile>/bundle/macos/Stage.app). Launching the *bundled*
+            // binary is what gives the proper Dock/launcher icon — its
+            // `mainBundle` resolves to the .app's Info.plist + icon.icns. A bare
+            // binary has no enclosing bundle, so macOS shows a generic icon.
+            candidates.push(
+                dir.join("bundle/macos/Stage.app/Contents/MacOS")
+                    .join(GUI_BIN_NAME),
+            );
+            // Bare sibling: the `tauri dev` / plain-build fallback. Functional
+            // (single-instance dedups by app id, not path), but launched cold it
+            // has no launcher icon — that's why the bundle is preferred above.
+            candidates.push(dir.join(GUI_BIN_NAME));
+        }
+    }
+
+    // Installed app bundles (also bundled binaries → proper icon).
+    candidates.extend(installed_candidates());
+
+    let mut tried: Vec<PathBuf> = Vec::new();
+    for cand in candidates {
+        if cand.exists() {
+            return Ok(cand);
+        }
+        tried.push(cand);
+    }
+
+    Err(StageError::Invalid(format!(
+        "could not locate the Stage GUI binary — set STAGE_GUI_BIN to override. Tried: {}",
+        tried
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
+}
+
+/// Candidate install locations for the bundled GUI binary. macOS only for now;
+/// other platforms rely on `STAGE_GUI_BIN` or the dev sibling fallback.
+fn installed_candidates() -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut roots = vec![PathBuf::from("/Applications")];
+        if let Some(home) = std::env::var_os("HOME") {
+            roots.push(PathBuf::from(home).join("Applications"));
+        }
+        roots
+            .into_iter()
+            .flat_map(|root| {
+                let macos = root.join("Stage.app").join("Contents").join("MacOS");
+                // Tauri names the inner binary after the cargo package; some
+                // setups use the productName ("Stage"). Try both.
+                [macos.join(GUI_BIN_NAME), macos.join("Stage")]
+            })
+            .collect()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
     }
 }
 

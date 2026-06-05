@@ -1,6 +1,28 @@
 import { invoke } from '@tauri-apps/api/core';
+import { type UnlistenFn, listen } from '@tauri-apps/api/event';
 
 export type RepoInfo = { path: string };
+
+// --- `stage open` boot intent (ADR-0014) ---
+/** The screen a `stage open` lands on. Self-Review only today. */
+export type OpenMode = 'selfReview';
+/** A pending `stage open` request: open the GUI in `mode` for `repo` (the
+ *  canonical repo root; the branch is rediscovered from that working tree). */
+export type OpenIntent = { repo: string; mode: OpenMode };
+
+/**
+ * Cold start: drain this launch's pending `stage open` intent, consumed once
+ * (cleared on the Rust side). Resolves to `null` for a plain dock/Finder
+ * launch. Warm starts arrive via {@link onOpenIntent} instead.
+ */
+export const takeOpenIntent = () => invoke<OpenIntent | null>('take_open_intent');
+
+/**
+ * Warm start: a later `stage open` forwards its intent to the already-running
+ * app via the `open-intent` event (ADR-0014). Returns the unlisten handle.
+ */
+export const onOpenIntent = (cb: (intent: OpenIntent) => void): Promise<UnlistenFn> =>
+  listen<OpenIntent>('open-intent', (event) => cb(event.payload));
 export type RecentRepo = { path: string; lastOpenedAt: number };
 export type RepoSummary = {
   defaultBranch: string | null;

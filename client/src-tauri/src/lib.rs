@@ -8,15 +8,34 @@ mod session;
 mod state;
 mod watcher;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tracing_subscriber::EnvFilter;
 
 use crate::recents::RecentsStore;
 use crate::session::SessionStore;
-use crate::state::{AppState, AuthSession};
+use crate::state::{AppState, AuthSession, OpenIntent, OpenMode};
+
+/// Parse a `stage open <repo-root>` invocation out of a process argv (the
+/// program name is `argv[0]`). Returns the open-intent, or `None` for a plain
+/// launch (dock/Finder). Shared by cold start (`setup`) and the warm-start
+/// single-instance callback (ADR-0014).
+fn parse_open_intent(argv: &[String]) -> Option<OpenIntent> {
+    let mut it = argv.iter().skip(1);
+    while let Some(arg) = it.next() {
+        if arg == "open" {
+            // The next token is the canonical repo root the CLI resolved.
+            return it.next().map(|p| OpenIntent {
+                repo: PathBuf::from(p),
+                mode: OpenMode::SelfReview,
+            });
+        }
+    }
+    None
+}
 
 pub fn run() {
     let _ = tracing_subscriber::fmt()
@@ -27,6 +46,23 @@ pub fn run() {
         .try_init();
 
     tauri::Builder::default()
+        // Single-instance MUST be the first plugin (plugin docs): a second
+        // `stage open` forwards its argv here instead of starting a new process.
+        // We record the intent, surface the existing window, and push it live to
+        // the webview (warm start; ADR-0014). Cold start is handled in `setup`.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let Some(intent) = parse_open_intent(&argv) else {
+                return;
+            };
+            *app.state::<AppState>().pending_open.lock() = Some(intent.clone());
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+            if let Err(e) = app.emit("open-intent", intent) {
+                tracing::error!(err = %e, "open_intent_emit_failed");
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
@@ -70,6 +106,11 @@ pub fn run() {
             let api_client = api::Client::new(&backend_url)
                 .map_err(|e| std::io::Error::other(format!("api client: {e}")))?;
 
+            // Cold start: this process *is* the primary, so parse our own argv
+            // for a `stage open` request (ADR-0014). Warm starts arrive via the
+            // single-instance callback above instead.
+            let pending_open = parse_open_intent(&std::env::args().collect::<Vec<_>>());
+
             app.manage(AppState {
                 active: Mutex::new(None),
                 recents: Arc::new(recents),
@@ -78,12 +119,14 @@ pub fn run() {
                 auth: Mutex::new(initial_token.map(|token| AuthSession { token })),
                 auth_in_flight: Mutex::new(None),
                 github_app_client_id,
+                pending_open: Mutex::new(pending_open),
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::set_active_repo,
             commands::get_active_repo,
+            commands::take_open_intent,
             commands::list_recent_repos,
             commands::forget_recent_repo,
             commands::git_current_branch,
