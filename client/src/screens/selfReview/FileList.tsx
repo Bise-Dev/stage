@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { Icon } from '../../components/Icon';
 import type { SelfReviewFileChange } from '../../tauri';
 
@@ -12,9 +13,15 @@ const STATUS_BADGE: Record<SelfReviewFileChange['status'], { ch: string; color: 
  * Left sidebar of the Self-Review screen. Flat list (no tree toggle for v1,
  * per Q13). Cmd-F binds to the filter input from the parent. "Mark viewed"
  * lives in each row's right side; counts roll up to the subheader.
+ *
+ * When a Debrief exists, `files` arrives pre-ordered by the parent: the files
+ * the Debrief narrates come first (in step order), then everything else in path
+ * order. `debriefPaths` marks the narrated set so we can draw an "Other files"
+ * divider at the boundary — mirroring the rail's "Notes on other files" label.
  */
 export function FileList({
   files,
+  debriefPaths,
   filter,
   setFilter,
   filterRef,
@@ -27,6 +34,8 @@ export function FileList({
   width,
 }: {
   files: SelfReviewFileChange[];
+  /** Paths the Debrief narrates (empty when there's no Debrief). */
+  debriefPaths: Set<string>;
   filter: string;
   setFilter: (s: string) => void;
   filterRef: React.RefObject<HTMLInputElement | null>;
@@ -43,6 +52,14 @@ export function FileList({
   const filtered = !q
     ? files
     : files.filter((f) => f.path.toLowerCase().includes(q) || f.patch?.toLowerCase().includes(q));
+
+  // Index of the first non-narrated file in the (already ordered) filtered list.
+  // We only draw the "Other files" divider when there's at least one narrated
+  // file above it (`> 0`) — if the filter leaves only non-Debrief files, or only
+  // Debrief files, no divider shows.
+  const otherStartIdx =
+    debriefPaths.size === 0 ? -1 : filtered.findIndex((f) => !debriefPaths.has(f.path));
+  const showOtherLabel = otherStartIdx > 0;
 
   return (
     <div
@@ -98,16 +115,25 @@ export function FileList({
             {files.length === 0 ? 'No changes.' : 'No files match the filter.'}
           </div>
         )}
-        {filtered.map((f) => (
-          <FileRow
-            key={f.path}
-            file={f}
-            active={f.path === selectedPath}
-            isViewed={viewed.has(f.path)}
-            noteCount={noteCounts.get(f.path) ?? 0}
-            onSelect={() => onSelect(f.path)}
-            onToggleViewed={() => onToggleViewed(f.path)}
-          />
+        {filtered.map((f, i) => (
+          <Fragment key={f.path}>
+            {showOtherLabel && i === otherStartIdx && (
+              <div
+                className="section-label"
+                style={{ padding: '12px 8px 4px', color: 'var(--gray-500)' }}
+              >
+                Other files
+              </div>
+            )}
+            <FileRow
+              file={f}
+              active={f.path === selectedPath}
+              isViewed={viewed.has(f.path)}
+              noteCount={noteCounts.get(f.path) ?? 0}
+              onSelect={() => onSelect(f.path)}
+              onToggleViewed={() => onToggleViewed(f.path)}
+            />
+          </Fragment>
         ))}
       </div>
       {viewed.size > 0 && (
