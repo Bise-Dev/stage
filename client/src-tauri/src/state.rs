@@ -7,11 +7,16 @@ use tokio::task::AbortHandle;
 use crate::api;
 use crate::errors::AppError;
 use crate::recents::RecentsStore;
+use crate::session::SessionStore;
 use crate::watcher::WatcherHandle;
 
 pub struct AppState {
     pub active: Mutex<Option<ActiveRepo>>,
     pub recents: Arc<RecentsStore>,
+    /// On-disk mirror of the signed-in session token (ADR-0013). `auth` below
+    /// is the runtime source of truth; this is written through on sign-in /
+    /// logout and loaded into `auth` at boot.
+    pub sessions: Arc<SessionStore>,
     pub api: api::Client,
     pub auth: Mutex<Option<AuthSession>>,
     pub auth_in_flight: Mutex<Option<AbortHandle>>,

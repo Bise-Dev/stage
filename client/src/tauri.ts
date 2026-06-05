@@ -168,6 +168,13 @@ export type GithubPrSearchItem = {
 export const authSignIn = () => invoke<User>('auth_sign_in');
 export const authSignInCancel = () => invoke<void>('auth_sign_in_cancel');
 export const authMe = () => invoke<User>('auth_me');
+/**
+ * Validate a persisted session token at boot (ADR-0013). Resolves to the
+ * signed-in `User` when a stored token is still valid, or `null` when there's
+ * no token / the backend rejected it (dead session — cleared on the Rust side).
+ * Rejects on other backend failures.
+ */
+export const authBootstrap = () => invoke<User | null>('auth_bootstrap');
 export const authLogout = () => invoke<void>('auth_logout');
 
 // --- GitHub proxy ---

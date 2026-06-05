@@ -237,10 +237,41 @@ pub async fn auth_sign_in(state: tauri::State<'_, AppState>) -> Result<api::User
         .web_exchange(&params.code, &verifier, &redirect_uri)
         .await?;
 
+    // Persist the token so the next launch skips sign-in (ADR-0013). Disk is a
+    // write-through mirror of the in-memory token; if the write fails we fail
+    // loud rather than leave a signed-in session that silently won't survive
+    // restart.
+    state.sessions.save(&session.session_token)?;
     *state.auth.lock() = Some(AuthSession {
         token: session.session_token,
     });
     Ok(session.user)
+}
+
+/// Validate the persisted session token at boot (ADR-0013).
+///
+/// Returns the signed-in `User` when a stored token still resolves via
+/// `auth_me`, `None` when there is no token or the backend rejects it as
+/// unauthenticated (dead session → cleared from memory and disk so the app
+/// falls back to signed-out). Any other backend failure is surfaced verbatim.
+#[tauri::command]
+pub async fn auth_bootstrap(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<api::User>, AppError> {
+    let Some(token) = state.auth.lock().as_ref().map(|a| a.token.clone()) else {
+        return Ok(None);
+    };
+    match state.api.auth_me(&token).await {
+        Ok(user) => Ok(Some(user)),
+        Err(api::Error::Unauthenticated) => {
+            // Dead session: drop it everywhere so we don't show signed-in UI
+            // that would fail on the first real backend call.
+            *state.auth.lock() = None;
+            state.sessions.clear()?;
+            Ok(None)
+        }
+        Err(other) => Err(other.into()),
+    }
 }
 
 #[tauri::command]
@@ -262,7 +293,11 @@ pub async fn auth_me(state: tauri::State<'_, AppState>) -> Result<api::User, App
 pub async fn auth_logout(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
     let token = state.require_token()?;
     let result = state.api.logout(&token).await;
+    // Clear locally regardless of the server's response — the user asked to
+    // sign out. Drop the persisted copy too (ADR-0013) so the next launch
+    // doesn't resurrect the session.
     *state.auth.lock() = None;
+    state.sessions.clear()?;
     result.map_err(Into::into)
 }
 
