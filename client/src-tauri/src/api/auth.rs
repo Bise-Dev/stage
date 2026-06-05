@@ -11,14 +11,11 @@ impl Client {
     ) -> Result<SessionData, Error> {
         let url = self.base_url.join("api/v1/auth/web/exchange/").unwrap();
         let resp = self
-            .http
-            .post(url)
-            .json(&serde_json::json!({
+            .send(self.http.post(url).json(&serde_json::json!({
                 "code": code,
                 "code_verifier": code_verifier,
                 "redirect_uri": redirect_uri,
-            }))
-            .send()
+            })))
             .await?;
         let status = resp.status();
         if !status.is_success() {
@@ -32,8 +29,7 @@ impl Client {
     /// `GET /api/v1/auth/me/` — returns the user currently bound to `token`.
     pub async fn auth_me(&self, token: &str) -> Result<User, Error> {
         let url = self.base_url.join("api/v1/auth/me/").unwrap();
-        tracing::debug!(url = %url, "GET auth/me");
-        let resp = self.http.get(url).bearer_auth(token).send().await?;
+        let resp = self.send(self.http.get(url).bearer_auth(token)).await?;
         let status = resp.status();
         if !status.is_success() {
             let err = Self::map_error(resp).await;
@@ -53,8 +49,7 @@ impl Client {
     /// but the raw token string still lives in caller memory.
     pub async fn logout(&self, token: &str) -> Result<(), Error> {
         let url = self.base_url.join("api/v1/auth/logout/").unwrap();
-        tracing::debug!(url = %url, "POST auth/logout");
-        let resp = self.http.post(url).bearer_auth(token).send().await?;
+        let resp = self.send(self.http.post(url).bearer_auth(token)).await?;
         if !resp.status().is_success() {
             let err = Self::map_error(resp).await;
             tracing::warn!(err = %err, "logout non-2xx");

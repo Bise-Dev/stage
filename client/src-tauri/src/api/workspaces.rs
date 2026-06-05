@@ -24,11 +24,7 @@ impl Client {
             "title": title,
         });
         let resp = self
-            .http
-            .post(url)
-            .bearer_auth(token)
-            .json(&body)
-            .send()
+            .send(self.http.post(url).bearer_auth(token).json(&body))
             .await?;
         let status = resp.status();
         if !status.is_success() {
@@ -48,7 +44,7 @@ impl Client {
             .base_url
             .join(&format!("api/v1/workspaces/{workspace_id}/storyline/"))
             .unwrap();
-        let resp = self.http.get(url).bearer_auth(token).send().await?;
+        let resp = self.send(self.http.get(url).bearer_auth(token)).await?;
         let status = resp.status();
         if !status.is_success() {
             return Err(Self::map_error(resp).await);
@@ -82,12 +78,13 @@ impl Client {
                 .collect::<Vec<_>>(),
         });
         let resp = self
-            .http
-            .put(url)
-            .bearer_auth(token)
-            .header("If-Match", etag)
-            .json(&body)
-            .send()
+            .send(
+                self.http
+                    .put(url)
+                    .bearer_auth(token)
+                    .header("If-Match", etag)
+                    .json(&body),
+            )
             .await?;
         let status = resp.status();
         if !status.is_success() {
@@ -103,7 +100,7 @@ impl Client {
             .base_url
             .join(&format!("api/v1/workspaces/{workspace_id}/"))
             .unwrap();
-        let resp = self.http.delete(url).bearer_auth(token).send().await?;
+        let resp = self.send(self.http.delete(url).bearer_auth(token)).await?;
         let status = resp.status();
         if !status.is_success() {
             return Err(Self::map_error(resp).await);

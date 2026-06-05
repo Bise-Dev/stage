@@ -35,6 +35,43 @@ impl Client {
         })
     }
 
+    /// Execute a request, emitting exactly one `http` Activity-log event
+    /// (method, url, status, duration_ms). This is the single funnel every
+    /// backend call goes through, so the dev Activity log shows consistent
+    /// HTTP rows without each call site repeating a `tracing` line.
+    ///
+    /// Headers are deliberately never logged: the only secret the client holds
+    /// is the bearer token, and keeping it out of the log entirely is cleaner
+    /// than logging-then-redacting (the layer's redactor is the backstop).
+    pub(super) async fn send(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, Error> {
+        let req = builder.build()?;
+        let method = req.method().clone();
+        let url = req.url().clone();
+        let start = std::time::Instant::now();
+        let result = self.http.execute(req).await;
+        let duration_ms = start.elapsed().as_millis() as u64;
+        match &result {
+            Ok(resp) => tracing::info!(
+                method = %method,
+                url = %url,
+                status = resp.status().as_u16(),
+                duration_ms,
+                "http_request"
+            ),
+            Err(e) => tracing::warn!(
+                method = %method,
+                url = %url,
+                duration_ms,
+                error = %e,
+                "http_request_failed"
+            ),
+        }
+        Ok(result?)
+    }
+
     pub(super) fn json_err(status: reqwest::StatusCode, e: reqwest::Error) -> Error {
         if e.is_decode() {
             Error::Unexpected {

@@ -352,3 +352,45 @@ export const selfReviewNoteReopen = (id: string) =>
 
 /** Author action: permanently delete a note and its thread. */
 export const selfReviewNoteDelete = (id: string) => invoke<void>('self_review_note_delete', { id });
+
+// --- Activity log (dev-only debug panel; see client/STACK.md "Activity log").
+// The backing commands exist only in debug builds (gated `#[cfg(debug_assertions)]`
+// on the Rust side); the webview only ever calls these from dev-gated code
+// (`import.meta.env.DEV`), so a release build never invokes a missing command.
+// Mirror of `activity_log::ActivityLogEntry` (Rust serializes; this is the TS
+// shape). ---
+
+export type ActivityLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+export type ActivityLogPill = 'http' | 'git' | 'cmd' | 'webview' | 'rust';
+
+export type ActivityLogEntry = {
+  /** Monotonic, assigned in Rust. Used to de-dup snapshot vs. live stream. */
+  id: number;
+  /** Unix epoch milliseconds. */
+  ts_ms: number;
+  level: ActivityLogLevel;
+  pill: ActivityLogPill;
+  /** Rust module path, or `'console'` for webview rows. */
+  target: string;
+  message: string;
+  fields: Record<string, string>;
+  duration_ms: number | null;
+  error: string | null;
+};
+
+/** Full ring, oldest first — pulled when the drawer opens. */
+export const activityLogSnapshot = () => invoke<ActivityLogEntry[]>('activity_log_snapshot');
+
+/** A webview-sourced row (forwarded `console.*` or an `ErrorBoundary` catch). */
+export type ActivityLogPushInput = {
+  level: ActivityLogLevel;
+  message: string;
+  fields?: Record<string, string>;
+  error?: string | null;
+};
+
+export const activityLogPush = (entry: ActivityLogPushInput) =>
+  invoke<void>('activity_log_push', { entry });
+
+/** Empty the ring (the drawer's Clear button). */
+export const activityLogClear = () => invoke<void>('activity_log_clear');
