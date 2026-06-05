@@ -14,7 +14,7 @@ use crate::errors::AppError;
 use crate::git;
 use crate::oauth::{authorize_url, gen_state, pkce_pair, LoopbackListener};
 use crate::recents::RecentRepo;
-use crate::state::{ActiveRepo, AppState, AuthSession};
+use crate::state::{ActiveRepo, AppState, AuthSession, OpenIntent};
 use crate::watcher;
 
 /// The active repo's working-tree path, or `NoActiveRepo`. The Self-Review
@@ -60,6 +60,15 @@ pub fn get_active_repo(state: State<'_, AppState>) -> Option<RepoInfo> {
     state.active.lock().as_ref().map(|a| RepoInfo {
         path: a.path.clone(),
     })
+}
+
+/// Drain the pending `stage open` intent for this launch, if any (ADR-0014).
+/// Consumed once at boot by the webview, which then sets the active repo and
+/// routes to Self-Review. Returns `null` for a plain dock/Finder launch. Warm
+/// starts are delivered separately via the `open-intent` event.
+#[tauri::command]
+pub fn take_open_intent(state: State<'_, AppState>) -> Option<OpenIntent> {
+    state.pending_open.lock().take()
 }
 
 #[tauri::command]

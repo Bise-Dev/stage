@@ -8,6 +8,15 @@ import type { User } from '../../tauri';
 
 type SignInState = { kind: 'idle' } | { kind: 'signing-in' } | { kind: 'error'; message: string };
 
+// The backend message is shown verbatim (fail-loud), but a pathological body —
+// e.g. a 500's full HTML page — must not blow up the card. Collapse whitespace
+// and cap the inline preview; the complete text stays available on hover.
+const MAX_ERROR_CHARS = 240;
+function previewError(message: string): string {
+  const collapsed = message.replace(/\s+/g, ' ').trim();
+  return collapsed.length > MAX_ERROR_CHARS ? `${collapsed.slice(0, MAX_ERROR_CHARS)}…` : collapsed;
+}
+
 type Props = {
   onAuthenticated: (user: User) => void;
   /**
@@ -207,14 +216,16 @@ export function SignIn({ onAuthenticated, onStayOffline }: Props) {
           {state.kind === 'error' && (
             <div>
               <div
+                title={state.message}
                 style={{
                   fontSize: 12.5,
                   color: '#b42318',
                   marginBottom: 12,
                   lineHeight: 1.5,
+                  overflowWrap: 'anywhere',
                 }}
               >
-                Sign-in failed: {state.message}
+                Sign-in failed: {previewError(state.message)}
               </div>
               <button
                 type="button"

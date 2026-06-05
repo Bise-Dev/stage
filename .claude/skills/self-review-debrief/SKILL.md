@@ -76,7 +76,13 @@ Write a fresh Debrief over your Base-scope changes.
 
    On success `set` echoes the stored Debrief (with `createdAt`/`updatedAt`). `set` **replaces** the whole Debrief each time — it is the full current account, not an append. Regenerating preserves `createdAt`.
 
-4. **Tell the author** it's ready to review in Stage's Self-Review screen.
+4. **Open Stage at the Debrief.** Surface the fresh Debrief in the desktop app's Self-Review screen for the author (ADR-0014):
+
+   ```sh
+   "$BIN" open
+   ```
+
+   This launches Stage (or focuses a running instance) directly in Self-Review for the current `(repo, branch)`, with the base set to the Debrief's. **Run it after every successful `set`** — both a fresh produce and the regeneration at the end of [address mode](#address-mode) — and nowhere else. It is **non-fatal**: the Debrief is already stored, so if `open` fails (e.g. the GUI isn't installed — it prints the reason to stderr and exits non-zero), **don't treat the run as failed**. Tell the author the Debrief is stored and ready, and that you couldn't auto-open Stage (with the reason) so they can open it manually.
 
 Inspect or remove the stored Debrief any time with `"$BIN" self-review show` (prints it, or `null`) and `"$BIN" self-review clear`.
 
@@ -128,3 +134,4 @@ After every open note is addressed, **regenerate the Debrief** so it reflects th
 | `self-review clear` | Delete the stored Debrief. |
 | `self-review notes [--status open\|addressed\|resolved]` | List Review notes as JSON, each with computed `outdated`. |
 | `self-review address <id> --reply "…"` | Mark a note `addressed` with your reply. |
+| `open` | Open/focus the Stage desktop app in Self-Review for the current repo (ADR-0014). Run after every successful `set`; non-fatal if it fails. |
