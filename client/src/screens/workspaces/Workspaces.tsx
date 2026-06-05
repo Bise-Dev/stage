@@ -3,6 +3,8 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Avatar } from '../../components/Avatar';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
+import { RELOAD } from '../../lib/shortcuts';
+import { useShortcut } from '../../lib/useShortcut';
 import {
   type BranchInfo,
   type DiffStats,
@@ -206,6 +208,9 @@ export function Workspaces({
   }, [branches, rows, defaultBranch]);
 
   const runFetch = async () => {
+    // Guard re-entry: the Fetch button is disabled while fetching, but ⌘R/Ctrl+R
+    // (see below) can fire mid-fetch — don't stack concurrent git fetches.
+    if (fetching) return;
     // Each step routes its failure to its own red banner so the user can
     // tell what actually broke (see CLAUDE.md "Error handling"). gitFetch
     // and repoSummary share the toolbar's fetchError slot; loadBranches /
@@ -229,6 +234,11 @@ export function Workspaces({
       setFetching(false);
     }
   };
+
+  // ⌘R (macOS) / Ctrl+R reloads the home page — keyboard alias for Fetch
+  // (git fetch + reload branches + overview). The hook preventDefaults the
+  // webview's native reload; runFetch guards its own re-entry (see ADR-0015).
+  useShortcut(RELOAD, runFetch);
 
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
