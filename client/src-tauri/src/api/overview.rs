@@ -15,7 +15,7 @@ impl Client {
             .base_url
             .join(&format!("api/v1/repos/{owner}/{repo}/overview/"))
             .unwrap();
-        let resp = self.http.get(url).bearer_auth(token).send().await?;
+        let resp = self.send(self.http.get(url).bearer_auth(token)).await?;
         let status = resp.status();
         if !status.is_success() {
             return Err(Self::map_error(resp).await);

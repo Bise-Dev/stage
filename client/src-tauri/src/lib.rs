@@ -1,3 +1,5 @@
+#[cfg(debug_assertions)]
+pub mod activity_log;
 pub mod api;
 mod commands;
 mod errors;
@@ -13,7 +15,9 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use tauri::{Emitter, Manager};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
 
 use crate::recents::RecentsStore;
 use crate::session::SessionStore;
@@ -38,12 +42,26 @@ fn parse_open_intent(argv: &[String]) -> Option<OpenIntent> {
 }
 
 pub fn run() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,stage_client_lib=debug")),
-        )
-        .try_init();
+    // Base console logging (unchanged). In debug we additionally fan events into
+    // the dev-only Activity log ring via a second layer; both are scoped by
+    // their own filter so the fmt layer keeps its existing verbosity.
+    let fmt_layer = tracing_subscriber::fmt::layer().with_filter(
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("info,stage_client_lib=debug")),
+    );
+
+    #[cfg(debug_assertions)]
+    let activity_log = Arc::new(activity_log::ActivityLog::new());
+
+    let subscriber = tracing_subscriber::registry().with(fmt_layer);
+    // The ring layer captures DEBUG+ from our crate only — that's where the
+    // http/git/cmd/rust pills come from; dependency noise stays out.
+    #[cfg(debug_assertions)]
+    let subscriber = subscriber.with(
+        activity_log::ActivityLogLayer::new(activity_log.clone())
+            .with_filter(EnvFilter::new("stage_client_lib=debug")),
+    );
+    let _ = subscriber.try_init();
 
     tauri::Builder::default()
         // Single-instance MUST be the first plugin (plugin docs): a second
@@ -66,7 +84,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .setup(move |app| {
+            // Stream new ring entries to the webview once the app handle exists.
+            // Records before this point still land in the ring (always-on).
+            #[cfg(debug_assertions)]
+            activity_log.set_app(app.handle().clone());
+
             let data_dir = app
                 .path()
                 .app_data_dir()
@@ -120,6 +143,8 @@ pub fn run() {
                 auth_in_flight: Mutex::new(None),
                 github_app_client_id,
                 pending_open: Mutex::new(pending_open),
+                #[cfg(debug_assertions)]
+                activity_log,
             });
             Ok(())
         })
@@ -156,6 +181,12 @@ pub fn run() {
             commands::self_review_note_resolve,
             commands::self_review_note_reopen,
             commands::self_review_note_delete,
+            #[cfg(debug_assertions)]
+            activity_log::activity_log_snapshot,
+            #[cfg(debug_assertions)]
+            activity_log::activity_log_push,
+            #[cfg(debug_assertions)]
+            activity_log::activity_log_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

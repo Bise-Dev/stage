@@ -15,7 +15,9 @@ use crate::errors::AppError;
 pub fn current_branch(repo_path: &Path) -> Result<String, AppError> {
     let repo = Repository::open(repo_path)?;
     let head = repo.head()?;
-    Ok(head.shorthand().unwrap_or("HEAD").to_string())
+    let branch = head.shorthand().unwrap_or("HEAD").to_string();
+    tracing::info!(repo = %repo_path.display(), branch = %branch, "git_current_branch");
+    Ok(branch)
 }
 
 #[derive(Serialize)]
@@ -54,6 +56,13 @@ pub fn summary(repo_path: &Path) -> Result<RepoSummary, AppError> {
 
     let default_branch = default_branch_for(&repo);
 
+    tracing::info!(
+        repo = %repo_path.display(),
+        branches_count,
+        default_branch = default_branch.as_deref().unwrap_or("?"),
+        has_remote = remote_url.is_some(),
+        "git_summary"
+    );
     Ok(RepoSummary {
         default_branch,
         branches_count,
@@ -112,13 +121,22 @@ pub fn local_branches(repo_path: &Path) -> Result<Vec<BranchInfo>, AppError> {
     }
 
     out.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+    tracing::info!(repo = %repo_path.display(), count = out.len(), "git_local_branches");
     Ok(out)
 }
 
 /// Added/removed line counts for `head_ref` since it diverged from `base_ref`.
 /// Wrapper over [`stage_core::diff::diff_stats`].
 pub fn diff_stats(repo_path: &Path, base_ref: &str, head_ref: &str) -> Result<DiffStats, AppError> {
-    Ok(stage_core::diff::diff_stats(repo_path, base_ref, head_ref)?)
+    let stats = stage_core::diff::diff_stats(repo_path, base_ref, head_ref)?;
+    tracing::info!(
+        base = %base_ref,
+        head = %head_ref,
+        added = stats.added,
+        removed = stats.removed,
+        "git_diff_stats"
+    );
+    Ok(stats)
 }
 
 /// Files changed in `head_ref` since it diverged from `base_ref`, with per-file
@@ -128,7 +146,14 @@ pub fn diff_files(
     base_ref: &str,
     head_ref: &str,
 ) -> Result<Vec<ChangedFile>, AppError> {
-    Ok(stage_core::diff::diff_files(repo_path, base_ref, head_ref)?)
+    let files = stage_core::diff::diff_files(repo_path, base_ref, head_ref)?;
+    tracing::info!(
+        base = %base_ref,
+        head = %head_ref,
+        files = files.len(),
+        "git_diff_files"
+    );
+    Ok(files)
 }
 
 /// Compute the diff that the Self-Review screen renders. Wrapper over
@@ -138,9 +163,15 @@ pub fn self_review_diff(
     scope: SelfReviewScope,
     base_ref: Option<&str>,
 ) -> Result<SelfReviewDiff, AppError> {
-    Ok(stage_core::diff::self_review_diff(
-        repo_path, scope, base_ref,
-    )?)
+    let diff = stage_core::diff::self_review_diff(repo_path, scope, base_ref)?;
+    tracing::info!(
+        repo = %repo_path.display(),
+        files = diff.files.len(),
+        added = diff.stats.added,
+        removed = diff.stats.removed,
+        "git_self_review_diff"
+    );
+    Ok(diff)
 }
 
 #[derive(Serialize)]
@@ -177,6 +208,7 @@ pub fn fetch(repo_path: &Path) -> Result<FetchOutcome, AppError> {
         }));
     }
 
+    tracing::info!(repo = %repo_path.display(), remote = %remote_name, "git_fetch");
     Ok(FetchOutcome {
         remote: remote_name,
     })

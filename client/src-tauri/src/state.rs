@@ -26,6 +26,11 @@ pub struct AppState {
     /// callback writes it here and emits `open-intent`. The webview drains it
     /// once via `take_open_intent` and routes to Self-Review for `repo`.
     pub pending_open: Mutex<Option<OpenIntent>>,
+    /// Dev-only Activity log ring (decision #6). The `tracing` layer in
+    /// `lib.rs` holds the same `Arc`, so both the layer and the IPC commands
+    /// read/write one buffer. Absent from release builds — see `activity_log.rs`.
+    #[cfg(debug_assertions)]
+    pub activity_log: Arc<crate::activity_log::ActivityLog>,
 }
 
 /// What `stage open` asks the GUI to do. Only the repo root is carried — the

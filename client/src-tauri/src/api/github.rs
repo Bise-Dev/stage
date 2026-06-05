@@ -10,7 +10,7 @@ impl Client {
     ) -> Result<Vec<GithubPrSearchItem>, Error> {
         let mut url = self.base_url.join("api/v1/github/prs/").unwrap();
         url.query_pairs_mut().append_pair("role", role);
-        let resp = self.http.get(url).bearer_auth(token).send().await?;
+        let resp = self.send(self.http.get(url).bearer_auth(token)).await?;
         let status = resp.status();
         if !status.is_success() {
             return Err(Self::map_error(resp).await);

@@ -36,6 +36,10 @@ pub struct RepoInfo {
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn set_active_repo(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -56,6 +60,10 @@ pub fn set_active_repo(
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn get_active_repo(state: State<'_, AppState>) -> Option<RepoInfo> {
     state.active.lock().as_ref().map(|a| RepoInfo {
         path: a.path.clone(),
@@ -72,16 +80,28 @@ pub fn take_open_intent(state: State<'_, AppState>) -> Option<OpenIntent> {
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn list_recent_repos(state: State<'_, AppState>) -> Vec<RecentRepo> {
     state.recents.list()
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn forget_recent_repo(state: State<'_, AppState>, path: PathBuf) -> Result<(), AppError> {
     state.recents.forget(&path)
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn git_current_branch(state: State<'_, AppState>) -> Result<String, AppError> {
     let path = state
         .active
@@ -93,11 +113,19 @@ pub fn git_current_branch(state: State<'_, AppState>) -> Result<String, AppError
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn repo_summary(path: PathBuf) -> Result<git::RepoSummary, AppError> {
     git::summary(&path)
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn git_local_branches(state: State<'_, AppState>) -> Result<Vec<git::BranchInfo>, AppError> {
     let path = state
         .active
@@ -109,6 +137,10 @@ pub fn git_local_branches(state: State<'_, AppState>) -> Result<Vec<git::BranchI
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn self_review_diff(
     state: State<'_, AppState>,
     scope: String,
@@ -133,6 +165,10 @@ pub fn self_review_diff(
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn git_diff_stats(
     state: State<'_, AppState>,
     base_ref: String,
@@ -148,6 +184,10 @@ pub fn git_diff_stats(
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn git_diff_files(
     state: State<'_, AppState>,
     base_ref: String,
@@ -163,6 +203,10 @@ pub fn git_diff_files(
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn repo_overview(
     state: tauri::State<'_, AppState>,
     owner: String,
@@ -174,6 +218,10 @@ pub async fn repo_overview(
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn git_fetch(state: State<'_, AppState>) -> Result<git::FetchOutcome, AppError> {
     let path = state
         .active
@@ -188,18 +236,30 @@ pub async fn git_fetch(state: State<'_, AppState>) -> Result<git::FetchOutcome, 
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn open_in_finder(path: PathBuf) -> Result<(), AppError> {
     tauri_plugin_opener::open_path(&path, None::<&str>)
         .map_err(|e| AppError::Backend(format!("open_in_finder_failed: {e}")))
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn open_url(url: String) -> Result<(), AppError> {
     tauri_plugin_opener::open_url(&url, None::<&str>)
         .map_err(|e| AppError::Backend(format!("open_url_failed: {e}")))
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn auth_sign_in(state: tauri::State<'_, AppState>) -> Result<api::User, AppError> {
     // Reject a second concurrent sign-in.
     {
@@ -264,6 +324,10 @@ pub async fn auth_sign_in(state: tauri::State<'_, AppState>) -> Result<api::User
 /// unauthenticated (dead session → cleared from memory and disk so the app
 /// falls back to signed-out). Any other backend failure is surfaced verbatim.
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn auth_bootstrap(
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<api::User>, AppError> {
@@ -284,6 +348,10 @@ pub async fn auth_bootstrap(
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn auth_sign_in_cancel(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
     if let Some(handle) = state.auth_in_flight.lock().take() {
         handle.abort();
@@ -292,6 +360,10 @@ pub async fn auth_sign_in_cancel(state: tauri::State<'_, AppState>) -> Result<()
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn auth_me(state: tauri::State<'_, AppState>) -> Result<api::User, AppError> {
     let token = state.require_token()?;
     let user = state.api.auth_me(&token).await?;
@@ -299,6 +371,10 @@ pub async fn auth_me(state: tauri::State<'_, AppState>) -> Result<api::User, App
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn auth_logout(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
     let token = state.require_token()?;
     let result = state.api.logout(&token).await;
@@ -311,6 +387,10 @@ pub async fn auth_logout(state: tauri::State<'_, AppState>) -> Result<(), AppErr
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn workspace_create(
     state: tauri::State<'_, AppState>,
     repo_owner: String,
@@ -335,6 +415,10 @@ pub async fn workspace_create(
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn workspace_delete(
     state: tauri::State<'_, AppState>,
     workspace_id: String,
@@ -345,6 +429,10 @@ pub async fn workspace_delete(
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn storyline_get(
     state: tauri::State<'_, AppState>,
     workspace_id: String,
@@ -355,6 +443,10 @@ pub async fn storyline_get(
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn storyline_update(
     state: tauri::State<'_, AppState>,
     workspace_id: String,
@@ -370,6 +462,10 @@ pub async fn storyline_update(
 }
 
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn github_prs(
     state: tauri::State<'_, AppState>,
     role: String,
@@ -389,6 +485,10 @@ pub async fn github_prs(
 /// The stored Debrief for the active repo + branch, or `None` if the agent
 /// hasn't authored one.
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn self_review_debrief_get(state: State<'_, AppState>) -> Result<Option<Debrief>, AppError> {
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
@@ -403,6 +503,10 @@ pub fn self_review_debrief_get(state: State<'_, AppState>) -> Result<Option<Debr
 /// `notes` arm so the app and agent agree (ADR-0012), never stored (the
 /// **Stale step** pattern, at line granularity).
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn self_review_notes_list(
     state: State<'_, AppState>,
     status: Option<NoteStatus>,
@@ -429,6 +533,10 @@ pub fn self_review_notes_list(
 /// feedback. The UUID is minted here (the app is the only note author; the
 /// store stays uuid-free).
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn self_review_note_create(
     state: State<'_, AppState>,
     anchor: Option<NoteAnchor>,
@@ -444,6 +552,10 @@ pub fn self_review_note_create(
 /// Author action: append an author reply to a note's thread. Re-raises an
 /// addressed/resolved note to `open`. Fails loud on an unknown id.
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn self_review_note_reply(
     state: State<'_, AppState>,
     id: String,
@@ -457,6 +569,10 @@ pub fn self_review_note_reply(
 
 /// Author action: close a note (`resolved`). Fails loud on an unknown id.
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn self_review_note_resolve(
     state: State<'_, AppState>,
     id: String,
@@ -469,6 +585,10 @@ pub fn self_review_note_resolve(
 
 /// Author action: reopen a note (`open`). Fails loud on an unknown id.
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn self_review_note_reopen(
     state: State<'_, AppState>,
     id: String,
@@ -482,6 +602,10 @@ pub fn self_review_note_reopen(
 /// Author action: permanently delete a note and its thread. Fails loud on an
 /// unknown id.
 #[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub fn self_review_note_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
