@@ -133,6 +133,32 @@ export function SelfReview({
   }, [debrief]);
   const openNoteCount = useMemo(() => notes.filter((n) => n.status === 'open').length, [notes]);
 
+  // The set of file paths the Debrief narrates — used both to order the file
+  // list and to draw the "Other files" divider below the narrated group.
+  const debriefPaths = useMemo(() => new Set((debrief?.steps ?? []).map((s) => s.file)), [debrief]);
+
+  // The single ordered file list driving the left column, the scroll-mode diff
+  // stack, and the on-open selection. When a Debrief exists, its steps order the
+  // files they narrate (ascending `order`); every other file sinks below in the
+  // diff's original (path) order. `step.order` is treated as a pure sort key, so
+  // this works in any scope — a Debrief step whose file isn't in the current
+  // diff simply contributes no row. With no Debrief it's the diff order verbatim.
+  // Array.prototype.sort is stable, so returning 0 preserves the path order for
+  // the non-narrated tail.
+  const orderedFiles = useMemo(() => {
+    const files = diff?.files ?? [];
+    if (debriefPaths.size === 0) return files;
+    const orderOf = new Map((debrief?.steps ?? []).map((s) => [s.file, s.order]));
+    return [...files].sort((a, b) => {
+      const ai = orderOf.get(a.path);
+      const bi = orderOf.get(b.path);
+      if (ai !== undefined && bi !== undefined) return ai - bi;
+      if (ai !== undefined) return -1;
+      if (bi !== undefined) return 1;
+      return 0;
+    });
+  }, [diff, debrief, debriefPaths]);
+
   // Mark-viewed state, persisted per (repoPath, branch). Reload when either
   // changes. We do NOT clear on scope change (Q8: viewed is sticky across
   // toggles and commits — it tracks the user's brain, not the file's git
@@ -196,17 +222,27 @@ export function SelfReview({
     return () => window.removeEventListener('keydown', onKey);
   }, [onExit]);
 
-  // File selection auto-tracks the first file when the diff loads, so the
-  // sidebar always has a highlighted row.
+  // File selection auto-tracks the head of the ordered list, so the sidebar
+  // always has a highlighted row and — until the author makes a deliberate
+  // pick — stays pinned to the top. The pin matters for `stage open`: the diff
+  // and the Debrief load on separate async paths, so the list can reorder after
+  // the first file is already selected; without the re-pin the author would
+  // land on the alphabetical-first file instead of the first Debrief step.
+  const userPickedRef = useRef(false);
   useEffect(() => {
     if (!diff) return;
-    if (!selectedPath || !diff.files.some((f) => f.path === selectedPath)) {
-      setSelectedPath(diff.files[0]?.path ?? null);
+    const head = orderedFiles[0]?.path ?? null;
+    const valid = selectedPath && orderedFiles.some((f) => f.path === selectedPath);
+    if (!valid) {
+      setSelectedPath(head);
+    } else if (!userPickedRef.current && selectedPath !== head) {
+      setSelectedPath(head);
     }
-  }, [diff, selectedPath]);
+  }, [diff, orderedFiles, selectedPath]);
 
   const onSelectFile = useCallback(
     (path: string) => {
+      userPickedRef.current = true;
       setSelectedPath(path);
       // In scroll mode, the diff pane has every file stacked; clicking a
       // file in the sidebar scrolls its block into view. In single mode
@@ -276,7 +312,8 @@ export function SelfReview({
 
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           <FileList
-            files={diff?.files ?? []}
+            files={orderedFiles}
+            debriefPaths={debriefPaths}
             filter={filter}
             setFilter={setFilter}
             filterRef={filterRef}
@@ -366,7 +403,7 @@ export function SelfReview({
             </div>
             <DiffPane
               ref={diffPaneRef}
-              files={diff?.files ?? []}
+              files={orderedFiles}
               viewLayout={viewLayout}
               selectedPath={selectedPath}
               viewMode={viewMode}
