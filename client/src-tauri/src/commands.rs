@@ -231,6 +231,21 @@ pub fn self_review_diff(
     git::self_review_diff(&path, scope, base_ref.as_deref())
 }
 
+/// Base-branch options for the active repo's Self-Review: the recommended ref
+/// (the remote default when fetched), the remote default, the local default +
+/// how far it is behind, and the last-fetch time. See ADR-0016 / `stage_core::base`.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn self_review_base_options(
+    state: State<'_, AppState>,
+) -> Result<stage_core::BaseOptions, AppError> {
+    let path = active_repo_path(&state)?;
+    Ok(stage_core::base_options(&path)?)
+}
+
 #[tauri::command]
 // `pill = "cmd"` tags this span so the dev Activity-log layer records one row
 // per invocation with its duration (debug builds only). `skip_all` keeps the

@@ -163,6 +163,7 @@ pub fn run() {
             commands::git_diff_stats,
             commands::git_diff_files,
             commands::self_review_diff,
+            commands::self_review_base_options,
             commands::repo_overview,
             commands::workspace_create,
             commands::workspace_publish,
