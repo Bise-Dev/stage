@@ -34,7 +34,11 @@ pub struct WatcherHandle(#[allow(dead_code)] Box<dyn std::any::Any + Send + Sync
 /// Both watchers fire on a 500ms debounce, which absorbs the burst of events a
 /// single logical change produces. No ignore filters on the repo watch today —
 /// repos with heavy build output emit lots of events; the debounce absorbs them.
-pub fn spawn(app: AppHandle, repo_path: PathBuf) -> Result<WatcherHandle, AppError> {
+pub fn spawn(
+    app: AppHandle,
+    repo_path: PathBuf,
+    #[allow(unused_variables)] common_dir: PathBuf,
+) -> Result<WatcherHandle, AppError> {
     let repo_watch = watch_path(
         app.clone(),
         &repo_path,

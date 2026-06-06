@@ -51,7 +51,13 @@ pub enum OpenMode {
 }
 
 pub struct ActiveRepo {
+    /// The **focused worktree**'s working directory — the one Self-Review,
+    /// diff, and Debrief commands target (ADR-0016). Named `path` so the
+    /// existing command bodies route to the focused worktree unchanged.
     pub path: PathBuf,
+    /// Canonical Repo identity: the shared git common directory. Stable across
+    /// every worktree of this repo.
+    pub common_dir: PathBuf,
     #[allow(dead_code)]
     pub watcher: WatcherHandle,
 }

@@ -45,18 +45,32 @@ pub fn set_active_repo(
     state: State<'_, AppState>,
     path: PathBuf,
 ) -> Result<RepoInfo, AppError> {
-    // Validate it's a real git repo before touching state.
-    git2::Repository::open(&path).map_err(|_| AppError::NotARepo(path.clone()))?;
+    // Validate it's a real git repo and learn its canonical identity.
+    // NOTE: git2 0.19 has no `commondir()` binding — use stage-core's helper.
+    let repo = git2::Repository::open(&path).map_err(|_| AppError::NotARepo(path.clone()))?;
+    let common_dir = stage_core::repo_common_dir(&repo);
 
-    let watcher = watcher::spawn(app.clone(), path.clone())?;
-    state.recents.touch(&path)?;
+    // Git is the source of truth for the worktree set (ADR-0016).
+    let worktrees = stage_core::list_worktrees(&path)?;
+    let activation = crate::repo_activation::resolve_activation(&worktrees, &path);
+
+    // Recents collapse to the Repo: key on the root worktree so opening any
+    // worktree (root or linked) touches one entry, not one per directory.
+    state.recents.touch(&activation.root)?;
+
+    // Watch the focused worktree (diff refresh). The focused path drives every
+    // path-keyed command.
+    let watcher = watcher::spawn(app.clone(), activation.focused.clone(), common_dir.clone())?;
 
     *state.active.lock() = Some(ActiveRepo {
-        path: path.clone(),
+        path: activation.focused.clone(),
+        common_dir,
         watcher,
     });
 
-    Ok(RepoInfo { path })
+    Ok(RepoInfo {
+        path: activation.focused,
+    })
 }
 
 #[tauri::command]
