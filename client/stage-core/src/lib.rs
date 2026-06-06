@@ -5,6 +5,7 @@
 //! No Tauri, no network, no credentials — see ADR-0011. The CLI links this
 //! crate but never compiles Tauri, which is why the core lives here.
 
+pub mod base;
 pub mod diff;
 pub mod domain;
 pub mod error;
@@ -12,6 +13,7 @@ pub mod repo_key;
 pub mod store;
 pub mod worktree;
 
+pub use base::{base_options, BaseOptions, LocalDefault};
 pub use diff::DiffLineIndex;
 pub use domain::{
     Debrief, DebriefInput, DebriefStep, NoteAnchor, NoteReply, NoteStatus, ReplyAuthor, ReviewNote,
