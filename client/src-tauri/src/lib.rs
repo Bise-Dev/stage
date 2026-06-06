@@ -6,6 +6,7 @@ mod errors;
 mod git;
 pub mod oauth;
 mod recents;
+mod repo_activation;
 mod session;
 mod state;
 mod watcher;
