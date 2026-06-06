@@ -44,6 +44,48 @@ export type PushOutcome = {
   branch: string;
 };
 
+/** One worktree git reports for the active Repo (ADR-0016). Mirrors
+ *  `stage_core::worktree::WorktreeInfo` (serde camelCase). */
+export type WorktreeInfo = {
+  /** Absolute working-directory path as git reports it. */
+  path: string;
+  /** Checked-out branch shorthand; null when detached or bare. */
+  branch: string | null;
+  /** HEAD commit id (40-hex); null for a bare entry. */
+  head: string | null;
+  /** The repo's root (main) worktree. */
+  isRoot: boolean;
+  /** HEAD is detached (no branch). */
+  detached: boolean;
+  /** A bare entry (no working directory). */
+  bare: boolean;
+  /** git reports it locked; the (possibly empty) reason, else null. */
+  locked: string | null;
+  /** git reports it prunable (dir gone/invalid); the reason, else null. */
+  prunable: string | null;
+};
+
+/** The worktrees git reports for the active Repo, root first. Re-enumerated
+ *  from git on every call (Stage holds no registry). */
+export const repoWorktrees = () => invoke<WorktreeInfo[]>('repo_worktrees');
+
+/** Focus a different worktree for Self-Review. Observe-only: re-points which
+ *  worktree's working tree the diff reads; never checks out. Returns the new
+ *  active (focused) repo info. */
+export const setFocusedWorktree = (path: string) =>
+  invoke<RepoInfo>('set_focused_worktree', { path });
+
+/** Fires when git's worktree set may have changed (e.g. an external tool added
+ *  or finished a worktree). Re-fetch {@link repoWorktrees}. Returns the unlisten
+ *  handle. */
+export const onWorktreesChanged = (cb: () => void): Promise<UnlistenFn> =>
+  listen('worktrees-changed', () => cb());
+
+/** Fires on any working-tree / `.git` change in the focused worktree (existing
+ *  watcher). Returns the unlisten handle. */
+export const onRepoChanged = (cb: () => void): Promise<UnlistenFn> =>
+  listen('repo-changed', () => cb());
+
 export const setActiveRepo = (path: string) => invoke<RepoInfo>('set_active_repo', { path });
 
 export const getActiveRepo = () => invoke<RepoInfo | null>('get_active_repo');
