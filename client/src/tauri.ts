@@ -163,6 +163,19 @@ export const gitFetch = () => invoke<FetchOutcome>('git_fetch');
  *  (no write access, protected branch, …). */
 export const gitPush = (branch: string) => invoke<PushOutcome>('git_push', { branch });
 
+/** Base-branch options for Self-Review (ADR-0016). `recommended` is always a
+ *  resolvable ref -- the remote default (`"origin/main"`) when fetched, else the
+ *  local default. Mirrors `stage_core::base::BaseOptions`. */
+export type BaseOptions = {
+  recommended: string;
+  remoteDefault: string | null;
+  localDefault: { name: string; behind: number } | null;
+  /** Last fetch time, epoch seconds; null if never fetched. */
+  lastFetchSecs: number | null;
+};
+
+export const selfReviewBaseOptions = () => invoke<BaseOptions>('self_review_base_options');
+
 // --- Repo overview (Stage + GitHub aggregation; see docs/adr/0009) ---
 export type WorkspaceState =
   | 'draft'
