@@ -10,6 +10,7 @@ pub mod domain;
 pub mod error;
 pub mod repo_key;
 pub mod store;
+pub mod worktree;
 
 pub use diff::DiffLineIndex;
 pub use domain::{
@@ -19,3 +20,4 @@ pub use domain::{
 pub use error::StageError;
 pub use repo_key::{repo_key_from_cwd, repo_root_from_cwd, slug_from_remote, RepoKey};
 pub use store::{default_store_path, Store, STORE_PATH_ENV};
+pub use worktree::WorktreeInfo;
