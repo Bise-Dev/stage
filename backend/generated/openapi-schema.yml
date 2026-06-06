@@ -1,0 +1,549 @@
+openapi: 3.0.3
+info:
+  title: Stage API
+  version: 0.1.0
+  description: Replace this with your project description.
+paths:
+  /api/v1/auth/device/poll/:
+    post:
+      operationId: api_v1_auth_device_poll_create
+      tags:
+      - api
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/v1/auth/device/start/:
+    post:
+      operationId: api_v1_auth_device_start_create
+      tags:
+      - api
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/v1/auth/logout/:
+    post:
+      operationId: api_v1_auth_logout_create
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/auth/me/:
+    get:
+      operationId: api_v1_auth_me_retrieve
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/github/prs/:
+    get:
+      operationId: api_v1_github_prs_retrieve
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/intro-comments/{comment_id}/:
+    patch:
+      operationId: api_v1_intro_comments_partial_update
+      parameters:
+      - in: path
+        name: comment_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/intro-comments/{comment_id}/delete/:
+    post:
+      operationId: api_v1_intro_comments_delete_create
+      parameters:
+      - in: path
+        name: comment_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/intro-comments/{comment_id}/resolve/:
+    post:
+      operationId: api_v1_intro_comments_resolve_create
+      parameters:
+      - in: path
+        name: comment_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/intro-comments/{comment_id}/unresolve/:
+    post:
+      operationId: api_v1_intro_comments_unresolve_create
+      parameters:
+      - in: path
+        name: comment_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/repos/{o}/{r}/pulls/{n}/:
+    get:
+      operationId: api_v1_repos_pulls_retrieve
+      parameters:
+      - in: path
+        name: n
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: o
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: r
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/repos/{o}/{r}/pulls/{n}/actions/{action}/:
+    post:
+      operationId: api_v1_repos_pulls_actions_create
+      parameters:
+      - in: path
+        name: action
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: n
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: o
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: r
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/repos/{o}/{r}/pulls/{n}/checks/:
+    get:
+      operationId: api_v1_repos_pulls_checks_retrieve
+      parameters:
+      - in: path
+        name: n
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: o
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: r
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/repos/{o}/{r}/pulls/{n}/comments/:
+    get:
+      operationId: api_v1_repos_pulls_comments_retrieve
+      parameters:
+      - in: path
+        name: n
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: o
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: r
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/repos/{o}/{r}/pulls/{n}/comments/create/:
+    post:
+      operationId: api_v1_repos_pulls_comments_create_create
+      parameters:
+      - in: path
+        name: n
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: o
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: r
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/repos/{o}/{r}/pulls/{n}/files/:
+    get:
+      operationId: api_v1_repos_pulls_files_retrieve
+      parameters:
+      - in: path
+        name: n
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: o
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: r
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/repos/{o}/{r}/pulls/{n}/files/{file_path}/comments/:
+    get:
+      operationId: api_v1_repos_pulls_files_comments_retrieve
+      parameters:
+      - in: path
+        name: file_path
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: n
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: o
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: r
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/repos/{o}/{r}/pulls/{n}/files/{file_path}/diff/:
+    get:
+      operationId: api_v1_repos_pulls_files_diff_retrieve
+      parameters:
+      - in: path
+        name: file_path
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: n
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: o
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: r
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/repos/{o}/{r}/pulls/{n}/review/create/:
+    post:
+      operationId: api_v1_repos_pulls_review_create_create
+      parameters:
+      - in: path
+        name: n
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: o
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: r
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/repos/{o}/{r}/pulls/{n}/reviews/:
+    get:
+      operationId: api_v1_repos_pulls_reviews_retrieve
+      parameters:
+      - in: path
+        name: n
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: o
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: r
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/workspaces/:
+    get:
+      operationId: api_v1_workspaces_retrieve
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+    post:
+      operationId: api_v1_workspaces_create
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/workspaces/{workspace_id}/:
+    get:
+      operationId: api_v1_workspaces_retrieve_2
+      parameters:
+      - in: path
+        name: workspace_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+    patch:
+      operationId: api_v1_workspaces_partial_update
+      parameters:
+      - in: path
+        name: workspace_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/workspaces/{workspace_id}/open-pr/:
+    post:
+      operationId: api_v1_workspaces_open_pr_create
+      parameters:
+      - in: path
+        name: workspace_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/workspaces/{workspace_id}/reopen-pr/:
+    post:
+      operationId: api_v1_workspaces_reopen_pr_create
+      parameters:
+      - in: path
+        name: workspace_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/workspaces/{workspace_id}/storyline/:
+    get:
+      operationId: api_v1_workspaces_storyline_retrieve
+      parameters:
+      - in: path
+        name: workspace_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+    put:
+      operationId: api_v1_workspaces_storyline_update
+      parameters:
+      - in: path
+        name: workspace_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/workspaces/{workspace_id}/storyline/files/{file_id}/:
+    get:
+      operationId: api_v1_workspaces_storyline_files_retrieve
+      parameters:
+      - in: path
+        name: file_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      - in: path
+        name: workspace_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/workspaces/{workspace_id}/storyline/files/{file_id}/intro-comments/:
+    get:
+      operationId: api_v1_workspaces_storyline_files_intro_comments_retrieve
+      parameters:
+      - in: path
+        name: file_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      - in: path
+        name: workspace_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+    post:
+      operationId: api_v1_workspaces_storyline_files_intro_comments_create
+      parameters:
+      - in: path
+        name: file_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      - in: path
+        name: workspace_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /api/v1/workspaces/lookup/:
+    get:
+      operationId: api_v1_workspaces_lookup_retrieve
+      tags:
+      - api
+      responses:
+        '200':
+          description: No response body
+  /health/:
+    get:
+      operationId: health_retrieve
+      tags:
+      - health
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
+components: {}
