@@ -297,56 +297,12 @@ function FileBlock({
   // composer state the block needs.
   const [addingFile, setAddingFile] = useState(false);
 
-  // Header-only render when collapsed. We keep the same chrome so the
-  // toggle stays in place — clicking "Viewed" again expands the file back.
-  if (collapsed) {
-    return (
-      <div
-        style={{
-          background: '#fff',
-          border: '1px solid var(--hairline)',
-          borderRadius: 'var(--r-md)',
-          marginBottom: 14,
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            height: 36,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '0 14px',
-          }}
-        >
-          <span
-            className="mono"
-            style={{ fontSize: 12.5, color: 'var(--gray-500)', fontWeight: 500 }}
-          >
-            {file.path}
-          </span>
-          <span className={`badge ${badge.cls}`}>{badge.label}</span>
-          <span style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>
-            +{file.additions} −{file.deletions}
-          </span>
-          {notes.length > 0 && (
-            <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>
-              · {notes.length} note{notes.length === 1 ? '' : 's'}
-            </span>
-          )}
-          <div style={{ flex: 1 }} />
-          <button
-            type="button"
-            className="btn"
-            onClick={onToggleViewed}
-            style={{ background: 'rgba(52,199,89,0.14)', color: 'var(--green-d)' }}
-          >
-            <Icon name="check" size={11} /> Viewed
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // NOTE: every hook must run before the `collapsed` early-return below.
+  // React requires a stable hook order across renders; an early return here
+  // (before the useMemo/useRef/useEffect calls) made a file dropping to
+  // "Viewed" render fewer hooks than its expanded render → "Rendered fewer
+  // hooks than expected". All hooks now run unconditionally; the collapsed
+  // header-only render happens after them.
 
   // Partition the file's notes:
   //  - inline line notes: a fresh line anchor renders at its line via extendData;
@@ -448,6 +404,58 @@ function FileBlock({
     document.addEventListener('mouseup', onUp);
     return () => document.removeEventListener('mouseup', onUp);
   }, [file.path]);
+
+  // Header-only render when collapsed. We keep the same chrome so the toggle
+  // stays in place — clicking "Viewed" again expands the file back. This sits
+  // *after* every hook so the hook order is identical whether collapsed or not.
+  if (collapsed) {
+    return (
+      <div
+        style={{
+          background: '#fff',
+          border: '1px solid var(--hairline)',
+          borderRadius: 'var(--r-md)',
+          marginBottom: 14,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            height: 36,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '0 14px',
+          }}
+        >
+          <span
+            className="mono"
+            style={{ fontSize: 12.5, color: 'var(--gray-500)', fontWeight: 500 }}
+          >
+            {file.path}
+          </span>
+          <span className={`badge ${badge.cls}`}>{badge.label}</span>
+          <span style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>
+            +{file.additions} −{file.deletions}
+          </span>
+          {notes.length > 0 && (
+            <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>
+              · {notes.length} note{notes.length === 1 ? '' : 's'}
+            </span>
+          )}
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            className="btn"
+            onClick={onToggleViewed}
+            style={{ background: 'rgba(52,199,89,0.14)', color: 'var(--green-d)' }}
+          >
+            <Icon name="check" size={11} /> Viewed
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

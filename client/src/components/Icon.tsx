@@ -12,6 +12,7 @@ type IconName =
   | 'doc-stack'
   | 'search'
   | 'eye'
+  | 'grip'
   | 'comment-fill';
 
 interface IconProps {
@@ -204,6 +205,24 @@ export function Icon({ name, size = 14, color = 'currentColor', className }: Ico
           aria-hidden="true"
         >
           <path d="M4 3v8l7-4z" />
+        </svg>
+      );
+    case 'grip':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          fill={color}
+          className={className}
+          aria-hidden="true"
+        >
+          <circle cx="5" cy="3.5" r="1" />
+          <circle cx="9" cy="3.5" r="1" />
+          <circle cx="5" cy="7" r="1" />
+          <circle cx="9" cy="7" r="1" />
+          <circle cx="5" cy="10.5" r="1" />
+          <circle cx="9" cy="10.5" r="1" />
         </svg>
       );
     case 'comment-fill':

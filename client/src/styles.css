@@ -532,3 +532,24 @@ body {
 .md img {
   max-width: 100%;
 }
+
+/* Storyline composer: drag grip handle (the only part that initiates a drag). */
+.grip-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 2px;
+  flex: 0 0 auto;
+  cursor: grab;
+  touch-action: none;
+}
+.grip-handle:active {
+  cursor: grabbing;
+}
+
+/* 45° rotation turns the "+" glyph into an "×" for the remove affordance. */
+.rotate-45 {
+  transform: rotate(45deg);
+}
