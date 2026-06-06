@@ -162,6 +162,45 @@ pub fn repo_worktrees(state: State<'_, AppState>) -> Result<Vec<stage_core::Work
     Ok(stage_core::list_worktrees(&path)?)
 }
 
+/// Focus a different worktree of the active Repo. Observe-only: this does NOT
+/// check out — it re-points which worktree's working tree Self-Review/diff read
+/// (ADR-0016). Fails loud if `path` is not one of the repo's worktrees.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn set_focused_worktree(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: PathBuf,
+) -> Result<RepoInfo, AppError> {
+    let (current_path, common_dir) = state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| (a.path.clone(), a.common_dir.clone()))
+        .ok_or(AppError::NoActiveRepo)?;
+
+    // Re-ask git (Pillar 1) and confirm membership.
+    let worktrees = stage_core::list_worktrees(&current_path)?;
+    let focused = crate::repo_activation::match_worktree(&worktrees, &path).ok_or_else(|| {
+        AppError::Backend(format!(
+            "set_focused_worktree: {} is not a worktree of this repo",
+            path.display()
+        ))
+    })?;
+
+    let watcher = watcher::spawn(app.clone(), focused.clone(), common_dir.clone())?;
+    *state.active.lock() = Some(ActiveRepo {
+        path: focused.clone(),
+        common_dir,
+        watcher,
+    });
+
+    Ok(RepoInfo { path: focused })
+}
+
 #[tauri::command]
 // `pill = "cmd"` tags this span so the dev Activity-log layer records one row
 // per invocation with its duration (debug builds only). `skip_all` keeps the

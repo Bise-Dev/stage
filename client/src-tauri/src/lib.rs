@@ -159,6 +159,7 @@ pub fn run() {
             commands::repo_summary,
             commands::git_local_branches,
             commands::repo_worktrees,
+            commands::set_focused_worktree,
             commands::git_diff_stats,
             commands::git_diff_files,
             commands::self_review_diff,
