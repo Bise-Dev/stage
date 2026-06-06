@@ -20,4 +20,4 @@ pub use domain::{
 pub use error::StageError;
 pub use repo_key::{repo_key_from_cwd, repo_root_from_cwd, slug_from_remote, RepoKey};
 pub use store::{default_store_path, Store, STORE_PATH_ENV};
-pub use worktree::{list_worktrees, WorktreeInfo};
+pub use worktree::{list_worktrees, repo_common_dir, WorktreeInfo};

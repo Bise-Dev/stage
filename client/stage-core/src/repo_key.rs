@@ -109,24 +109,27 @@ pub fn slug_from_remote(url: &str) -> Option<(String, String)> {
 }
 
 /// No-remote fallback: `("local", "<repo-basename>-<hash8>")`, where the hash is
-/// the first 4 bytes of SHA-256 over the canonical repo root. Deterministic and
-/// effectively collision-free across a user's handful of local repos; `"local"`
-/// keeps these out of the GitHub-slug namespace.
+/// the first 4 bytes of SHA-256 over the canonical **common directory** and the
+/// basename is that common dir's parent (the main worktree's directory). Keying
+/// on the common dir — not the per-worktree workdir — makes every worktree of a
+/// local-only repo resolve to one identity (ADR-0016). `"local"` keeps these out
+/// of the GitHub-slug namespace.
 fn local_fallback_slug(repo: &Repository) -> Result<(String, String), StageError> {
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| StageError::Invalid("bare repositories have no working tree".into()))?;
-    let canonical = workdir
+    let common_dir = crate::worktree::repo_common_dir(repo);
+    let canonical = common_dir
         .canonicalize()
-        .unwrap_or_else(|_| workdir.to_path_buf());
+        .unwrap_or_else(|_| common_dir.clone());
 
     let mut hasher = Sha256::new();
     hasher.update(canonical.to_string_lossy().as_bytes());
     let digest = hasher.finalize();
     let hash8: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
 
+    // `.../proj/.git` -> `proj`; fall back to the common dir's own name (bare repos).
     let basename = canonical
-        .file_name()
+        .parent()
+        .and_then(|p| p.file_name())
+        .or_else(|| canonical.file_name())
         .and_then(|s| s.to_str())
         .unwrap_or("repo");
     Ok(("local".to_string(), format!("{basename}-{hash8}")))
@@ -135,6 +138,64 @@ fn local_fallback_slug(repo: &Repository) -> Result<(String, String), StageError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .expect("spawn git");
+        assert!(status.success(), "git {args:?} failed in {dir:?}");
+    }
+
+    #[test]
+    fn worktrees_of_a_no_remote_repo_share_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("f"), "x\n").unwrap();
+        git(&root, &["add", "."]);
+        git(
+            &root,
+            &[
+                "-c",
+                "user.email=t@e.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ],
+        );
+        let linked = tmp.path().join("proj-feat");
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().unwrap(),
+                "-b",
+                "feat",
+            ],
+        );
+
+        let a = repo_key_from_cwd(&root).unwrap();
+        let b = repo_key_from_cwd(&linked).unwrap();
+
+        assert_eq!(a.repo_owner, "local");
+        assert_eq!(b.repo_owner, "local");
+        assert_eq!(
+            a.repo_name, b.repo_name,
+            "worktrees of one no-remote repo must share identity"
+        );
+        assert_eq!(a.branch, "main");
+        assert_eq!(b.branch, "feat");
+    }
 
     #[test]
     fn slug_parses_https_ssh_and_bare_forms() {
@@ -175,10 +236,14 @@ mod tests {
                 .unwrap();
         }
         {
-            let head = repo.head().unwrap().peel_to_commit().unwrap();
-            repo.branch(branch, &head, true).unwrap();
+            let head_ref = repo.head().unwrap();
+            let already_on_branch = head_ref.shorthand() == Some(branch);
+            if !already_on_branch {
+                let commit = head_ref.peel_to_commit().unwrap();
+                repo.branch(branch, &commit, false).unwrap();
+                repo.set_head(&format!("refs/heads/{branch}")).unwrap();
+            }
         }
-        repo.set_head(&format!("refs/heads/{branch}")).unwrap();
 
         if let Some(url) = origin {
             repo.remote("origin", url).unwrap();

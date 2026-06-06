@@ -1,11 +1,12 @@
 //! Enumerate the worktrees git has attached to a repo — observe-only (ADR-0016).
 //!
 //! Git is the source of truth: we shell out to `git worktree list --porcelain
-//! -z` on the repo's common directory and parse the records, rather than keep
-//! our own registry. Directories git omits (orphaned/unregistered) do not
-//! appear here. We reuse the system `git` — as `src-tauri/src/git.rs::fetch`
-//! already does — because the porcelain `-z` format is a stable contract and
-//! sidesteps libgit2 worktree-API edge cases.
+//! -z` from the repo's working directory (or the common directory for a bare
+//! repo) and parse the records, rather than keep our own registry. Directories
+//! git omits (orphaned/unregistered) do not appear here. We reuse the system
+//! `git` — as `src-tauri/src/git.rs::fetch` already does — because the
+//! porcelain `-z` format is a stable contract and sidesteps libgit2
+//! worktree-API edge cases.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -181,11 +182,33 @@ pub fn list_worktrees(cwd: &Path) -> Result<Vec<WorktreeInfo>, StageError> {
         .map_err(StageError::Io)?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(StageError::Worktree(stderr));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = stderr.trim();
+        return Err(StageError::Worktree(if msg.is_empty() {
+            "git worktree list failed".to_string()
+        } else {
+            msg.to_string()
+        }));
     }
 
     Ok(parse_porcelain_z(&output.stdout))
+}
+
+/// The repo's **common directory** — the shared `.git` every worktree of a repo
+/// points at (ADR-0016). git2 0.19 has no `commondir()` binding, so derive it:
+/// a linked worktree's gitdir is `<common>/worktrees/<id>`, so its common dir is
+/// the grandparent; the main worktree's gitdir *is* the common dir.
+pub fn repo_common_dir(repo: &Repository) -> PathBuf {
+    let gitdir = repo.path();
+    if repo.is_worktree() {
+        gitdir
+            .parent()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| gitdir.to_path_buf())
+    } else {
+        gitdir.to_path_buf()
+    }
 }
 
 #[cfg(test)]
