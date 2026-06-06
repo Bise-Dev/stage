@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Icon } from '../../components/Icon';
-import { Markdown } from '../../components/Markdown';
 import { TitleBar } from '../../components/TitleBar';
-import { type ChangedFile, gitDiffFiles, storylineGet, storylineUpdate } from '../../tauri';
+import {
+  type ChangedFile,
+  type SelfReviewFileChange,
+  gitDiffFiles,
+  selfReviewDiff,
+  storylineGet,
+  storylineUpdate,
+} from '../../tauri';
+import { IntroStep } from './IntroStep';
+import { OrderStep } from './OrderStep';
+import { Stepper, type WizardStep } from './Stepper';
 import { type Step, reconcile } from './reconcile';
 
 export type StorylineCtx = {
@@ -38,14 +47,19 @@ export function Storyline({
   ctx: StorylineCtx;
   onBack: () => void;
 }) {
+  const [step, setStep] = useState<WizardStep>('order');
   const [steps, setSteps] = useState<Step[]>([]);
   const [pool, setPool] = useState<ChangedFile[]>([]);
   const [etag, setEtag] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [mode, setMode] = useState<'write' | 'preview'>('write');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Per-file patch text for the Step 2 diff preview, indexed by path. Fetched
+  // independently of the file list so a preview failure never blocks ordering.
+  const [diffByPath, setDiffByPath] = useState<Map<string, SelfReviewFileChange>>(new Map());
+  const [diffLoading, setDiffLoading] = useState(true);
+  const [diffError, setDiffError] = useState<string | null>(null);
   // Unsaved edits live only in component state — leaving without Save loses them.
   // `dirty` gates a confirm on Back so the author can't silently discard work
   // (the post-create flow drops straight into composition; the saved baseline of
@@ -73,42 +87,71 @@ export function Storyline({
     }
   }, [ctx.baseRef, ctx.headRef, ctx.workspaceId]);
 
+  // Diff for the preview pane. `self_review_diff` diffs the *checked-out* branch
+  // against the base, so if the working tree isn't on this storyline's head ref
+  // we'd be previewing the wrong branch — surface that as an explicit error
+  // rather than showing a misleading diff (fail-loud, per CLAUDE.md).
+  const loadDiff = useCallback(async () => {
+    setDiffLoading(true);
+    setDiffError(null);
+    try {
+      const diff = await selfReviewDiff('base', ctx.baseRef);
+      if (diff.currentBranch !== ctx.headRef) {
+        setDiffByPath(new Map());
+        setDiffError(
+          `The working tree is on "${diff.currentBranch}", but this storyline is for "${ctx.headRef}". Check out ${ctx.headRef} to preview its diffs.`,
+        );
+        return;
+      }
+      setDiffByPath(new Map(diff.files.map((f) => [f.path, f])));
+    } catch (e) {
+      console.warn('storyline_diff_load_failed', e);
+      setDiffError(msgOf(e));
+    } finally {
+      setDiffLoading(false);
+    }
+  }, [ctx.baseRef, ctx.headRef]);
+
   useEffect(() => {
     load();
-  }, [load]);
+    loadDiff();
+  }, [load, loadDiff]);
 
-  const addStep = (path: string) => {
+  // --- Ordering mutations (Step 1) ---
+  const addFromPool = (path: string, index: number | null) => {
     const c = pool.find((f) => f.path === path);
     if (!c) return;
     setPool((p) => p.filter((f) => f.path !== path));
-    setSteps((s) => [
-      ...s,
-      {
-        path: c.path,
-        introText: '',
-        status: c.status,
-        added: c.added,
-        removed: c.removed,
-        stale: false,
-      },
-    ]);
+    const next: Step = {
+      path: c.path,
+      introText: '',
+      status: c.status,
+      added: c.added,
+      removed: c.removed,
+      stale: false,
+    };
+    setSteps((s) => {
+      const out = [...s];
+      out.splice(index === null ? out.length : index, 0, next);
+      return out;
+    });
     setSelected(path);
     setDirty(true);
   };
 
-  const removeStep = (path: string) => {
-    const step = steps.find((s) => s.path === path);
+  const removeToPool = (path: string) => {
+    const target = steps.find((s) => s.path === path);
     setSteps((s) => s.filter((x) => x.path !== path));
     // Non-stale steps return to the pool; stale ones have no ChangedFile to restore.
-    if (step && !step.stale) {
+    if (target && !target.stale) {
       setPool((p) =>
         [
           ...p,
           {
-            path: step.path,
-            status: step.status ?? '?',
-            added: step.added ?? 0,
-            removed: step.removed ?? 0,
+            path: target.path,
+            status: target.status ?? '?',
+            added: target.added ?? 0,
+            removed: target.removed ?? 0,
           },
         ].sort((a, b) => a.path.localeCompare(b.path)),
       );
@@ -117,17 +160,20 @@ export function Storyline({
     setDirty(true);
   };
 
-  const move = (idx: number, delta: number) => {
-    const j = idx + delta;
-    if (j < 0 || j >= steps.length) return;
+  const reorder = (activePath: string, overPath: string) => {
     setSteps((s) => {
-      const next = [...s];
-      [next[idx], next[j]] = [next[j], next[idx]];
-      return next;
+      const from = s.findIndex((x) => x.path === activePath);
+      const to = s.findIndex((x) => x.path === overPath);
+      if (from === -1 || to === -1 || from === to) return s;
+      const out = [...s];
+      const [moved] = out.splice(from, 1);
+      out.splice(to, 0, moved);
+      return out;
     });
     setDirty(true);
   };
 
+  // --- Intro mutations (Step 2) ---
   const setIntro = (path: string, text: string) => {
     setSteps((s) => s.map((x) => (x.path === path ? { ...x, introText: text } : x)));
     setDirty(true);
@@ -157,17 +203,22 @@ export function Storyline({
       setDirty(false);
     } catch (e) {
       // Fail loud: surface the backend message verbatim; keep the author's edits
-      // (no auto-reload — that would clobber the edits that lost the race). The
-      // 409 conflict path is effectively unreachable in v1 (single author, single
-      // client, pre-publish) — kept for the post-publish multi-writer future.
-      // Known wart: on etag_mismatch the backend puts a bare code in `message`,
-      // so that (dead-in-v1) path shows `etag_mismatch` in the banner until the
-      // base-branch gap is fixed. workspace_frozen and other errors carry human text.
+      // (no auto-reload — that would clobber the edits that lost the race).
       console.warn('storyline_save_failed', e);
       setSaveError(msgOf(e));
     } finally {
       setSaving(false);
     }
+  };
+
+  const goToStep = (next: WizardStep) => {
+    if (next === 'intro') {
+      // Land on a concrete step so the editor isn't empty.
+      setSelected((cur) =>
+        cur && steps.some((s) => s.path === cur) ? cur : (steps[0]?.path ?? null),
+      );
+    }
+    setStep(next);
   };
 
   const back = () => (dirty ? setLeaving(true) : onBack());
@@ -176,305 +227,110 @@ export function Storyline({
     () => steps.filter((s) => s.introText.trim().length > 0).length,
     [steps],
   );
-  const selectedStep = steps.find((s) => s.path === selected) ?? null;
 
   return (
     <div className="stage">
       <div className="win">
-        <TitleBar title={`Stage — Storyline · ${ctx.headRef}`} />
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            flex: 1,
-            minHeight: 0,
-          }}
-        >
-          {/* Header */}
+        <TitleBar title={`Stage — Open pull request · ${ctx.headRef}`} />
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          {/* Toolbar */}
           <div
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: 10,
-              padding: '12px 18px',
+              padding: '0 16px',
+              height: 48,
+              flex: '0 0 48px',
+              background: '#fff',
               borderBottom: '1px solid var(--hairline)',
             }}
           >
             <button type="button" className="btn" onClick={back}>
               <Icon name="chevron-left" size={10} color="var(--gray-700)" /> Workspaces
             </button>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <span className="badge mono" style={{ background: 'rgba(0,0,0,0.06)' }}>
+                {ctx.baseRef}
+              </span>
+              <Icon name="arrow-right" size={11} color="var(--gray-400)" />
+              <span
+                className="badge mono"
+                style={{ background: 'var(--blue-tint)', color: 'var(--blue-press)' }}
+              >
+                {ctx.headRef}
+              </span>
+            </div>
+            {ctx.title && (
+              <span
                 style={{
-                  fontSize: 14,
-                  fontWeight: 700,
+                  fontSize: 12.5,
+                  fontWeight: 600,
                   color: 'var(--gray-900)',
+                  marginLeft: 4,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  minWidth: 0,
                 }}
               >
-                {ctx.title || ctx.headRef}
-              </div>
-              <div className="mono" style={{ fontSize: 11, color: 'var(--gray-500)' }}>
-                {ctx.baseRef} → {ctx.headRef}
-              </div>
-            </div>
+                {ctx.title}
+              </span>
+            )}
+            <div style={{ flex: 1 }} />
+            <Stepper current={step} onJump={goToStep} />
+            <div style={{ flex: 1 }} />
             <span style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>
-              {withIntro} of {steps.length} steps have intros
+              {step === 'order'
+                ? `${steps.length} of ${steps.length + pool.length} ordered`
+                : `${withIntro} of ${steps.length} with intros`}
             </span>
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn"
               onClick={save}
               disabled={saving || etag === null}
               style={{ opacity: saving ? 0.6 : 1 }}
             >
               {saving ? 'Saving…' : 'Save storyline'}
             </button>
+            {step === 'order' ? (
+              <button type="button" className="btn btn-primary" onClick={() => goToStep('intro')}>
+                Next: Write intros <Icon name="chevron-right" size={11} color="#fff" />
+              </button>
+            ) : (
+              <button type="button" className="btn" onClick={() => goToStep('order')}>
+                <Icon name="chevron-left" size={11} /> Back to ordering
+              </button>
+            )}
           </div>
 
-          <div style={{ padding: '10px 18px 0' }}>
-            {loadError && <div style={banner}>Couldn't load storyline: {loadError}</div>}
-            {saveError && <div style={banner}>Couldn't save storyline: {saveError}</div>}
-          </div>
-
-          <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-            {/* LEFT: pool + ordered steps */}
-            <div
-              style={{
-                width: 320,
-                flex: '0 0 320px',
-                borderRight: '1px solid var(--hairline)',
-                overflow: 'auto',
-                padding: '12px 14px',
-              }}
-            >
-              <div className="section-label">Changed files ({pool.length})</div>
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 4,
-                  marginBottom: 16,
-                }}
-              >
-                {pool.length === 0 && (
-                  <div style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>
-                    All changed files are in the storyline.
-                  </div>
-                )}
-                {pool.map((f) => (
-                  <div key={f.path} style={rowShell()}>
-                    <span className="badge" style={{ flex: '0 0 auto' }}>
-                      {f.status}
-                    </span>
-                    <span className="mono" style={ellipsis}>
-                      {f.path}
-                    </span>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => addStep(f.path)}
-                    >
-                      <Icon name="plus" size={10} color="#fff" /> Add
-                    </button>
-                  </div>
-                ))}
-              </div>
-
-              <div className="section-label">Storyline ({steps.length})</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {steps.length === 0 && (
-                  <div style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>
-                    Add files above to build the storyline.
-                  </div>
-                )}
-                {steps.map((s, i) => (
-                  <div
-                    key={s.path}
-                    // biome-ignore lint/a11y/useSemanticElements: row contains its own ▲▼× action buttons, so it can't be a <button> (nested buttons are invalid); div+role=button with onKeyDown is the accessible alternative
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelected(s.path)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setSelected(s.path);
-                      }
-                    }}
-                    style={{
-                      ...rowShell(),
-                      cursor: 'default',
-                      textAlign: 'left',
-                      outline: selected === s.path ? '2px solid var(--blue)' : 'none',
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontSize: 11,
-                        fontWeight: 700,
-                        color: 'var(--gray-500)',
-                        flex: '0 0 auto',
-                      }}
-                    >
-                      {i + 1}
-                    </span>
-                    <span
-                      title={s.introText.trim() ? 'has intro' : 'no intro yet'}
-                      style={{
-                        width: 7,
-                        height: 7,
-                        borderRadius: 4,
-                        flex: '0 0 auto',
-                        background: s.introText.trim() ? 'var(--green)' : 'var(--gray-300)',
-                      }}
-                    />
-                    <span className="mono" style={ellipsis}>
-                      {s.path}
-                    </span>
-                    {s.stale && (
-                      <span
-                        className="badge badge-orange"
-                        style={{ flex: '0 0 auto' }}
-                        title="File no longer changed"
-                      >
-                        stale
-                      </span>
-                    )}
-                    <span style={{ display: 'flex', gap: 2, flex: '0 0 auto' }}>
-                      <button
-                        type="button"
-                        aria-label="Move up"
-                        className="btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          move(i, -1);
-                        }}
-                      >
-                        ▲
-                      </button>
-                      <button
-                        type="button"
-                        aria-label="Move down"
-                        className="btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          move(i, 1);
-                        }}
-                      >
-                        ▼
-                      </button>
-                      <button
-                        type="button"
-                        aria-label="Remove step"
-                        className="btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeStep(s.path);
-                        }}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  </div>
-                ))}
-              </div>
+          {(loadError || saveError) && (
+            <div style={{ padding: '10px 18px 0' }}>
+              {loadError && <div style={banner}>Couldn't load storyline: {loadError}</div>}
+              {saveError && <div style={banner}>Couldn't save storyline: {saveError}</div>}
             </div>
+          )}
 
-            {/* MAIN: editor + preview */}
-            <div
-              style={{
-                flex: 1,
-                minWidth: 0,
-                overflow: 'auto',
-                padding: '14px 18px',
-              }}
-            >
-              {!selectedStep && (
-                <div style={{ fontSize: 12.5, color: 'var(--gray-500)' }}>
-                  Select a step to write its intro.
-                </div>
-              )}
-              {selectedStep && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="badge">{selectedStep.status ?? '—'}</span>
-                    <span className="mono" style={{ fontSize: 12.5, fontWeight: 600 }}>
-                      {selectedStep.path}
-                    </span>
-                    {selectedStep.added !== null && selectedStep.removed !== null && (
-                      <span style={{ fontSize: 11 }}>
-                        <span style={{ color: 'var(--green-d)' }}>+{selectedStep.added}</span>{' '}
-                        <span style={{ color: 'var(--red-d)' }}>−{selectedStep.removed}</span>
-                      </span>
-                    )}
-                  </div>
-                  <div className="section-label">Intro for reviewers (markdown)</div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      gap: 2,
-                      borderBottom: '1px solid var(--hairline)',
-                    }}
-                  >
-                    {(['write', 'preview'] as const).map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => setMode(m)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          borderBottom:
-                            mode === m ? '2px solid var(--blue)' : '2px solid transparent',
-                          padding: '4px 10px',
-                          marginBottom: -1,
-                          fontFamily: 'inherit',
-                          fontSize: 12,
-                          fontWeight: mode === m ? 600 : 500,
-                          color: mode === m ? 'var(--gray-900)' : 'var(--gray-500)',
-                          cursor: 'default',
-                        }}
-                      >
-                        {m === 'write' ? 'Write' : 'Preview'}
-                      </button>
-                    ))}
-                  </div>
-                  {mode === 'write' ? (
-                    <textarea
-                      className="input"
-                      value={selectedStep.introText}
-                      onChange={(e) => setIntro(selectedStep.path, e.target.value)}
-                      placeholder="Why this file matters, what to look at first…"
-                      style={{
-                        width: '100%',
-                        minHeight: 160,
-                        fontFamily: 'inherit',
-                        resize: 'vertical',
-                      }}
-                    />
-                  ) : (
-                    <div
-                      style={{
-                        border: '1px solid var(--hairline)',
-                        borderRadius: 'var(--r-md)',
-                        padding: '10px 12px',
-                        minHeight: 160,
-                        background: '#fff',
-                      }}
-                    >
-                      {selectedStep.introText.trim() ? (
-                        <Markdown>{selectedStep.introText}</Markdown>
-                      ) : (
-                        <span style={{ fontSize: 11.5, color: 'var(--gray-400)' }}>
-                          Nothing to preview yet.
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  {/* Per-file diff renders here in a later slice. */}
-                </div>
-              )}
-            </div>
-          </div>
+          {step === 'order' ? (
+            <OrderStep
+              pool={pool}
+              steps={steps}
+              onReorder={reorder}
+              onAddFromPool={addFromPool}
+              onRemoveToPool={removeToPool}
+            />
+          ) : (
+            <IntroStep
+              steps={steps}
+              selectedPath={selected}
+              onSelectPath={setSelected}
+              onSetIntro={setIntro}
+              getFile={(path) => diffByPath.get(path) ?? null}
+              diffLoading={diffLoading}
+              diffError={diffError}
+            />
+          )}
         </div>
       </div>
 
@@ -509,22 +365,11 @@ export function Storyline({
             }}
           >
             <div
-              style={{
-                fontSize: 15,
-                fontWeight: 700,
-                color: 'var(--gray-900)',
-                marginBottom: 8,
-              }}
+              style={{ fontSize: 15, fontWeight: 700, color: 'var(--gray-900)', marginBottom: 8 }}
             >
               Leave without saving?
             </div>
-            <div
-              style={{
-                fontSize: 12.5,
-                color: 'var(--gray-600)',
-                marginBottom: 16,
-              }}
-            >
+            <div style={{ fontSize: 12.5, color: 'var(--gray-600)', marginBottom: 16 }}>
               Your unsaved storyline changes will be lost.
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -540,27 +385,4 @@ export function Storyline({
       )}
     </div>
   );
-}
-
-const ellipsis: React.CSSProperties = {
-  flex: 1,
-  fontSize: 12,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  minWidth: 0,
-};
-
-function rowShell(): React.CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    background: '#fff',
-    border: '1px solid var(--hairline)',
-    borderRadius: 'var(--r-md)',
-    padding: '6px 8px',
-    boxShadow: 'var(--sh-1)',
-    minWidth: 0,
-  };
 }
