@@ -34,6 +34,15 @@ const banner: React.CSSProperties = {
   marginBottom: 10,
 };
 
+// Neutral, informational variant of `banner` — for guidance (e.g. the empty
+// "nothing committed yet" state), not failures. Errors stay red.
+const infoBanner: React.CSSProperties = {
+  ...banner,
+  color: 'var(--blue-press)',
+  background: 'var(--blue-tint)',
+  border: '1px solid rgba(0,122,255,0.20)',
+};
+
 function msgOf(e: unknown): string {
   return typeof e === 'object' && e !== null && 'message' in e
     ? String((e as { message: unknown }).message)
@@ -60,6 +69,11 @@ export function Storyline({
   const [diffByPath, setDiffByPath] = useState<Map<string, SelfReviewFileChange>>(new Map());
   const [diffLoading, setDiffLoading] = useState(true);
   const [diffError, setDiffError] = useState<string | null>(null);
+  // True until the committed file list (`load`) has resolved at least once.
+  // Gates the "nothing committed" banner so it can't flash while the empty
+  // initial `steps`/`pool` merely reflect a load still in flight (the preview
+  // diff can resolve first and would otherwise trip the banner prematurely).
+  const [loading, setLoading] = useState(true);
   // Unsaved edits live only in component state — leaving without Save loses them.
   // `dirty` gates a confirm on Back so the author can't silently discard work
   // (the post-create flow drops straight into composition; the saved baseline of
@@ -84,6 +98,8 @@ export function Storyline({
       // Fail loud (CLAUDE.md): surface the cause; no empty-state fallback.
       console.warn('storyline_load_failed', e);
       setLoadError(msgOf(e));
+    } finally {
+      setLoading(false);
     }
   }, [ctx.baseRef, ctx.headRef, ctx.workspaceId]);
 
@@ -117,59 +133,54 @@ export function Storyline({
     loadDiff();
   }, [load, loadDiff]);
 
-  // --- Ordering mutations (Step 1) ---
-  const addFromPool = (path: string, index: number | null) => {
-    const c = pool.find((f) => f.path === path);
-    if (!c) return;
-    setPool((p) => p.filter((f) => f.path !== path));
-    const next: Step = {
-      path: c.path,
-      introText: '',
-      status: c.status,
-      added: c.added,
-      removed: c.removed,
-      stale: false,
-    };
-    setSteps((s) => {
-      const out = [...s];
-      out.splice(index === null ? out.length : index, 0, next);
-      return out;
-    });
-    setSelected(path);
-    setDirty(true);
-  };
-
-  const removeToPool = (path: string) => {
-    const target = steps.find((s) => s.path === path);
-    setSteps((s) => s.filter((x) => x.path !== path));
-    // Non-stale steps return to the pool; stale ones have no ChangedFile to restore.
-    if (target && !target.stale) {
-      setPool((p) =>
-        [
-          ...p,
-          {
-            path: target.path,
-            status: target.status ?? '?',
-            added: target.added ?? 0,
-            removed: target.removed ?? 0,
-          },
-        ].sort((a, b) => a.path.localeCompare(b.path)),
-      );
+  // --- Ordering (Step 1) ---
+  // OrderStep computes the complete ordered storyline as a path list (add,
+  // reorder, and remove are all just a new ordering). We rebuild `steps` from
+  // it — preserving each kept step's intro/stale flags — and recompute the
+  // leftover `pool` from the union of changed files (pool + non-stale steps).
+  const setStoryline = (paths: string[]) => {
+    const stepByPath = new Map(steps.map((s) => [s.path, s]));
+    const changedByPath = new Map<string, ChangedFile>();
+    for (const f of pool) changedByPath.set(f.path, f);
+    for (const s of steps) {
+      // Stale steps have no current ChangedFile, so they can't land in the pool.
+      if (!s.stale && s.status !== null) {
+        changedByPath.set(s.path, {
+          path: s.path,
+          status: s.status,
+          added: s.added ?? 0,
+          removed: s.removed ?? 0,
+        });
+      }
     }
-    setSelected((cur) => (cur === path ? null : cur));
-    setDirty(true);
-  };
 
-  const reorder = (activePath: string, overPath: string) => {
-    setSteps((s) => {
-      const from = s.findIndex((x) => x.path === activePath);
-      const to = s.findIndex((x) => x.path === overPath);
-      if (from === -1 || to === -1 || from === to) return s;
-      const out = [...s];
-      const [moved] = out.splice(from, 1);
-      out.splice(to, 0, moved);
-      return out;
+    const newSteps: Step[] = paths.map((p) => {
+      const existing = stepByPath.get(p);
+      if (existing) return existing;
+      const c = changedByPath.get(p);
+      return {
+        path: p,
+        introText: '',
+        status: c?.status ?? '?',
+        added: c?.added ?? 0,
+        removed: c?.removed ?? 0,
+        stale: false,
+      };
     });
+    const inStory = new Set(paths);
+    const newPool = [...changedByPath.values()]
+      .filter((f) => !inStory.has(f.path))
+      .sort((a, b) => a.path.localeCompare(b.path));
+
+    setSteps(newSteps);
+    setPool(newPool);
+    // Keep the current selection if it's still a step; otherwise focus a newly
+    // added file, else the first step.
+    setSelected((cur) =>
+      cur && inStory.has(cur)
+        ? cur
+        : (paths.find((p) => !stepByPath.has(p)) ?? newSteps[0]?.path ?? null),
+    );
     setDirty(true);
   };
 
@@ -227,6 +238,22 @@ export function Storyline({
     () => steps.filter((s) => s.introText.trim().length > 0).length,
     [steps],
   );
+
+  // Empty list because the branch has no *committed* changes against its base,
+  // even though the working tree does. The file list comes from a commit-tree
+  // diff (`gitDiffFiles`), which excludes the working tree; the preview diff
+  // (`diffByPath`, via `selfReviewDiff`) includes it — so a non-empty
+  // `diffByPath` with an empty order/pool means "uncommitted changes only".
+  // A load failure or branch mismatch (`diffError`, which empties `diffByPath`)
+  // takes precedence and is surfaced by its own banner.
+  const noCommittedChanges =
+    !loading &&
+    !loadError &&
+    !diffLoading &&
+    !diffError &&
+    steps.length === 0 &&
+    pool.length === 0 &&
+    diffByPath.size > 0;
 
   return (
     <div className="stage">
@@ -305,21 +332,22 @@ export function Storyline({
             )}
           </div>
 
-          {(loadError || saveError) && (
+          {(loadError || saveError || noCommittedChanges) && (
             <div style={{ padding: '10px 18px 0' }}>
               {loadError && <div style={banner}>Couldn't load storyline: {loadError}</div>}
               {saveError && <div style={banner}>Couldn't save storyline: {saveError}</div>}
+              {noCommittedChanges && (
+                <div style={infoBanner}>
+                  No committed changes against <span className="mono">{ctx.baseRef}</span> yet —
+                  commit your work to build the storyline. ({diffByPath.size} uncommitted change
+                  {diffByPath.size === 1 ? '' : 's'} detected.)
+                </div>
+              )}
             </div>
           )}
 
           {step === 'order' ? (
-            <OrderStep
-              pool={pool}
-              steps={steps}
-              onReorder={reorder}
-              onAddFromPool={addFromPool}
-              onRemoveToPool={removeToPool}
-            />
+            <OrderStep pool={pool} steps={steps} onSetStoryline={setStoryline} />
           ) : (
             <IntroStep
               steps={steps}

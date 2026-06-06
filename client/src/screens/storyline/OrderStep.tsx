@@ -1,6 +1,7 @@
 import {
   DndContext,
   type DragEndEvent,
+  type DragOverEvent,
   DragOverlay,
   type DragStartEvent,
   KeyboardSensor,
@@ -12,12 +13,13 @@ import {
 } from '@dnd-kit/core';
 import {
   SortableContext,
+  arrayMove,
   sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { Icon } from '../../components/Icon';
 import type { ChangedFile } from '../../tauri';
@@ -25,6 +27,7 @@ import type { Step } from './reconcile';
 
 const POOL = 'pool';
 const STORYLINE = 'storyline';
+type ContainerId = typeof POOL | typeof STORYLINE;
 
 /** A/M/D status chip matching the design's drag cards. Status is the single-char
  *  code from `git_diff_files` ("A"/"M"/"D"/"?"). */
@@ -75,8 +78,14 @@ function splitPath(path: string): { file: string; dir: string } {
   return { file, dir: parts.join('/') };
 }
 
+/** Reconstruct the ChangedFile shape from a non-stale step, so a step dragged
+ *  into the pool can render as a pool card mid-drag. */
+function stepToFile(s: Step): ChangedFile {
+  return { path: s.path, status: s.status ?? '?', added: s.added ?? 0, removed: s.removed ?? 0 };
+}
+
 /** A draggable unordered-file card (left rail drag source). */
-function PoolCard({ f, onAdd }: { f: ChangedFile; onAdd: () => void }) {
+function PoolCard({ f, onAdd }: { f: ChangedFile; onAdd?: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: f.path,
   });
@@ -136,15 +145,17 @@ function PoolCard({ f, onAdd }: { f: ChangedFile; onAdd: () => void }) {
         )}
       </div>
       <Counts added={f.added} removed={f.removed} />
-      <button
-        type="button"
-        className="btn"
-        aria-label={`Add ${f.path} to storyline`}
-        onClick={onAdd}
-        style={{ flex: '0 0 auto', padding: '2px 6px' }}
-      >
-        <Icon name="plus" size={10} color="var(--gray-600)" />
-      </button>
+      {onAdd && (
+        <button
+          type="button"
+          className="btn"
+          aria-label={`Add ${f.path} to storyline`}
+          onClick={onAdd}
+          style={{ flex: '0 0 auto', padding: '2px 6px' }}
+        >
+          <Icon name="plus" size={10} color="var(--gray-600)" />
+        </button>
+      )}
     </div>
   );
 }
@@ -248,88 +259,183 @@ function OrderRow({ s, index, onRemove }: { s: Step; index: number; onRemove: ()
   );
 }
 
+/** The live insertion marker: a pool file currently hovered into the storyline.
+ *  It's a real sortable node, so neighbouring rows shift open exactly like an
+ *  in-list reorder — that's the "gap" that marks where the drop will land. */
+function IncomingRow({ f }: { f: ChangedFile }) {
+  const { setNodeRef, transform, transition } = useSortable({ id: f.path });
+  const { file } = splitPath(f.path);
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Translate.toString(transform),
+        transition,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 12px',
+        background: 'var(--blue-tint)',
+        border: '1.5px dashed var(--blue)',
+        borderRadius: 'var(--r-md)',
+        marginBottom: 4,
+        color: 'var(--blue-press)',
+      }}
+    >
+      <Icon name="plus" size={12} color="var(--blue-press)" />
+      <StatusChip status={f.status} />
+      <span
+        className="mono"
+        style={{
+          flex: 1,
+          fontSize: 12.5,
+          fontWeight: 600,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {file}
+      </span>
+      <span style={{ fontSize: 11, fontWeight: 600 }}>drops here</span>
+    </div>
+  );
+}
+
 /**
- * Step 1 of storyline composition (design screen 3a): drag unordered files
- * from the left rail into the ordered "reviewer storyline" on the right, and
- * drag storyline rows to reorder. Dragging a storyline row back onto the pool
- * removes it. Mutations are applied via the parent's callbacks so all storyline
- * state stays in `Storyline.tsx`; this component owns only the live drag id.
+ * Step 1 of storyline composition (design screen 3a): drag unordered files from
+ * the left rail into the ordered "reviewer storyline" on the right, and drag
+ * storyline rows to reorder. Dragging a storyline row back onto the pool removes
+ * it.
+ *
+ * Uses the dnd-kit multi-container sortable pattern: an ephemeral `clones` of
+ * both lists is mutated on `dragOver` so the dragged item lives in whichever
+ * list it currently hovers — that makes cross-container drags open a live gap
+ * (the {@link IncomingRow} marker) exactly like an in-list reorder. The real
+ * `steps`/`pool` state is only touched once, on `dragEnd`, via `onSetStoryline`.
  */
 export function OrderStep({
   pool,
   steps,
-  onReorder,
-  onAddFromPool,
-  onRemoveToPool,
+  onSetStoryline,
 }: {
   pool: ChangedFile[];
   steps: Step[];
-  /** Move the storyline step `activePath` to sit where `overPath` is. */
-  onReorder: (activePath: string, overPath: string) => void;
-  /** Promote a pool file into the storyline at `index` (append when null). */
-  onAddFromPool: (path: string, index: number | null) => void;
-  /** Send a storyline step back to the unordered pool. */
-  onRemoveToPool: (path: string) => void;
+  /** The complete ordered list of storyline paths. The parent recomputes
+   *  `steps` (preserving intros) and the leftover `pool` from it. */
+  onSetStoryline: (paths: string[]) => void;
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Ephemeral list arrangement during a drag; null when not dragging.
+  const [clones, setClones] = useState<{ pool: string[]; storyline: string[] } | null>(null);
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  const containerOf = (id: string): typeof POOL | typeof STORYLINE | null => {
-    if (steps.some((s) => s.path === id)) return STORYLINE;
-    if (pool.some((p) => p.path === id)) return POOL;
-    if (id === STORYLINE) return STORYLINE;
-    if (id === POOL) return POOL;
+  const stepByPath = useMemo(() => new Map(steps.map((s) => [s.path, s])), [steps]);
+  const fileByPath = useMemo(() => new Map(pool.map((f) => [f.path, f])), [pool]);
+
+  const propLists = useMemo(
+    () => ({ pool: pool.map((f) => f.path), storyline: steps.map((s) => s.path) }),
+    [pool, steps],
+  );
+  const view = clones ?? propLists;
+
+  const findContainer = (id: string): ContainerId | null => {
+    if (id === POOL || id === STORYLINE) return id;
+    if (view.storyline.includes(id)) return STORYLINE;
+    if (view.pool.includes(id)) return POOL;
     return null;
   };
 
-  const handleDragStart = (e: DragStartEvent) => setActiveId(String(e.active.id));
-
-  const handleDragEnd = (e: DragEndEvent) => {
-    setActiveId(null);
-    const { active, over } = e;
-    if (!over) return;
-    const activePath = String(active.id);
-    const overId = String(over.id);
-    const from = containerOf(activePath);
-    const to = containerOf(overId);
-    if (!from || !to) return;
-
-    if (from === STORYLINE && to === STORYLINE) {
-      // Reorder within the storyline. Dropping on the container/append zone
-      // (not a row) means "send to the end".
-      if (overId === STORYLINE || overId === activePath) return;
-      onReorder(activePath, overId);
-    } else if (from === POOL && to === STORYLINE) {
-      // Add at the hovered row's index, or append when dropped on the zone.
-      const index = steps.findIndex((s) => s.path === overId);
-      onAddFromPool(activePath, index === -1 ? null : index);
-    } else if (from === STORYLINE && to === POOL) {
-      onRemoveToPool(activePath);
-    }
-    // POOL → POOL is a no-op (the pool is shown alphabetically).
+  // Resolve a path to its data regardless of which list currently shows it, so
+  // a pool item hovered into the storyline (or vice-versa) still renders.
+  const fileFor = (id: string): ChangedFile | null => {
+    const f = fileByPath.get(id);
+    if (f) return f;
+    const s = stepByPath.get(id);
+    return s ? stepToFile(s) : null;
   };
 
-  const orderedCount = steps.length;
-  const totalCount = steps.length + pool.length;
-  const activePoolFile = activeId ? pool.find((p) => p.path === activeId) : null;
-  const activeStep = activeId ? steps.find((s) => s.path === activeId) : null;
+  const handleDragStart = (e: DragStartEvent) => {
+    setActiveId(String(e.active.id));
+    setClones({ pool: [...propLists.pool], storyline: [...propLists.storyline] });
+  };
+
+  const handleDragOver = (e: DragOverEvent) => {
+    const { active, over } = e;
+    if (!over) return;
+    const activeIdStr = String(active.id);
+    const overId = String(over.id);
+    const from = findContainer(activeIdStr);
+    const to = findContainer(overId);
+    if (!from || !to || from === to) return;
+    setClones((prev) => {
+      if (!prev) return prev;
+      const fromItems = prev[from];
+      const toItems = prev[to];
+      const overIndex =
+        overId === to
+          ? toItems.length
+          : toItems.indexOf(overId) === -1
+            ? toItems.length
+            : toItems.indexOf(overId);
+      return {
+        ...prev,
+        [from]: fromItems.filter((i) => i !== activeIdStr),
+        [to]: [...toItems.slice(0, overIndex), activeIdStr, ...toItems.slice(overIndex)],
+      };
+    });
+  };
+
+  const handleDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e;
+    const current = clones;
+    setActiveId(null);
+    setClones(null);
+    if (!current) return;
+    if (over) {
+      const activeIdStr = String(active.id);
+      const overId = String(over.id);
+      const from = findContainer(activeIdStr);
+      const to = findContainer(overId);
+      // Same-container reorder is committed here (dragOver only handles moves
+      // across containers); the within-list shift was shown live by sortable.
+      if (from && from === to && overId !== activeIdStr && overId !== from) {
+        const arr = current[from];
+        const oldI = arr.indexOf(activeIdStr);
+        const newI = arr.indexOf(overId);
+        if (oldI !== -1 && newI !== -1) current[from] = arrayMove(arr, oldI, newI);
+      }
+    }
+    onSetStoryline(current.storyline);
+  };
+
+  const orderedCount = view.storyline.length;
+  const totalCount = view.storyline.length + view.pool.length;
+  const activeFile = activeId ? fileFor(activeId) : null;
 
   return (
     <DndContext
       sensors={sensors}
       collisionDetection={closestCorners}
       onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
-      onDragCancel={() => setActiveId(null)}
+      onDragCancel={() => {
+        setActiveId(null);
+        setClones(null);
+      }}
     >
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        {/* Unordered files (drag source) */}
-        <PoolColumn pool={pool} onAdd={(p) => onAddFromPool(p, null)} />
+        <PoolColumn
+          ids={view.pool}
+          fileFor={fileFor}
+          onAdd={(p) => onSetStoryline([...view.storyline, p])}
+        />
 
-        {/* Storyline canvas */}
         <div
           style={{
             flex: 1,
@@ -362,15 +468,20 @@ export function OrderStep({
             </div>
           </div>
 
-          <StorylineDropArea steps={steps} onRemove={onRemoveToPool} />
+          <StorylineDropArea
+            ids={view.storyline}
+            stepByPath={stepByPath}
+            fileFor={fileFor}
+            onRemove={(p) => onSetStoryline(view.storyline.filter((x) => x !== p))}
+          />
         </div>
       </div>
 
       <DragOverlay>
-        {activePoolFile ? (
+        {activeFile ? (
           <div
             style={{
-              width: 240,
+              width: 260,
               background: '#fff',
               border: '1px solid rgba(0,122,255,0.5)',
               borderRadius: 'var(--r-md)',
@@ -382,7 +493,7 @@ export function OrderStep({
             }}
           >
             <Icon name="grip" size={11} color="var(--gray-400)" />
-            <StatusChip status={activePoolFile.status} />
+            <StatusChip status={activeFile.status} />
             <span
               className="mono"
               style={{
@@ -394,26 +505,7 @@ export function OrderStep({
                 whiteSpace: 'nowrap',
               }}
             >
-              {splitPath(activePoolFile.path).file}
-            </span>
-          </div>
-        ) : activeStep ? (
-          <div
-            style={{
-              width: 420,
-              background: '#fff',
-              border: '1px solid rgba(0,122,255,0.5)',
-              borderRadius: 'var(--r-md)',
-              boxShadow: '0 8px 24px rgba(0,0,0,0.14)',
-              padding: '10px 12px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-            }}
-          >
-            <Icon name="grip" size={12} color="var(--gray-400)" />
-            <span className="mono" style={{ fontSize: 12.5, fontWeight: 600 }}>
-              {activeStep.path}
+              {splitPath(activeFile.path).file}
             </span>
           </div>
         ) : null}
@@ -422,7 +514,15 @@ export function OrderStep({
   );
 }
 
-function PoolColumn({ pool, onAdd }: { pool: ChangedFile[]; onAdd: (path: string) => void }) {
+function PoolColumn({
+  ids,
+  fileFor,
+  onAdd,
+}: {
+  ids: string[];
+  fileFor: (id: string) => ChangedFile | null;
+  onAdd: (path: string) => void;
+}) {
   const { setNodeRef, isOver } = useDroppable({ id: POOL });
   return (
     <div
@@ -440,7 +540,7 @@ function PoolColumn({ pool, onAdd }: { pool: ChangedFile[]; onAdd: (path: string
     >
       <div style={{ padding: '12px 14px 8px' }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-800)' }}>
-          Unordered files ({pool.length})
+          Unordered files ({ids.length})
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--gray-500)', marginTop: 2, lineHeight: 1.4 }}>
           Drag into the storyline. Files left here are shown to reviewers in alphabetical order at
@@ -448,13 +548,16 @@ function PoolColumn({ pool, onAdd }: { pool: ChangedFile[]; onAdd: (path: string
         </div>
       </div>
       <div style={{ flex: 1, padding: '0 8px 8px' }}>
-        <SortableContext items={pool.map((p) => p.path)} strategy={verticalListSortingStrategy}>
-          {pool.length === 0 ? (
+        <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+          {ids.length === 0 ? (
             <div style={{ fontSize: 11.5, color: 'var(--gray-500)', padding: '4px 6px' }}>
               All changed files are in the storyline.
             </div>
           ) : (
-            pool.map((f) => <PoolCard key={f.path} f={f} onAdd={() => onAdd(f.path)} />)
+            ids.map((id) => {
+              const f = fileFor(id);
+              return f ? <PoolCard key={id} f={f} onAdd={() => onAdd(id)} /> : null;
+            })
           )}
         </SortableContext>
       </div>
@@ -463,19 +566,27 @@ function PoolColumn({ pool, onAdd }: { pool: ChangedFile[]; onAdd: (path: string
 }
 
 function StorylineDropArea({
-  steps,
+  ids,
+  stepByPath,
+  fileFor,
   onRemove,
 }: {
-  steps: Step[];
+  ids: string[];
+  stepByPath: Map<string, Step>;
+  fileFor: (id: string) => ChangedFile | null;
   onRemove: (path: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: STORYLINE });
   return (
     <div ref={setNodeRef} style={{ flex: 1, minHeight: 0 }}>
-      <SortableContext items={steps.map((s) => s.path)} strategy={verticalListSortingStrategy}>
-        {steps.map((s, i) => (
-          <OrderRow key={s.path} s={s} index={i} onRemove={() => onRemove(s.path)} />
-        ))}
+      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+        {ids.map((id, i) => {
+          const step = stepByPath.get(id);
+          if (step) return <OrderRow key={id} s={step} index={i} onRemove={() => onRemove(id)} />;
+          // A pool item currently hovered into the storyline — the live marker.
+          const f = fileFor(id);
+          return f ? <IncomingRow key={id} f={f} /> : null;
+        })}
       </SortableContext>
       <div
         style={{
@@ -494,7 +605,7 @@ function StorylineDropArea({
         }}
       >
         <Icon name="plus" size={12} color={isOver ? 'var(--blue-press)' : 'var(--gray-500)'} />
-        {steps.length === 0
+        {ids.length === 0
           ? 'Drag files here to build the storyline'
           : 'Drop unordered files here to extend the storyline'}
       </div>
