@@ -7,9 +7,13 @@
 //! already does — because the porcelain `-z` format is a stable contract and
 //! sidesteps libgit2 worktree-API edge cases.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
+use git2::Repository;
 use serde::{Deserialize, Serialize};
+
+use crate::error::StageError;
 
 /// One worktree git reports for a repo — a single checked-out working directory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,9 +157,95 @@ pub(crate) fn parse_porcelain_z(bytes: &[u8]) -> Vec<WorktreeInfo> {
     out
 }
 
+/// Enumerate the worktrees git reports for the repo containing `cwd`.
+///
+/// Discovers the repo from `cwd` (works from any worktree or subdirectory),
+/// then runs `git worktree list --porcelain -z` from the discovered working
+/// directory so git lists every worktree in the set. Git is the source of
+/// truth (ADR-0016): entries are returned exactly as git reports them, root
+/// first. Fails loud with git's stderr on a non-zero exit.
+pub fn list_worktrees(cwd: &Path) -> Result<Vec<WorktreeInfo>, StageError> {
+    let repo = Repository::discover(cwd).map_err(|_| StageError::NotARepo(cwd.to_path_buf()))?;
+    // Run from a working directory when there is one (any worktree lists the
+    // whole set); fall back to the common dir for a bare repo.
+    let run_dir = repo
+        .workdir()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| repo.path().to_path_buf());
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&run_dir)
+        .args(["worktree", "list", "--porcelain", "-z"])
+        .output()
+        .map_err(StageError::Io)?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(StageError::Worktree(stderr));
+    }
+
+    Ok(parse_porcelain_z(&output.stdout))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+    use std::process::Command as TestCommand;
+
+    /// Run `git -C <dir> <args...>`, asserting success. Test-only.
+    fn git(dir: &Path, args: &[&str]) {
+        let status = TestCommand::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .expect("spawn git");
+        assert!(status.success(), "git {args:?} failed in {dir:?}");
+    }
+
+    #[test]
+    fn list_worktrees_reports_root_and_linked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("README.md"), "hi\n").unwrap();
+        git(&root, &["add", "."]);
+        git(
+            &root,
+            &[
+                "-c",
+                "user.email=t@e.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ],
+        );
+        let linked = tmp.path().join("repo-feat");
+        git(
+            &root,
+            &["worktree", "add", "-q", linked.to_str().unwrap(), "-b", "feat"],
+        );
+
+        // Discover from inside the LINKED worktree -- must still see both.
+        let got = list_worktrees(&linked).unwrap();
+        assert_eq!(got.len(), 2, "root + linked");
+
+        let root_wt = got.iter().find(|w| w.is_root).expect("a root worktree");
+        assert_eq!(root_wt.branch.as_deref(), Some("main"));
+
+        let feat_wt = got
+            .iter()
+            .find(|w| w.branch.as_deref() == Some("feat"))
+            .expect("the linked feat worktree");
+        assert!(!feat_wt.is_root);
+        assert!(!feat_wt.detached);
+    }
 
     #[test]
     fn parses_two_worktrees_with_branches() {
