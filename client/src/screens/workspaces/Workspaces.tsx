@@ -58,6 +58,20 @@ function slugFromRemote(url: string | null): string | null {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
+/** Build the storyline-composer context from an overview workspace row. Carries
+ *  `pr_number` so the composer knows published-vs-not (Open PR vs Push update). */
+function toStorylineCtx(w: OverviewWorkspaceRow): StorylineCtx {
+  return {
+    workspaceId: w.id,
+    owner: w.repo_owner,
+    repo: w.repo_name,
+    headRef: w.head_ref,
+    baseRef: w.base_ref,
+    title: w.title,
+    prNumber: w.pr_number,
+  };
+}
+
 export function Workspaces({
   user,
   onChangeRepo,
@@ -594,16 +608,7 @@ export function Workspaces({
                             w={w}
                             stats={wsStats(w)}
                             onBackToSelfReview={ghRepo ? (ws) => setRevertTarget(ws) : undefined}
-                            onOpenStoryline={(ws) =>
-                              onOpenStoryline({
-                                workspaceId: ws.id,
-                                owner: ws.repo_owner,
-                                repo: ws.repo_name,
-                                headRef: ws.head_ref,
-                                baseRef: ws.base_ref,
-                                title: ws.title,
-                              })
-                            }
+                            onOpenStoryline={(ws) => onOpenStoryline(toStorylineCtx(ws))}
                           />
                         ))}
                       </Bucket>
@@ -616,7 +621,12 @@ export function Workspaces({
                       count={yoursInReview.length}
                     >
                       {yoursInReview.filter(matchWorkspace).map((w) => (
-                        <WorkspaceRowCompact key={w.id} w={w} stats={wsStats(w)} />
+                        <WorkspaceRowCompact
+                          key={w.id}
+                          w={w}
+                          stats={wsStats(w)}
+                          onOpenStoryline={(ws) => onOpenStoryline(toStorylineCtx(ws))}
+                        />
                       ))}
                     </Bucket>
                   )}
@@ -702,6 +712,8 @@ export function Workspaces({
                 headRef: created.head_ref,
                 baseRef: created.base_ref,
                 title: created.title,
+                // Brand-new workspace — not on GitHub yet.
+                prNumber: null,
               })
             }
           />

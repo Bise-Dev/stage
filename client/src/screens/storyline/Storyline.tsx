@@ -9,6 +9,7 @@ import {
   selfReviewDiff,
   storylineGet,
   storylineUpdate,
+  workspacePublish,
 } from '../../tauri';
 import { IntroStep } from './IntroStep';
 import { OrderStep } from './OrderStep';
@@ -22,6 +23,11 @@ export type StorylineCtx = {
   headRef: string;
   baseRef: string;
   title: string;
+  /** PR number once published, else null. Drives the publish button: null →
+   *  "Open PR" (push + open/adopt the PR), non-null → "Push update" (push only).
+   *  Fixed for the screen's lifetime — Open PR navigates back, and re-entry from
+   *  an in-review row carries the now-set number. */
+  prNumber: number | null;
 };
 
 const banner: React.CSSProperties = {
@@ -56,7 +62,9 @@ export function Storyline({
   ctx: StorylineCtx;
   onBack: () => void;
 }) {
-  const [step, setStep] = useState<WizardStep>('order');
+  // Fresh workspaces start on ordering; an already-published one opens straight
+  // on the intro step, where the "Push update" button lives.
+  const [step, setStep] = useState<WizardStep>(ctx.prNumber === null ? 'order' : 'intro');
   const [steps, setSteps] = useState<Step[]>([]);
   const [pool, setPool] = useState<ChangedFile[]>([]);
   const [etag, setEtag] = useState<string | null>(null);
@@ -80,6 +88,8 @@ export function Storyline({
   // a brand-new workspace is empty). Cleared on load and after a successful save.
   const [dirty, setDirty] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -238,6 +248,37 @@ export function Storyline({
     () => steps.filter((s) => s.introText.trim().length > 0).length,
     [steps],
   );
+  // Ready to publish: at least one step and every step has a non-empty intro
+  // (the same signal the "N of M with intros" chip shows).
+  const readyToPublish = steps.length > 0 && withIntro === steps.length;
+  const published = ctx.prNumber !== null;
+
+  // Publish to GitHub. First publish (prNumber null) pushes the branch with the
+  // user's own git credentials (ADR-0016) and opens/adopts the PR; a published
+  // workspace just re-pushes ("Push update"). On success we leave the composer —
+  // Workspaces re-fetches the overview on mount, so the row reflects the new PR.
+  const publish = async () => {
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      await workspacePublish({
+        workspaceId: ctx.workspaceId,
+        headRef: ctx.headRef,
+        title: ctx.title,
+        body: null,
+        alreadyPublished: published,
+      });
+    } catch (e) {
+      // Fail loud (CLAUDE.md): surface git's / the backend's message verbatim;
+      // no PR was created/updated on failure, so nothing to roll back.
+      console.warn('workspace_publish_failed', e);
+      setPublishError(msgOf(e));
+      setPublishing(false);
+      return;
+    }
+    // Success: the screen is unmounting, so don't touch `publishing` again.
+    onBack();
+  };
 
   // Empty list because the branch has no *committed* changes against its base,
   // even though the working tree does. The file list comes from a commit-tree
@@ -326,16 +367,46 @@ export function Storyline({
                 Next: Write intros <Icon name="chevron-right" size={11} color="#fff" />
               </button>
             ) : (
-              <button type="button" className="btn" onClick={() => goToStep('order')}>
-                <Icon name="chevron-left" size={11} /> Back to ordering
-              </button>
+              <>
+                <button type="button" className="btn" onClick={() => goToStep('order')}>
+                  <Icon name="chevron-left" size={11} /> Back to ordering
+                </button>
+                {published ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={publish}
+                    disabled={publishing}
+                    title="Push new commits to the PR branch on GitHub"
+                    style={{ opacity: publishing ? 0.6 : 1 }}
+                  >
+                    {publishing ? 'Pushing…' : 'Push update'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={publish}
+                    disabled={publishing || !readyToPublish}
+                    title={
+                      readyToPublish
+                        ? 'Push the branch and open a pull request on GitHub'
+                        : 'Give every step an intro to open a PR'
+                    }
+                    style={{ opacity: publishing ? 0.6 : 1 }}
+                  >
+                    {publishing ? 'Opening PR…' : 'Open PR'}
+                  </button>
+                )}
+              </>
             )}
           </div>
 
-          {(loadError || saveError || noCommittedChanges) && (
+          {(loadError || saveError || publishError || noCommittedChanges) && (
             <div style={{ padding: '10px 18px 0' }}>
               {loadError && <div style={banner}>Couldn't load storyline: {loadError}</div>}
               {saveError && <div style={banner}>Couldn't save storyline: {saveError}</div>}
+              {publishError && <div style={banner}>Couldn't publish: {publishError}</div>}
               {noCommittedChanges && (
                 <div style={infoBanner}>
                   No committed changes against <span className="mono">{ctx.baseRef}</span> yet —

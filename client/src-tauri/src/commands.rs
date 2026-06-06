@@ -235,6 +235,19 @@ pub async fn git_fetch(state: State<'_, AppState>) -> Result<git::FetchOutcome, 
         .map_err(|e| AppError::Backend(format!("fetch_join_error: {e}")))?
 }
 
+/// Push a branch to the primary remote with the user's own git credentials
+/// (ADR-0016). A reusable primitive; `workspace_publish` below pushes inline,
+/// but this exposes a standalone push for other call sites.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn git_push(state: State<'_, AppState>, branch: String) -> Result<git::PushOutcome, AppError> {
+    let repo = active_repo_path(&state)?;
+    git::push(&repo, &branch)
+}
+
 #[tauri::command]
 // `pill = "cmd"` tags this span so the dev Activity-log layer records one row
 // per invocation with its duration (debug builds only). `skip_all` keeps the
@@ -412,6 +425,45 @@ pub async fn workspace_create(
         )
         .await?;
     Ok(ws)
+}
+
+/// Publish a workspace to GitHub: push its branch with the user's own git
+/// credentials (ADR-0016), then open or adopt its PR via the backend.
+///
+/// `already_published` short-circuits to a push-only "Push update" — the PR
+/// already exists, so we re-push the branch and skip `open-pr`. The push is
+/// idempotent (a no-op push still exits 0), so a first publish and a repeat
+/// "Push update" take the same code path up to the branch on `already_published`.
+/// Fail loud (CLAUDE.md): a push or `open-pr` failure surfaces verbatim via
+/// `AppError` and no PR state changes silently — the push must succeed before we
+/// ask the backend to open the PR (else GitHub 422s on a missing branch).
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn workspace_publish(
+    state: tauri::State<'_, AppState>,
+    workspace_id: String,
+    head_ref: String,
+    title: String,
+    body: Option<String>,
+    already_published: bool,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let repo = active_repo_path(&state)?;
+    // Sync subprocess git, called directly: brief network I/O on a user-initiated
+    // action (the webview shows a spinner), and the multi-threaded runtime keeps
+    // other work moving while this worker blocks.
+    git::push(&repo, &head_ref)?;
+    if already_published {
+        return Ok(serde_json::json!({ "pushed": true }));
+    }
+    let v = state
+        .api
+        .open_pr(&token, &workspace_id, &title, body.as_deref(), false)
+        .await?;
+    Ok(v)
 }
 
 #[tauri::command]
