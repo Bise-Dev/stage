@@ -157,7 +157,9 @@ pub fn git_local_branches(state: State<'_, AppState>) -> Result<Vec<git::BranchI
 // per invocation with its duration (debug builds only). `skip_all` keeps the
 // non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn repo_worktrees(state: State<'_, AppState>) -> Result<Vec<stage_core::WorktreeInfo>, AppError> {
+pub fn repo_worktrees(
+    state: State<'_, AppState>,
+) -> Result<Vec<stage_core::WorktreeInfo>, AppError> {
     let path = active_repo_path(&state)?;
     Ok(stage_core::list_worktrees(&path)?)
 }
