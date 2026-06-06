@@ -1,5 +1,5 @@
 import { listen } from '@tauri-apps/api/event';
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Avatar } from '../../components/Avatar';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
@@ -15,14 +15,18 @@ import {
   type User,
   type WorkspaceCreated,
   type WorkspaceState,
+  type WorktreeInfo,
   getActiveRepo,
   gitDiffStats,
   gitFetch,
   gitLocalBranches,
+  onWorktreesChanged,
   openInFinder,
   openUrl,
   repoOverview,
   repoSummary,
+  repoWorktrees,
+  setFocusedWorktree,
   workspaceCreate,
   workspaceDelete,
 } from '../../tauri';
@@ -114,6 +118,7 @@ export function Workspaces({
   const [ghRepo, setGhRepo] = useState<{ owner: string; repo: string } | null>(null);
   const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
+  const [worktrees, setWorktrees] = useState<WorktreeInfo[]>([]);
   const [rows, setRows] = useState<OverviewRow[]>([]);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [branchesError, setBranchesError] = useState<string | null>(null);
@@ -139,6 +144,14 @@ export function Workspaces({
   const loadBranches = useCallback(async () => {
     try {
       setBranches(await gitLocalBranches());
+      try {
+        setWorktrees(await repoWorktrees());
+      } catch (e) {
+        // Worktree enumeration is additive; a failure must not blank the branch
+        // list. Surface for visibility, keep the branches (the rows still render,
+        // just without worktree badges).
+        console.warn('workspaces_worktrees_failed', e);
+      }
       setBranchesError(null);
     } catch (e) {
       // Fail loud (see CLAUDE.md "Error handling"): the Rust side names the
@@ -200,6 +213,17 @@ export function Workspaces({
       unlisten.then((u) => u());
     };
   }, [loadBranches]);
+
+  useEffect(() => {
+    const off = onWorktreesChanged(() => {
+      repoWorktrees()
+        .then(setWorktrees)
+        .catch((e) => console.warn('workspaces_worktrees_failed', e));
+    });
+    return () => {
+      void off.then((f) => f());
+    };
+  }, []);
 
   // Local diff stats for things checked out locally: Self-Review branches
   // (vs default branch) and pre-publish workspaces (head vs base). Published
@@ -310,6 +334,27 @@ export function Workspaces({
   const selfReviewBranches = branches.filter(
     (b) => !workspaceHeadRefs.has(b.name) && b.name !== defaultBranch,
   );
+
+  const worktreeByBranch = useMemo(() => {
+    const m = new Map<string, WorktreeInfo>();
+    for (const w of worktrees) if (w.branch) m.set(w.branch, w);
+    return m;
+  }, [worktrees]);
+
+  // Focus the branch's worktree (observe-only — no checkout), then enter
+  // Self-Review (which reads the focused worktree from app state).
+  const startSelfReviewAt = useCallback(
+    async (worktreePath: string) => {
+      try {
+        await setFocusedWorktree(worktreePath);
+        onStartSelfReview();
+      } catch (e) {
+        console.warn('workspaces_focus_worktree_failed', e);
+      }
+    },
+    [onStartSelfReview],
+  );
+
   const yoursReadyToShare = workspaceRows.filter(
     (w) => w.pr_number === null && w.created_by.github_login === me,
   );
@@ -610,8 +655,9 @@ export function Workspaces({
                         <BranchRowCompact
                           key={b.name}
                           b={b}
+                          worktree={worktreeByBranch.get(b.name) ?? null}
                           stats={diffStats[b.name]}
-                          onStartSelfReview={onStartSelfReview}
+                          onStartSelfReview={startSelfReviewAt}
                           onReadyToShare={ghRepo ? openNewWorkspace : undefined}
                         />
                       ))}
@@ -1185,13 +1231,15 @@ function rowShell(): React.CSSProperties {
 
 function BranchRowCompact({
   b,
+  worktree,
   stats,
   onStartSelfReview,
   onReadyToShare,
 }: {
   b: BranchInfo;
+  worktree: WorktreeInfo | null;
   stats?: DiffStats;
-  onStartSelfReview: () => void;
+  onStartSelfReview: (worktreePath: string) => void;
   onReadyToShare?: (branch: string) => void;
 }) {
   return (
@@ -1217,6 +1265,16 @@ function BranchRowCompact({
               current
             </span>
           )}
+          {worktree &&
+            (worktree.isRoot ? (
+              <span className="badge" style={{ flex: '0 0 auto' }}>
+                root
+              </span>
+            ) : (
+              <span className="badge badge-purple" style={{ flex: '0 0 auto' }}>
+                ⌥ worktree
+              </span>
+            ))}
         </div>
         <div
           style={{
@@ -1242,11 +1300,11 @@ function BranchRowCompact({
           </span>
         </div>
       </div>
-      {/* Q6: Self-Review only on the currently-checked-out branch. The diff
-          fundamentally describes the working tree of HEAD; we don't want a
-          button that pretends to work on non-current branches. */}
-      {b.isHead && (
-        <button type="button" className="btn" onClick={onStartSelfReview}>
+      {/* Self-Review on any branch checked out in a worktree (ADR-0016): clicking
+          focuses that worktree (no checkout). A branch with no worktree can't be
+          reviewed without one, so the button is omitted. */}
+      {worktree && (
+        <button type="button" className="btn" onClick={() => onStartSelfReview(worktree.path)}>
           <Icon name="play" size={10} color="var(--gray-700)" /> Self-Review
         </button>
       )}
