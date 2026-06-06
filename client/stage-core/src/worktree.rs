@@ -229,7 +229,14 @@ mod tests {
         let linked = tmp.path().join("repo-feat");
         git(
             &root,
-            &["worktree", "add", "-q", linked.to_str().unwrap(), "-b", "feat"],
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().unwrap(),
+                "-b",
+                "feat",
+            ],
         );
 
         // Discover from inside the LINKED worktree -- must still see both.
