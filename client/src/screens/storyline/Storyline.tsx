@@ -55,6 +55,46 @@ function msgOf(e: unknown): string {
     : String(e);
 }
 
+/** Wraps the publish button so a *disabled* (gated) button can still explain
+ *  itself: hovering the wrapper shows `reason` as an overlay. A disabled button
+ *  fires no mouse events of its own, so the hover lives on the span around it.
+ *  When `reason` is null (button enabled / publishing) it's a plain pass-through. */
+function PublishGate({ reason, children }: { reason: string | null; children: React.ReactNode }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <span
+      style={{ position: 'relative', display: 'inline-flex' }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      {children}
+      {reason && hover && (
+        <span
+          role="tooltip"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            right: 0,
+            zIndex: 60,
+            width: 230,
+            padding: '8px 10px',
+            background: 'var(--gray-900)',
+            color: '#fff',
+            fontSize: 11.5,
+            lineHeight: 1.45,
+            textAlign: 'left',
+            borderRadius: 'var(--r-md)',
+            boxShadow: 'var(--sh-pop)',
+            pointerEvents: 'none',
+          }}
+        >
+          {reason}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function Storyline({
   ctx,
   onBack,
@@ -248,9 +288,18 @@ export function Storyline({
     () => steps.filter((s) => s.introText.trim().length > 0).length,
     [steps],
   );
-  // Ready to publish: at least one step and every step has a non-empty intro
-  // (the same signal the "N of M with intros" chip shows).
-  const readyToPublish = steps.length > 0 && withIntro === steps.length;
+  // Ready to publish: at least one step, and at least one of them carries a
+  // non-empty intro (steps without an intro still publish, just without
+  // commentary). When not ready, `publishBlockedReason` is the human
+  // explanation shown on hover over the disabled "Open PR" button — so a no-op
+  // click is never silent.
+  const publishBlockedReason =
+    steps.length === 0
+      ? 'Add at least one step to the storyline to open a PR.'
+      : withIntro === 0
+        ? 'Write an intro for at least one step to open a PR.'
+        : null;
+  const readyToPublish = publishBlockedReason === null;
   const published = ctx.prNumber !== null;
 
   // Publish to GitHub. First publish (prNumber null) pushes the branch with the
@@ -264,7 +313,10 @@ export function Storyline({
       await workspacePublish({
         workspaceId: ctx.workspaceId,
         headRef: ctx.headRef,
-        title: ctx.title,
+        // The PR title can't be blank (backend rejects it). Fall back to the
+        // branch name when the workspace has no title — same convention as the
+        // New Workspace modal, which uses the branch as the title placeholder.
+        title: ctx.title.trim() || ctx.headRef,
         body: null,
         alreadyPublished: published,
       });
@@ -383,20 +435,24 @@ export function Storyline({
                     {publishing ? 'Pushing…' : 'Push update'}
                   </button>
                 ) : (
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={publish}
-                    disabled={publishing || !readyToPublish}
-                    title={
-                      readyToPublish
-                        ? 'Push the branch and open a pull request on GitHub'
-                        : 'Give every step an intro to open a PR'
-                    }
-                    style={{ opacity: publishing ? 0.6 : 1 }}
-                  >
-                    {publishing ? 'Opening PR…' : 'Open PR'}
-                  </button>
+                  // Gate: at least one step with an intro. The button stays
+                  // disabled until then, but the wrapper surfaces *why* on hover
+                  // — a disabled button doesn't fire its own mouse events, so the
+                  // hover lives on the span around it.
+                  <PublishGate reason={publishing ? null : publishBlockedReason}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={publish}
+                      disabled={publishing || !readyToPublish}
+                      style={{
+                        opacity: publishing || !readyToPublish ? 0.5 : 1,
+                        cursor: !readyToPublish && !publishing ? 'not-allowed' : undefined,
+                      }}
+                    >
+                      {publishing ? 'Opening PR…' : 'Open PR'}
+                    </button>
+                  </PublishGate>
                 )}
               </>
             )}
