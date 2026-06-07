@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { ErrorBanner } from '../../components/ErrorBanner';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
 import {
@@ -310,6 +311,27 @@ export function Storyline({
     setPublishing(true);
     setPublishError(null);
     try {
+      // Persist the storyline *before* opening the PR. The composer's steps live
+      // only in component state until Save; without this, an author who builds a
+      // storyline and clicks Open PR (without first clicking Save) publishes a
+      // workspace whose storyline is empty on the backend — so a reviewer opens
+      // it to a blank walkthrough. Save here makes Publish self-contained: the
+      // published workspace always carries the steps the author just ordered.
+      // (`etag === null` only before the first load, when there's nothing to
+      // save; the gate already requires ≥1 step to reach this button.)
+      if (etag !== null) {
+        const saved = await storylineUpdate(
+          ctx.workspaceId,
+          etag,
+          steps.map((s, i) => ({
+            diffFilePath: s.path,
+            orderIndex: i,
+            introText: s.introText,
+          })),
+        );
+        setEtag(saved.etag);
+        setDirty(false);
+      }
       await workspacePublish({
         workspaceId: ctx.workspaceId,
         headRef: ctx.headRef,
@@ -460,9 +482,27 @@ export function Storyline({
 
           {(loadError || saveError || publishError || noCommittedChanges) && (
             <div style={{ padding: '10px 18px 0' }}>
-              {loadError && <div style={banner}>Couldn't load storyline: {loadError}</div>}
-              {saveError && <div style={banner}>Couldn't save storyline: {saveError}</div>}
-              {publishError && <div style={banner}>Couldn't publish: {publishError}</div>}
+              {loadError && (
+                <ErrorBanner
+                  title="Couldn't load storyline"
+                  detail={loadError}
+                  onClose={() => setLoadError(null)}
+                />
+              )}
+              {saveError && (
+                <ErrorBanner
+                  title="Couldn't save storyline"
+                  detail={saveError}
+                  onClose={() => setSaveError(null)}
+                />
+              )}
+              {publishError && (
+                <ErrorBanner
+                  title="Couldn't publish"
+                  detail={publishError}
+                  onClose={() => setPublishError(null)}
+                />
+              )}
               {noCommittedChanges && (
                 <div style={infoBanner}>
                   No committed changes against <span className="mono">{ctx.baseRef}</span> yet —

@@ -1201,6 +1201,7 @@ function BranchRowCompact({
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span
             className="mono"
+            title={b.name}
             style={{
               fontSize: 12,
               fontWeight: 600,
@@ -1296,6 +1297,7 @@ function WorkspaceRowCompact({
           }}
         >
           <span
+            title={w.title || w.head_ref}
             style={{
               fontSize: 12.5,
               fontWeight: 600,
@@ -1328,6 +1330,7 @@ function WorkspaceRowCompact({
         >
           <span
             className="mono"
+            title={w.head_ref}
             style={{
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -1414,6 +1417,7 @@ function OpenPrRowCompact({
           }}
         >
           <span
+            title={p.title}
             style={{
               fontSize: 12.5,
               fontWeight: 600,

@@ -3,6 +3,7 @@ import '@git-diff-view/react/styles/diff-view.css';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Avatar } from '../../components/Avatar';
+import { ErrorBanner } from '../../components/ErrorBanner';
 import { Icon } from '../../components/Icon';
 import { Markdown } from '../../components/Markdown';
 import { TitleBar } from '../../components/TitleBar';
@@ -299,7 +300,11 @@ export function ReviewStoryline({
 
         {loadError && (
           <div style={{ padding: '10px 16px 0' }}>
-            <div style={banner}>Couldn't load storyline: {loadError}</div>
+            <ErrorBanner
+              title="Couldn't load storyline"
+              detail={loadError}
+              onClose={() => setLoadError(null)}
+            />
           </div>
         )}
 
@@ -754,7 +759,7 @@ function StepDiff({
     );
   }
   if (error) {
-    return <div style={banner}>Couldn't load this file's diff: {error}</div>;
+    return <ErrorBanner title="Couldn't load this file's diff" detail={error} />;
   }
 
   return (

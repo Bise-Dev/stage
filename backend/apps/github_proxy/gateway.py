@@ -31,6 +31,15 @@ class GithubGateway:
                 "X-GitHub-Api-Version": "2022-11-28",
             },
             timeout=15.0,
+            # GitHub answers a renamed/transferred repo with 301/307/308 pointing
+            # at its canonical (id-based) URL. Without following, a GET's redirect
+            # body (a dict like {"message": "Moved Permanently", ...}) leaks into
+            # callers that expect the resource JSON — e.g. `list_open_pulls`
+            # returning that dict made `pull_request_open` raise an opaque
+            # KeyError. httpx preserves method+body across 307/308 and only drops
+            # the auth header on a cross-host hop (GitHub's stay same-host), so
+            # following is safe for our reads and writes alike.
+            follow_redirects=True,
         )
 
     def close(self) -> None:
