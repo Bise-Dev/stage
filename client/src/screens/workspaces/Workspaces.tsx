@@ -103,6 +103,7 @@ export function Workspaces({
   onStartSelfReview,
   onOpenStoryline,
   onOpenReview,
+  onOpenSettings,
   onSignOut,
 }: {
   user: User;
@@ -110,6 +111,7 @@ export function Workspaces({
   onStartSelfReview: () => void;
   onOpenStoryline: (ctx: StorylineCtx) => void;
   onOpenReview: (ctx: ReviewCtx) => void;
+  onOpenSettings: () => void;
   onSignOut: () => void;
 }) {
   const me = user.github_login;
@@ -497,6 +499,7 @@ export function Workspaces({
               slug={repoSlug}
               path={repoPath}
               onChangeRepo={onChangeRepo}
+              onOpenSettings={onOpenSettings}
               onSignOut={onSignOut}
             />
           </div>
@@ -825,11 +828,13 @@ function RepoMenu({
   slug,
   path,
   onChangeRepo,
+  onOpenSettings,
   onSignOut,
 }: {
   slug: string | null;
   path: string | null;
   onChangeRepo: () => void;
+  onOpenSettings: () => void;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -950,6 +955,18 @@ function RepoMenu({
             }}
           >
             Reveal in Finder
+          </MenuItem>
+          <div
+            aria-hidden="true"
+            style={{ height: 1, background: 'var(--hairline)', margin: '4px 0' }}
+          />
+          <MenuItem
+            onClick={() => {
+              setOpen(false);
+              onOpenSettings();
+            }}
+          >
+            Settings…
           </MenuItem>
           <div
             aria-hidden="true"
