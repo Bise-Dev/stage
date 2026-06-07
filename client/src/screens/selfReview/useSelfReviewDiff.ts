@@ -26,7 +26,9 @@ export type UseSelfReviewDiff = {
 /**
  * Owns the Self-Review diff and the scope toggle. Refetches on every
  * `repo-changed` event (the global watcher fires on .git/, working tree,
- * untracked dirs) and whenever the scope or `baseRef` changes.
+ * untracked dirs) and on `worktrees-changed` (fired by common-dir activity
+ * such as a `git fetch` in a linked worktree updating `origin/*`) and
+ * whenever the scope or `baseRef` changes.
  *
  * To make scope toggling feel instant we keep an in-memory cache keyed by
  * `(scope, baseRef)` — flipping back to a previously-seen scope swaps the
@@ -109,15 +111,19 @@ export function useSelfReviewDiff(
     fetchDiff();
   }, [fetchDiff, scope, baseRef]);
 
-  // Live refresh via the global watcher. A file change invalidates the cache
-  // for every scope — both modes' diffs are affected by a working-tree edit.
+  // Live refresh via the global watchers. A working-tree change (`repo-changed`)
+  // or common-dir activity (`worktrees-changed`, e.g. a `git fetch` updating
+  // `origin/*`) invalidates the cache for every scope and refetches — so the
+  // base diff redraws against a freshened remote default even in a linked
+  // worktree, whose fetch fires `worktrees-changed` rather than `repo-changed`.
   useEffect(() => {
-    const unlisten = listen('repo-changed', () => {
+    const refresh = () => {
       cacheRef.current.clear();
       fetchDiff();
-    });
+    };
+    const unlisten = [listen('repo-changed', refresh), listen('worktrees-changed', refresh)];
     return () => {
-      unlisten.then((u) => u());
+      for (const u of unlisten) u.then((f) => f());
     };
   }, [fetchDiff]);
 
