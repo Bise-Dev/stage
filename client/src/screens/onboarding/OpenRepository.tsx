@@ -11,7 +11,6 @@ import {
   repoSummary,
   setActiveRepo,
 } from '../../tauri';
-import { WizardRail } from './WizardRail';
 
 type SummaryState = { kind: 'loading' } | { kind: 'ready'; summary: RepoSummary };
 
@@ -157,8 +156,6 @@ export function OpenRepository({ onOpened, onBack }: Props) {
         className="flex flex-1 overflow-hidden"
         style={{ background: 'linear-gradient(180deg, #fbfaf8 0%, #f0eee9 100%)', minHeight: 0 }}
       >
-        <WizardRail active="openRepo" />
-
         <div className="flex flex-col flex-1 overflow-hidden" style={{ padding: '28px 36px' }}>
           <div
             style={{
