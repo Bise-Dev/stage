@@ -286,7 +286,6 @@ export function App() {
           onEnterSelfReview={startSelfReview}
           onChangeRepo={changeRepo}
           onOpenSettings={openSettings}
-          onSignIn={() => setView('signIn')}
         />
       );
     }
@@ -312,7 +311,6 @@ export function App() {
         onOpenStoryline={openStoryline}
         onOpenReview={openReview}
         onOpenSettings={openSettings}
-        onSignOut={signOut}
       />
     );
   };

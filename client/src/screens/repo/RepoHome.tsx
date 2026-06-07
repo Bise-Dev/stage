@@ -95,12 +95,10 @@ export function RepoHome({
   onEnterSelfReview,
   onChangeRepo,
   onOpenSettings,
-  onSignIn,
 }: {
   onEnterSelfReview: () => void;
   onChangeRepo: () => void;
   onOpenSettings: () => void;
-  onSignIn: () => void;
 }) {
   const [label, setLabel] = useState('…');
   const [repoPath, setRepoPath] = useState('');
@@ -289,8 +287,6 @@ export function RepoHome({
               path={repoPath || null}
               onChangeRepo={onChangeRepo}
               onOpenSettings={onOpenSettings}
-              authLabel="Sign in"
-              onAuth={onSignIn}
             />
           </div>
 

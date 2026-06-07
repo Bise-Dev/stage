@@ -107,7 +107,6 @@ export function Workspaces({
   onOpenStoryline,
   onOpenReview,
   onOpenSettings,
-  onSignOut,
 }: {
   user: User;
   onChangeRepo: () => void;
@@ -115,7 +114,6 @@ export function Workspaces({
   onOpenStoryline: (ctx: StorylineCtx) => void;
   onOpenReview: (ctx: ReviewCtx) => void;
   onOpenSettings: () => void;
-  onSignOut: () => void;
 }) {
   const me = user.github_login;
   const [repoSlug, setRepoSlug] = useState<string | null>(null);
@@ -545,8 +543,6 @@ export function Workspaces({
               path={repoPath}
               onChangeRepo={onChangeRepo}
               onOpenSettings={onOpenSettings}
-              authLabel="Sign out"
-              onAuth={onSignOut}
             />
           </div>
 
