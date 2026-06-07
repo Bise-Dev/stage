@@ -11,6 +11,7 @@ import {
   type OverviewOpenPrRow,
   type OverviewRow,
   type OverviewWorkspaceRow,
+  type ReviewCtx,
   type User,
   type WorkspaceCreated,
   type WorkspaceState,
@@ -72,17 +73,39 @@ function toStorylineCtx(w: OverviewWorkspaceRow): StorylineCtx {
   };
 }
 
+/** Build the read-only reviewer context from a published workspace row. Only
+ *  called for rows in the "Awaiting your review" column, which are always
+ *  published (`pr_number !== null`); the non-null assertion is guarded by the
+ *  filter that produces `reviewInReview`. */
+function toReviewCtx(w: OverviewWorkspaceRow): ReviewCtx {
+  return {
+    workspaceId: w.id,
+    owner: w.repo_owner,
+    repo: w.repo_name,
+    prNumber: w.pr_number ?? 0,
+    headRef: w.head_ref,
+    baseRef: w.base_ref,
+    title: w.title,
+    author: w.created_by.github_login,
+    state: w.state,
+    added: w.added,
+    removed: w.removed,
+  };
+}
+
 export function Workspaces({
   user,
   onChangeRepo,
   onStartSelfReview,
   onOpenStoryline,
+  onOpenReview,
   onSignOut,
 }: {
   user: User;
   onChangeRepo: () => void;
   onStartSelfReview: () => void;
   onOpenStoryline: (ctx: StorylineCtx) => void;
+  onOpenReview: (ctx: ReviewCtx) => void;
   onSignOut: () => void;
 }) {
   const me = user.github_login;
@@ -676,7 +699,13 @@ export function Workspaces({
                       count={reviewInReview.length}
                     >
                       {reviewInReview.filter(matchWorkspace).map((w) => (
-                        <WorkspaceRowCompact key={w.id} w={w} stats={wsStats(w)} reviewing />
+                        <WorkspaceRowCompact
+                          key={w.id}
+                          w={w}
+                          stats={wsStats(w)}
+                          reviewing
+                          onOpenReview={(ws) => onOpenReview(toReviewCtx(ws))}
+                        />
                       ))}
                     </Bucket>
                   )}
@@ -1244,12 +1273,14 @@ function WorkspaceRowCompact({
   reviewing,
   onBackToSelfReview,
   onOpenStoryline,
+  onOpenReview,
 }: {
   w: OverviewWorkspaceRow;
   stats: { added: number | null; removed: number | null };
   reviewing?: boolean;
   onBackToSelfReview?: (w: OverviewWorkspaceRow) => void;
   onOpenStoryline?: (w: OverviewWorkspaceRow) => void;
+  onOpenReview?: (w: OverviewWorkspaceRow) => void;
 }) {
   const st = STATES[w.state];
   return (
@@ -1331,6 +1362,17 @@ function WorkspaceRowCompact({
           style={{ flex: '0 0 auto' }}
         >
           <Icon name="doc-stack" size={10} color="var(--gray-700)" /> Storyline
+        </button>
+      )}
+      {onOpenReview && (
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => onOpenReview(w)}
+          title="Walk this workspace's storyline read-only"
+          style={{ flex: '0 0 auto' }}
+        >
+          <Icon name="eye" size={10} color="#fff" /> Review
         </button>
       )}
       {onBackToSelfReview && (

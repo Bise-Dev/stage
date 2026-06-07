@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { SignIn } from './screens/onboarding/SignIn';
+import { ReviewStoryline } from './screens/review/ReviewStoryline';
 import { SelfReview } from './screens/selfReview/SelfReview';
 import { Storyline, type StorylineCtx } from './screens/storyline/Storyline';
 import { Workspaces } from './screens/workspaces/Workspaces';
 import {
   type OpenIntent,
+  type ReviewCtx,
   type User,
   authBootstrap,
   authLogout,
@@ -15,7 +17,7 @@ import {
   takeOpenIntent,
 } from './tauri';
 
-type View = 'signIn' | 'openRepo' | 'workspaces' | 'selfReview' | 'storyline';
+type View = 'signIn' | 'openRepo' | 'workspaces' | 'selfReview' | 'storyline' | 'review';
 
 export function App() {
   // `booting` covers the async session validation at startup (ADR-0013). We
@@ -32,6 +34,8 @@ export function App() {
   const [localOnly, setLocalOnly] = useState(false);
   const [hasRepo, setHasRepo] = useState(false);
   const [storylineCtx, setStorylineCtx] = useState<StorylineCtx | null>(null);
+  // The published workspace being reviewed read-only (Step 2 reviewer flow).
+  const [reviewCtx, setReviewCtx] = useState<ReviewCtx | null>(null);
   // A `stage open` intent that arrived with no valid session (ADR-0013/0014):
   // we show SignIn first and retain it here so the author's auth choice — sign
   // in *or* "Stay offline" — then lands directly in Self-Review for the repo.
@@ -169,6 +173,16 @@ export function App() {
     setView('workspaces');
   }, []);
 
+  const openReview = useCallback((ctx: ReviewCtx) => {
+    setReviewCtx(ctx);
+    setView('review');
+  }, []);
+
+  const backFromReview = useCallback(() => {
+    setReviewCtx(null);
+    setView('workspaces');
+  }, []);
+
   // Sign out: `auth_logout` revokes the session server-side and clears the
   // persisted token (ADR-0013). It clears memory + disk even if the server call
   // fails, so the author is locally signed out regardless; route back to SignIn
@@ -182,6 +196,7 @@ export function App() {
     setUser(null);
     setHasRepo(false);
     setStorylineCtx(null);
+    setReviewCtx(null);
     setView('signIn');
   }, []);
 
@@ -209,12 +224,16 @@ export function App() {
   if (view === 'storyline' && storylineCtx) {
     return <Storyline ctx={storylineCtx} onBack={backToWorkspaces} />;
   }
+  if (view === 'review' && reviewCtx) {
+    return <ReviewStoryline ctx={reviewCtx} onBack={backFromReview} />;
+  }
   return (
     <Workspaces
       user={user}
       onChangeRepo={changeRepo}
       onStartSelfReview={startSelfReview}
       onOpenStoryline={openStoryline}
+      onOpenReview={openReview}
       onSignOut={signOut}
     />
   );

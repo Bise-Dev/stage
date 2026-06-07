@@ -212,6 +212,47 @@ export const authLogout = () => invoke<void>('auth_logout');
 export const githubPrs = (role: 'author' | 'reviewer') =>
   invoke<GithubPrSearchItem[]>('github_prs', { role });
 
+/** The GitHub file object for one path in a PR, as the backend proxies it
+ *  (raw GitHub shape; only the fields the reviewer viewer maps are typed).
+ *  `status` is GitHub's vocabulary (`removed`, not `deleted`); `patch` is
+ *  absent for binary files and oversize diffs. */
+export type GithubPrFile = {
+  filename: string;
+  previous_filename?: string;
+  status: 'added' | 'removed' | 'modified' | 'renamed' | 'copied' | 'changed' | 'unchanged';
+  additions: number;
+  deletions: number;
+  patch?: string;
+};
+
+/** Fetch one file's diff from a PR on GitHub, via the backend (ADR-0001). The
+ *  reviewer storyline viewer uses this because the reviewer may not have the
+ *  branch checked out locally. A path no longer in the PR (a stale step)
+ *  rejects with the backend's 404. */
+export const prFileDiff = (owner: string, repo: string, prNumber: number, filePath: string) =>
+  invoke<GithubPrFile>('pr_file_diff', { owner, repo, prNumber, filePath });
+
+/** Context for opening a published workspace in the read-only reviewer viewer
+ *  (Step 2 of the reviewer flow). Built from an `OverviewWorkspaceRow` whose
+ *  `pr_number` is non-null (only published workspaces are reviewable). Carries
+ *  the overview row's display fields so the viewer's PR-context subheader
+ *  renders without a second fetch. */
+export type ReviewCtx = {
+  workspaceId: string;
+  owner: string;
+  repo: string;
+  prNumber: number;
+  headRef: string;
+  baseRef: string;
+  title: string;
+  /** GitHub login of the workspace author (whose storyline you're reviewing). */
+  author: string;
+  state: WorkspaceState;
+  /** PR-wide line counts from the overview (GitHub), or null if unavailable. */
+  added: number | null;
+  removed: number | null;
+};
+
 // --- Workspaces ---
 export type WorkspaceCreateInput = {
   repoOwner: string;
