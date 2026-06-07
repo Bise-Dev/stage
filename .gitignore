@@ -403,6 +403,9 @@ $RECYCLE.BIN/
 # Tauri-generated schemas (regenerated from tauri.conf.json + plugins on build)
 client/src-tauri/gen/
 
+# OpenAPI schema generated from Django app on server start
+backend/generated/
+
 # The client cargo workspace ships an app binary — keep its lockfile.
 !client/Cargo.lock
 
