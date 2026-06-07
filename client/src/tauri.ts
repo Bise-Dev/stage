@@ -39,6 +39,10 @@ export type BranchInfo = {
 export type FetchOutcome = {
   remote: string;
 };
+export type PushOutcome = {
+  remote: string;
+  branch: string;
+};
 
 export const setActiveRepo = (path: string) => invoke<RepoInfo>('set_active_repo', { path });
 
@@ -111,6 +115,11 @@ export const selfReviewDiff = (scope: SelfReviewScope, baseRef: string | null) =
   invoke<SelfReviewDiff>('self_review_diff', { scope, baseRef });
 
 export const gitFetch = () => invoke<FetchOutcome>('git_fetch');
+
+/** Push `branch` to the primary remote with the user's own git credentials
+ *  (ADR-0016), setting upstream. Surfaces git's stderr verbatim on failure
+ *  (no write access, protected branch, …). */
+export const gitPush = (branch: string) => invoke<PushOutcome>('git_push', { branch });
 
 // --- Repo overview (Stage + GitHub aggregation; see docs/adr/0009) ---
 export type WorkspaceState =
@@ -227,6 +236,22 @@ export const workspaceCreate = (input: WorkspaceCreateInput) =>
 
 export const workspaceDelete = (workspaceId: string) =>
   invoke<void>('workspace_delete', { workspaceId });
+
+/**
+ * Publish a workspace to GitHub. Pushes its branch with the user's own git
+ * credentials (ADR-0016), then — unless `alreadyPublished` — opens or adopts the
+ * PR via the backend. With `alreadyPublished` it only re-pushes ("Push update").
+ * The caller re-fetches the overview; the resolved value (the raw backend
+ * `{workspace, pr, warnings}` envelope, or `{ pushed: true }` for a push-only
+ * update) is not otherwise consumed.
+ */
+export const workspacePublish = (input: {
+  workspaceId: string;
+  headRef: string;
+  title: string;
+  body: string | null;
+  alreadyPublished: boolean;
+}) => invoke<unknown>('workspace_publish', input);
 
 // --- Storyline ---
 // Returned by GET/PUT .../storyline/ (snake_case — matches OverviewRow convention).

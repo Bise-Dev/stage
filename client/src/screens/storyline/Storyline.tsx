@@ -9,6 +9,7 @@ import {
   selfReviewDiff,
   storylineGet,
   storylineUpdate,
+  workspacePublish,
 } from '../../tauri';
 import { IntroStep } from './IntroStep';
 import { OrderStep } from './OrderStep';
@@ -22,6 +23,11 @@ export type StorylineCtx = {
   headRef: string;
   baseRef: string;
   title: string;
+  /** PR number once published, else null. Drives the publish button: null →
+   *  "Open PR" (push + open/adopt the PR), non-null → "Push update" (push only).
+   *  Fixed for the screen's lifetime — Open PR navigates back, and re-entry from
+   *  an in-review row carries the now-set number. */
+  prNumber: number | null;
 };
 
 const banner: React.CSSProperties = {
@@ -49,6 +55,46 @@ function msgOf(e: unknown): string {
     : String(e);
 }
 
+/** Wraps the publish button so a *disabled* (gated) button can still explain
+ *  itself: hovering the wrapper shows `reason` as an overlay. A disabled button
+ *  fires no mouse events of its own, so the hover lives on the span around it.
+ *  When `reason` is null (button enabled / publishing) it's a plain pass-through. */
+function PublishGate({ reason, children }: { reason: string | null; children: React.ReactNode }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <span
+      style={{ position: 'relative', display: 'inline-flex' }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      {children}
+      {reason && hover && (
+        <span
+          role="tooltip"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            right: 0,
+            zIndex: 60,
+            width: 230,
+            padding: '8px 10px',
+            background: 'var(--gray-900)',
+            color: '#fff',
+            fontSize: 11.5,
+            lineHeight: 1.45,
+            textAlign: 'left',
+            borderRadius: 'var(--r-md)',
+            boxShadow: 'var(--sh-pop)',
+            pointerEvents: 'none',
+          }}
+        >
+          {reason}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function Storyline({
   ctx,
   onBack,
@@ -56,7 +102,9 @@ export function Storyline({
   ctx: StorylineCtx;
   onBack: () => void;
 }) {
-  const [step, setStep] = useState<WizardStep>('order');
+  // Fresh workspaces start on ordering; an already-published one opens straight
+  // on the intro step, where the "Push update" button lives.
+  const [step, setStep] = useState<WizardStep>(ctx.prNumber === null ? 'order' : 'intro');
   const [steps, setSteps] = useState<Step[]>([]);
   const [pool, setPool] = useState<ChangedFile[]>([]);
   const [etag, setEtag] = useState<string | null>(null);
@@ -80,6 +128,8 @@ export function Storyline({
   // a brand-new workspace is empty). Cleared on load and after a successful save.
   const [dirty, setDirty] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -238,6 +288,49 @@ export function Storyline({
     () => steps.filter((s) => s.introText.trim().length > 0).length,
     [steps],
   );
+  // Ready to publish: at least one step, and at least one of them carries a
+  // non-empty intro (steps without an intro still publish, just without
+  // commentary). When not ready, `publishBlockedReason` is the human
+  // explanation shown on hover over the disabled "Open PR" button — so a no-op
+  // click is never silent.
+  const publishBlockedReason =
+    steps.length === 0
+      ? 'Add at least one step to the storyline to open a PR.'
+      : withIntro === 0
+        ? 'Write an intro for at least one step to open a PR.'
+        : null;
+  const readyToPublish = publishBlockedReason === null;
+  const published = ctx.prNumber !== null;
+
+  // Publish to GitHub. First publish (prNumber null) pushes the branch with the
+  // user's own git credentials (ADR-0016) and opens/adopts the PR; a published
+  // workspace just re-pushes ("Push update"). On success we leave the composer —
+  // Workspaces re-fetches the overview on mount, so the row reflects the new PR.
+  const publish = async () => {
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      await workspacePublish({
+        workspaceId: ctx.workspaceId,
+        headRef: ctx.headRef,
+        // The PR title can't be blank (backend rejects it). Fall back to the
+        // branch name when the workspace has no title — same convention as the
+        // New Workspace modal, which uses the branch as the title placeholder.
+        title: ctx.title.trim() || ctx.headRef,
+        body: null,
+        alreadyPublished: published,
+      });
+    } catch (e) {
+      // Fail loud (CLAUDE.md): surface git's / the backend's message verbatim;
+      // no PR was created/updated on failure, so nothing to roll back.
+      console.warn('workspace_publish_failed', e);
+      setPublishError(msgOf(e));
+      setPublishing(false);
+      return;
+    }
+    // Success: the screen is unmounting, so don't touch `publishing` again.
+    onBack();
+  };
 
   // Empty list because the branch has no *committed* changes against its base,
   // even though the working tree does. The file list comes from a commit-tree
@@ -326,16 +419,50 @@ export function Storyline({
                 Next: Write intros <Icon name="chevron-right" size={11} color="#fff" />
               </button>
             ) : (
-              <button type="button" className="btn" onClick={() => goToStep('order')}>
-                <Icon name="chevron-left" size={11} /> Back to ordering
-              </button>
+              <>
+                <button type="button" className="btn" onClick={() => goToStep('order')}>
+                  <Icon name="chevron-left" size={11} /> Back to ordering
+                </button>
+                {published ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={publish}
+                    disabled={publishing}
+                    title="Push new commits to the PR branch on GitHub"
+                    style={{ opacity: publishing ? 0.6 : 1 }}
+                  >
+                    {publishing ? 'Pushing…' : 'Push update'}
+                  </button>
+                ) : (
+                  // Gate: at least one step with an intro. The button stays
+                  // disabled until then, but the wrapper surfaces *why* on hover
+                  // — a disabled button doesn't fire its own mouse events, so the
+                  // hover lives on the span around it.
+                  <PublishGate reason={publishing ? null : publishBlockedReason}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={publish}
+                      disabled={publishing || !readyToPublish}
+                      style={{
+                        opacity: publishing || !readyToPublish ? 0.5 : 1,
+                        cursor: !readyToPublish && !publishing ? 'not-allowed' : undefined,
+                      }}
+                    >
+                      {publishing ? 'Opening PR…' : 'Open PR'}
+                    </button>
+                  </PublishGate>
+                )}
+              </>
             )}
           </div>
 
-          {(loadError || saveError || noCommittedChanges) && (
+          {(loadError || saveError || publishError || noCommittedChanges) && (
             <div style={{ padding: '10px 18px 0' }}>
               {loadError && <div style={banner}>Couldn't load storyline: {loadError}</div>}
               {saveError && <div style={banner}>Couldn't save storyline: {saveError}</div>}
+              {publishError && <div style={banner}>Couldn't publish: {publishError}</div>}
               {noCommittedChanges && (
                 <div style={infoBanner}>
                   No committed changes against <span className="mono">{ctx.baseRef}</span> yet —

@@ -93,6 +93,38 @@ impl Client {
         resp.json().await.map_err(|e| Self::json_err(status, e))
     }
 
+    /// Open (or adopt) the GitHub PR for a workspace.
+    /// POST /api/v1/workspaces/{id}/open-pr/ with `{title, body?, draft}`.
+    /// The backend pushes nothing — the client pushes the branch first
+    /// (ADR-0016); this only opens/adopts the PR and records `pr_number`.
+    /// Returns the raw `{workspace, pr, warnings}` envelope as JSON; the webview
+    /// re-fetches the overview rather than mapping this body.
+    pub async fn open_pr(
+        &self,
+        token: &str,
+        workspace_id: &str,
+        title: &str,
+        body: Option<&str>,
+        draft: bool,
+    ) -> Result<serde_json::Value, Error> {
+        let url = self
+            .base_url
+            .join(&format!("api/v1/workspaces/{workspace_id}/open-pr/"))
+            .unwrap();
+        let mut payload = serde_json::json!({ "title": title, "draft": draft });
+        if let Some(b) = body {
+            payload["body"] = serde_json::Value::String(b.to_string());
+        }
+        let resp = self
+            .send(self.http.post(url).bearer_auth(token).json(&payload))
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        resp.json().await.map_err(|e| Self::json_err(status, e))
+    }
+
     /// Delete a pre-publish Stage workspace. DELETE /api/v1/workspaces/{id}/.
     /// Returns () — the backend replies 204 with no body, so nothing is parsed.
     pub async fn workspace_delete(&self, token: &str, workspace_id: &str) -> Result<(), Error> {
@@ -170,6 +202,43 @@ mod tests {
             }
             other => panic!("expected Unexpected 409, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn open_pr_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/api/v1/workspaces/11111111-1111-1111-1111-111111111111/open-pr/",
+            ))
+            .and(header_exists("authorization"))
+            .and(body_partial_json(serde_json::json!({
+                "title": "My PR",
+                "draft": false
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "workspace": {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "pr_number": 7
+                },
+                "pr": { "number": 7, "html_url": "https://github.com/o/r/pull/7" },
+                "warnings": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let v = client
+            .open_pr(
+                "stg_abc",
+                "11111111-1111-1111-1111-111111111111",
+                "My PR",
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(v["pr"]["number"], 7);
     }
 
     #[tokio::test]
