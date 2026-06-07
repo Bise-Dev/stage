@@ -116,16 +116,25 @@ export function useSelfReviewDiff(
   // `origin/*`) invalidates the cache for every scope and refetches — so the
   // base diff redraws against a freshened remote default even in a linked
   // worktree, whose fetch fires `worktrees-changed` rather than `repo-changed`.
+  //
+  // Subscribe ONCE and call the latest `fetchDiff` through a ref. Re-subscribing
+  // on every `fetchDiff` identity change (it changes with `scope`/`baseRef`) and
+  // re-registering via the async `listen()` leaked handlers whose captured
+  // `scope` was stale: on a `worktrees-changed` burst the stale `workdir`-scope
+  // listeners refetched 0 files (clean tree) while the live `base`-scope one
+  // refetched the real diff, and the two raced — flickering the diff to empty.
+  const fetchDiffRef = useRef(fetchDiff);
+  fetchDiffRef.current = fetchDiff;
   useEffect(() => {
     const refresh = () => {
       cacheRef.current.clear();
-      fetchDiff();
+      void fetchDiffRef.current();
     };
     const unlisten = [listen('repo-changed', refresh), listen('worktrees-changed', refresh)];
     return () => {
       for (const u of unlisten) u.then((f) => f());
     };
-  }, [fetchDiff]);
+  }, []);
 
   return { diff, scope, setScope, loading, error };
 }
