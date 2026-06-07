@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
-import { type BranchInfo, getActiveRepo, gitLocalBranches, repoSummary } from '../../tauri';
+import {
+  type BaseOptions,
+  type BranchInfo,
+  getActiveRepo,
+  gitFetch,
+  gitLocalBranches,
+  repoSummary,
+  selfReviewBaseOptions,
+} from '../../tauri';
 import { DebriefRail } from './DebriefRail';
 import { DiffPane, type DiffPaneHandle, type ViewLayout, type ViewMode } from './DiffPane';
 import { FileList } from './FileList';
@@ -38,6 +46,7 @@ export function SelfReview({
   // comparison should be configurable). `null` until bootstrap resolves it.
   const [baseRef, setBaseRefState] = useState<string | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
+  const [baseOptions, setBaseOptions] = useState<BaseOptions | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('unified');
   const [viewLayout, setViewLayoutState] = useState<ViewLayout>(loadLayout);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -70,10 +79,13 @@ export function SelfReview({
         setRepoPath(r.path);
         const sum = await repoSummary(r.path);
         setDefaultBranch(sum.defaultBranch);
-        // Resolve the base: a previously-picked branch wins, else the repo
-        // default. The branch list backs the Subheader's picker.
+        const opts = await selfReviewBaseOptions();
+        setBaseOptions(opts);
+        // Resolve the base: a previously-picked branch wins, else the recommended
+        // ref (the remote default when fetched — ADR-0016 — so a stale local
+        // default in a worktree doesn't skew the diff).
         const persisted = localStorage.getItem(`${BASE_KEY_PREFIX}${r.path}`);
-        setBaseRefState(persisted ?? sum.defaultBranch);
+        setBaseRefState(persisted ?? opts.recommended);
         setBranches(await gitLocalBranches());
       } catch (e) {
         console.warn('self_review_bootstrap_failed', e);
@@ -89,6 +101,23 @@ export function SelfReview({
     },
     [repoPath],
   );
+
+  // Refresh the remote-tracking refs so the base diff reflects the current
+  // remote default. After fetch, re-read base options (behind-count + last-fetch
+  // time); the diff hook refreshes via the repo watcher.
+  const [fetching, setFetching] = useState(false);
+  const refreshBase = useCallback(async () => {
+    setFetching(true);
+    try {
+      await gitFetch();
+      setBaseOptions(await selfReviewBaseOptions());
+    } catch (e) {
+      console.warn('self_review_fetch_failed', e);
+      setBootstrapError(String(e));
+    } finally {
+      setFetching(false);
+    }
+  }, []);
 
   const { diff, scope, setScope, loading, error } = useSelfReviewDiff(repoPath, baseRef);
 
@@ -296,11 +325,14 @@ export function SelfReview({
           scope={scope}
           defaultBranch={defaultBranch}
           baseRef={baseRef}
+          baseOptions={baseOptions}
           branches={branches}
           viewedCount={viewed.size}
           onExit={onExit}
           onScopeChange={setScope}
           onBaseChange={setBaseRef}
+          onRefreshBase={refreshBase}
+          fetching={fetching}
           onCopyAsMarkdown={onCopy}
           onReadyToShare={onReadyToShare}
           copyState={copyState}

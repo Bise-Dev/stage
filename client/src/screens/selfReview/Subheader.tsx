@@ -1,6 +1,6 @@
 import { Dropdown } from '../../components/Dropdown';
 import { Icon } from '../../components/Icon';
-import type { BranchInfo, SelfReviewDiff, SelfReviewScope } from '../../tauri';
+import type { BaseOptions, BranchInfo, SelfReviewDiff, SelfReviewScope } from '../../tauri';
 
 /**
  * Top bar of the Self-Review screen. Adapts to the scope toggle:
@@ -16,11 +16,14 @@ export function Subheader({
   scope,
   defaultBranch,
   baseRef,
+  baseOptions,
   branches,
   viewedCount,
   onExit,
   onScopeChange,
   onBaseChange,
+  onRefreshBase,
+  fetching,
   onCopyAsMarkdown,
   onReadyToShare,
   copyState,
@@ -30,12 +33,17 @@ export function Subheader({
   defaultBranch: string | null;
   /** The author-chosen base ref the `base`-scope diff compares against. */
   baseRef: string | null;
+  /** Resolved base options (recommended ref, behind-count, last fetch). */
+  baseOptions: BaseOptions | null;
   /** Local branches backing the base picker. */
   branches: BranchInfo[];
   viewedCount: number;
   onExit: () => void;
   onScopeChange: (s: SelfReviewScope) => void;
   onBaseChange: (base: string) => void;
+  /** Fetch the remote and re-resolve the base options. */
+  onRefreshBase: () => void;
+  fetching: boolean;
   onCopyAsMarkdown: () => void;
   onReadyToShare: () => void;
   copyState: 'idle' | 'copied' | 'error';
@@ -73,24 +81,28 @@ export function Subheader({
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {scope === 'base' ? (
           <>
-            {/* Base picker — the comparison base is author-configurable, not
-                fixed to the default branch. Guard against the resolved base not
-                yet being in the loaded branch list (branches load async). */}
             <Dropdown
               mono
               ariaLabel="Comparison base branch"
               title="Branch to compare against"
               value={base}
               onChange={onBaseChange}
-              style={{ maxWidth: 220 }}
-              options={
-                branches.some((b) => b.name === base)
-                  ? branches.map((b) => ({ value: b.name, label: b.name }))
-                  : [
-                      { value: base, label: base },
-                      ...branches.map((b) => ({ value: b.name, label: b.name })),
-                    ]
-              }
+              style={{ maxWidth: 240 }}
+              options={(() => {
+                const opts: Array<{ value: string; label: string }> = [];
+                const seen = new Set<string>();
+                const push = (value: string, label: string) => {
+                  if (seen.has(value)) return;
+                  seen.add(value);
+                  opts.push({ value, label });
+                };
+                if (baseOptions?.remoteDefault) {
+                  push(baseOptions.remoteDefault, `${baseOptions.remoteDefault} (remote default)`);
+                }
+                push(base, base);
+                for (const b of branches) push(b.name, b.name);
+                return opts;
+              })()}
             />
             <Icon name="arrow-right" size={11} color="var(--gray-400)" />
             <span
@@ -99,6 +111,12 @@ export function Subheader({
             >
               {branch}
             </span>
+            <BaseFreshness
+              baseOptions={baseOptions}
+              base={base}
+              fetching={fetching}
+              onRefreshBase={onRefreshBase}
+            />
           </>
         ) : (
           <>
@@ -171,4 +189,52 @@ export function Subheader({
       </button>
     </div>
   );
+}
+
+/** Shows "N behind origin" when the selected base is a stale local default, plus
+ *  the last-fetch time and a Refresh (fetch) button. */
+function BaseFreshness({
+  baseOptions,
+  base,
+  fetching,
+  onRefreshBase,
+}: {
+  baseOptions: BaseOptions | null;
+  base: string;
+  fetching: boolean;
+  onRefreshBase: () => void;
+}) {
+  if (!baseOptions) return null;
+  const ld = baseOptions.localDefault;
+  // Warn only when the author picked the LOCAL default and it trails the remote.
+  const behindWarning =
+    ld && base === ld.name && ld.behind > 0 ? `${ld.behind} behind origin` : null;
+  const fetched = baseOptions.lastFetchSecs
+    ? `fetched ${relTime(baseOptions.lastFetchSecs)}`
+    : 'never fetched';
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+      {behindWarning && <span style={{ color: 'var(--orange)' }}>{behindWarning}</span>}
+      <span style={{ color: 'var(--gray-500)' }}>{fetched}</span>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        onClick={onRefreshBase}
+        disabled={fetching}
+        style={{ padding: '0 6px', opacity: fetching ? 0.5 : 1 }}
+        title="git fetch --prune"
+      >
+        {fetching ? 'Refreshing…' : 'Refresh'}
+      </button>
+    </span>
+  );
+}
+
+/** Compact relative time from epoch seconds (e.g. "2h ago"). */
+function relTime(epochSecs: number): string {
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - epochSecs);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
