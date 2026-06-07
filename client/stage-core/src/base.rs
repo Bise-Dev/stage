@@ -55,6 +55,8 @@ pub fn base_options(repo_path: &Path) -> Result<BaseOptions, StageError> {
     let local_default = match (&default_name, &remote_default) {
         (Some(name), Some(remote)) => Some(LocalDefault {
             name: name.clone(),
+            // `unwrap_or(0)` here means "not locally comparable" (e.g. the local
+            // default branch doesn't exist), not "up to date".
             behind: behind_count(&repo, name, remote).unwrap_or(0),
         }),
         (Some(name), None) => Some(LocalDefault {
