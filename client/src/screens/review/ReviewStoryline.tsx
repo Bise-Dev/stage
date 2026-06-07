@@ -70,7 +70,17 @@ function toFileChange(f: GithubPrFile): SelfReviewFileChange {
         : f.status === 'renamed'
           ? 'renamed'
           : 'modified';
-  const patch = f.patch ?? '';
+  const raw = f.patch ?? '';
+  // GitHub's PR-file `patch` is header-less — it starts at the first `@@` hunk.
+  // The @git-diff-view parser, though, consumes lines looking for the `---`/`+++`
+  // file-header pair *before* it will read any hunks, so a header-less patch
+  // renders blank. Synthesize that header (the renderer takes the displayed file
+  // names from `oldFile`/`newFile`, not from these lines, so the paths here only
+  // need to satisfy the parser). This matches the headered patches the Rust
+  // `self_review_diff` emits, which the same renderer already handles.
+  const patch = raw
+    ? `--- a/${f.previous_filename ?? f.filename}\n+++ b/${f.filename}\n${raw}`
+    : '';
   return {
     path: f.filename,
     oldPath: f.previous_filename ?? null,
@@ -80,7 +90,7 @@ function toFileChange(f: GithubPrFile): SelfReviewFileChange {
     patch,
     // No patch from GitHub = binary or too large to inline; there's no textual
     // diff to render either way.
-    isBinary: patch.length === 0,
+    isBinary: raw.length === 0,
     isTruncated: false,
   };
 }
