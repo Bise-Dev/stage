@@ -409,6 +409,9 @@ client/src-tauri/gen/
 # Planning docs are local working notes, not committed (see CLAUDE.md).
 docs/plans/
 
+# Brainstorming visual-companion scratch (mockups, server state)
+.superpowers/
+
 # TS incremental build artifacts
 *.tsbuildinfo
 
