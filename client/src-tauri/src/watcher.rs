@@ -21,6 +21,10 @@ pub struct WatcherHandle(#[allow(dead_code)] Box<dyn std::any::Any + Send + Sync
 ///   Self-Review screen live-refreshes when the `stage` CLI (or this app)
 ///   writes a Debrief or Review note. The store is a SQLite DB outside the repo
 ///   (ADR-0011).
+/// - the **common directory** (recursive) → emits `worktrees-changed` when an
+///   external tool (e.g. agent-deck) adds or removes a worktree under
+///   `<common_dir>/worktrees/`, so the worktree list refreshes without requiring
+///   a manual reload.
 ///
 /// We watch the **main DB file specifically, not its directory**. A SQLite read
 /// in WAL mode creates and then deletes sibling `-wal`/`-shm` files on connection
@@ -31,10 +35,14 @@ pub struct WatcherHandle(#[allow(dead_code)] Box<dyn std::any::Any + Send + Sync
 /// file alone catches writes and filters out read churn. The store is opened
 /// once first so the file exists (and is migrated) before the watch attaches.
 ///
-/// Both watchers fire on a 500ms debounce, which absorbs the burst of events a
-/// single logical change produces. No ignore filters on the repo watch today —
+/// All watchers fire on a 500ms debounce, which absorbs the burst of events a
+/// single logical change produces. No ignore filters on the repo watch today --
 /// repos with heavy build output emit lots of events; the debounce absorbs them.
-pub fn spawn(app: AppHandle, repo_path: PathBuf) -> Result<WatcherHandle, AppError> {
+pub fn spawn(
+    app: AppHandle,
+    repo_path: PathBuf,
+    common_dir: PathBuf,
+) -> Result<WatcherHandle, AppError> {
     let repo_watch = watch_path(
         app.clone(),
         &repo_path,
@@ -48,13 +56,29 @@ pub fn spawn(app: AppHandle, repo_path: PathBuf) -> Result<WatcherHandle, AppErr
     let store_path = default_store_path()?;
     Store::open(&store_path)?;
     let store_watch = watch_path(
-        app,
+        app.clone(),
         &store_path,
         RecursiveMode::NonRecursive,
         "debrief-changed",
     )?;
 
-    Ok(WatcherHandle(Box::new((repo_watch, store_watch))))
+    // Worktree add/remove (e.g. agent-deck) lands under `<common_dir>/worktrees/`.
+    // Watch the common dir so the list refreshes regardless of which worktree is
+    // focused -- the repo watch above only covers the focused dir, and a linked
+    // worktree's common dir is outside it. Re-listing worktrees is a read, so
+    // unlike the store watch there is no write-feedback loop (ADR-0016).
+    let worktrees_watch = watch_path(
+        app,
+        &common_dir,
+        RecursiveMode::Recursive,
+        "worktrees-changed",
+    )?;
+
+    Ok(WatcherHandle(Box::new((
+        repo_watch,
+        store_watch,
+        worktrees_watch,
+    ))))
 }
 
 /// Spawn one debounced watcher over `path`, emitting `event` (no payload) on any

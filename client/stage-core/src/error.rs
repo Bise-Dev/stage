@@ -19,6 +19,9 @@ pub enum StageError {
     /// A diff computation failed with extra context beyond the raw git2 error.
     #[error("{0}")]
     Diff(String),
+    /// Enumerating worktrees via the system `git` failed; carries git's stderr.
+    #[error("git worktree: {0}")]
+    Worktree(String),
     #[error("git: {0}")]
     Git(#[from] git2::Error),
     #[error("store: {0}")]

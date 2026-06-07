@@ -4,10 +4,14 @@ import { type SelfReviewDiff, type SelfReviewScope, selfReviewDiff } from '../..
 
 const SCOPE_KEY_PREFIX = 'selfReview:scope:';
 
+// Default to the Base view: a Self-Review is opened to review the whole change
+// (committed branch work, which `base` includes), so an all-committed branch —
+// the normal state at an agent handoff — shows its diff on open instead of an
+// empty "Uncommitted" view. An explicit `workdir` pick still persists.
 function loadScope(repoPath: string | null): SelfReviewScope {
-  if (!repoPath) return 'workdir';
+  if (!repoPath) return 'base';
   const v = localStorage.getItem(`${SCOPE_KEY_PREFIX}${repoPath}`);
-  return v === 'base' ? 'base' : 'workdir';
+  return v === 'workdir' ? 'workdir' : 'base';
 }
 
 function saveScope(repoPath: string | null, scope: SelfReviewScope) {
@@ -21,12 +25,17 @@ export type UseSelfReviewDiff = {
   setScope: (s: SelfReviewScope) => void;
   loading: boolean;
   error: string | null;
+  /** File count of the uncommitted (workdir-scope) diff, for the toggle badge.
+   *  `null` until first resolved. */
+  uncommittedCount: number | null;
 };
 
 /**
  * Owns the Self-Review diff and the scope toggle. Refetches on every
  * `repo-changed` event (the global watcher fires on .git/, working tree,
- * untracked dirs) and whenever the scope or `baseRef` changes.
+ * untracked dirs) and on `worktrees-changed` (fired by common-dir activity
+ * such as a `git fetch` in a linked worktree updating `origin/*`) and
+ * whenever the scope or `baseRef` changes.
  *
  * To make scope toggling feel instant we keep an in-memory cache keyed by
  * `(scope, baseRef)` — flipping back to a previously-seen scope swaps the
@@ -48,6 +57,9 @@ export function useSelfReviewDiff(
   // Cache keyed by `${scope}:${baseRef ?? ''}`. Holds the most recent payload
   // for each (scope, base) we've fetched in this session.
   const cacheRef = useRef<Map<string, SelfReviewDiff>>(new Map());
+  // File count of the uncommitted (workdir-scope) diff, surfaced on the
+  // "Uncommitted" toggle regardless of the active scope. `null` = not yet known.
+  const [uncommittedCount, setUncommittedCount] = useState<number | null>(null);
 
   // Reload persisted scope when the repo changes underneath us, and drop the
   // cache — different repo means different diffs.
@@ -100,6 +112,32 @@ export function useSelfReviewDiff(
     }
   }, [scope, baseRef]);
 
+  // The uncommitted file count for the "Uncommitted" toggle. When that scope is
+  // active the main `diff` already IS the workdir diff, so the count is derived
+  // from it (effect below) and this fetch is skipped; otherwise fetch a workdir
+  // diff just for its file count. Reuses `selfReviewDiff`; a clean tree = 0 files.
+  const fetchUncommittedCount = useCallback(async () => {
+    if (!repoPath || scope === 'workdir') return;
+    try {
+      const wd = await selfReviewDiff('workdir', null);
+      setUncommittedCount(wd.files.length);
+    } catch (e) {
+      console.warn('uncommitted_count_failed', e);
+      // Keep the last known count; a transient git lock shouldn't blank the badge.
+    }
+  }, [repoPath, scope]);
+
+  // When viewing Uncommitted, the loaded diff IS the uncommitted set — derive the
+  // count from it directly (no second git call).
+  useEffect(() => {
+    if (scope === 'workdir' && diff) setUncommittedCount(diff.files.length);
+  }, [scope, diff]);
+
+  // Initial + on repo/scope change (in base scope): keep the count fresh.
+  useEffect(() => {
+    void fetchUncommittedCount();
+  }, [fetchUncommittedCount]);
+
   // Initial + scope/base changes. We only show the spinner if we have nothing
   // cached for the new scope — otherwise the optimistic swap above already
   // populated `diff` and the user shouldn't see a loading state.
@@ -109,17 +147,33 @@ export function useSelfReviewDiff(
     fetchDiff();
   }, [fetchDiff, scope, baseRef]);
 
-  // Live refresh via the global watcher. A file change invalidates the cache
-  // for every scope — both modes' diffs are affected by a working-tree edit.
+  // Live refresh via the global watchers. A working-tree change (`repo-changed`)
+  // or common-dir activity (`worktrees-changed`, e.g. a `git fetch` updating
+  // `origin/*`) invalidates the cache for every scope and refetches — so the
+  // base diff redraws against a freshened remote default even in a linked
+  // worktree, whose fetch fires `worktrees-changed` rather than `repo-changed`.
+  //
+  // Subscribe ONCE and call the latest `fetchDiff` through a ref. Re-subscribing
+  // on every `fetchDiff` identity change (it changes with `scope`/`baseRef`) and
+  // re-registering via the async `listen()` leaked handlers whose captured
+  // `scope` was stale: on a `worktrees-changed` burst the stale `workdir`-scope
+  // listeners refetched 0 files (clean tree) while the live `base`-scope one
+  // refetched the real diff, and the two raced — flickering the diff to empty.
+  const fetchDiffRef = useRef(fetchDiff);
+  fetchDiffRef.current = fetchDiff;
+  const fetchCountRef = useRef(fetchUncommittedCount);
+  fetchCountRef.current = fetchUncommittedCount;
   useEffect(() => {
-    const unlisten = listen('repo-changed', () => {
+    const refresh = () => {
       cacheRef.current.clear();
-      fetchDiff();
-    });
-    return () => {
-      unlisten.then((u) => u());
+      void fetchDiffRef.current();
+      void fetchCountRef.current();
     };
-  }, [fetchDiff]);
+    const unlisten = [listen('repo-changed', refresh), listen('worktrees-changed', refresh)];
+    return () => {
+      for (const u of unlisten) u.then((f) => f());
+    };
+  }, []);
 
-  return { diff, scope, setScope, loading, error };
+  return { diff, scope, setScope, loading, error, uncommittedCount };
 }

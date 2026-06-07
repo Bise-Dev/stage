@@ -45,18 +45,32 @@ pub fn set_active_repo(
     state: State<'_, AppState>,
     path: PathBuf,
 ) -> Result<RepoInfo, AppError> {
-    // Validate it's a real git repo before touching state.
-    git2::Repository::open(&path).map_err(|_| AppError::NotARepo(path.clone()))?;
+    // Validate it's a real git repo and learn its canonical identity.
+    // NOTE: git2 0.19 has no `commondir()` binding — use stage-core's helper.
+    let repo = git2::Repository::open(&path).map_err(|_| AppError::NotARepo(path.clone()))?;
+    let common_dir = stage_core::repo_common_dir(&repo);
 
-    let watcher = watcher::spawn(app.clone(), path.clone())?;
-    state.recents.touch(&path)?;
+    // Git is the source of truth for the worktree set (ADR-0016).
+    let worktrees = stage_core::list_worktrees(&path)?;
+    let activation = crate::repo_activation::resolve_activation(&worktrees, &path);
+
+    // Recents collapse to the Repo: key on the root worktree so opening any
+    // worktree (root or linked) touches one entry, not one per directory.
+    state.recents.touch(&activation.root)?;
+
+    // Watch the focused worktree (diff refresh). The focused path drives every
+    // path-keyed command.
+    let watcher = watcher::spawn(app.clone(), activation.focused.clone(), common_dir.clone())?;
 
     *state.active.lock() = Some(ActiveRepo {
-        path: path.clone(),
+        path: activation.focused.clone(),
+        common_dir,
         watcher,
     });
 
-    Ok(RepoInfo { path })
+    Ok(RepoInfo {
+        path: activation.focused,
+    })
 }
 
 #[tauri::command]
@@ -136,6 +150,59 @@ pub fn git_local_branches(state: State<'_, AppState>) -> Result<Vec<git::BranchI
     git::local_branches(&path)
 }
 
+/// The worktrees git reports for the active Repo, root first (ADR-0016).
+/// Re-enumerated from git on every call — Stage holds no worktree registry.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn repo_worktrees(
+    state: State<'_, AppState>,
+) -> Result<Vec<stage_core::WorktreeInfo>, AppError> {
+    let path = active_repo_path(&state)?;
+    Ok(stage_core::list_worktrees(&path)?)
+}
+
+/// Focus a different worktree of the active Repo. Observe-only: this does NOT
+/// check out — it re-points which worktree's working tree Self-Review/diff read
+/// (ADR-0016). Fails loud if `path` is not one of the repo's worktrees.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn set_focused_worktree(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: PathBuf,
+) -> Result<RepoInfo, AppError> {
+    let (current_path, common_dir) = state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| (a.path.clone(), a.common_dir.clone()))
+        .ok_or(AppError::NoActiveRepo)?;
+
+    // Re-ask git (Pillar 1) and confirm membership.
+    let worktrees = stage_core::list_worktrees(&current_path)?;
+    let focused = crate::repo_activation::match_worktree(&worktrees, &path).ok_or_else(|| {
+        AppError::Backend(format!(
+            "set_focused_worktree: {} is not a worktree of this repo",
+            path.display()
+        ))
+    })?;
+
+    let watcher = watcher::spawn(app.clone(), focused.clone(), common_dir.clone())?;
+    *state.active.lock() = Some(ActiveRepo {
+        path: focused.clone(),
+        common_dir,
+        watcher,
+    });
+
+    Ok(RepoInfo { path: focused })
+}
+
 #[tauri::command]
 // `pill = "cmd"` tags this span so the dev Activity-log layer records one row
 // per invocation with its duration (debug builds only). `skip_all` keeps the
@@ -162,6 +229,21 @@ pub fn self_review_diff(
         }
     };
     git::self_review_diff(&path, scope, base_ref.as_deref())
+}
+
+/// Base-branch options for the active repo's Self-Review: the recommended ref
+/// (the remote default when fetched), the remote default, the local default +
+/// how far it is behind, and the last-fetch time. See ADR-0016 / `stage_core::base`.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn self_review_base_options(
+    state: State<'_, AppState>,
+) -> Result<stage_core::BaseOptions, AppError> {
+    let path = active_repo_path(&state)?;
+    Ok(stage_core::base_options(&path)?)
 }
 
 #[tauri::command]

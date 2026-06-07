@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { SignIn } from './screens/onboarding/SignIn';
+import { RepoHome } from './screens/repo/RepoHome';
 import { ReviewStoryline } from './screens/review/ReviewStoryline';
 import { SelfReview } from './screens/selfReview/SelfReview';
 import { Storyline, type StorylineCtx } from './screens/storyline/Storyline';
@@ -17,7 +18,14 @@ import {
   takeOpenIntent,
 } from './tauri';
 
-type View = 'signIn' | 'openRepo' | 'workspaces' | 'selfReview' | 'storyline' | 'review';
+type View =
+  | 'signIn'
+  | 'openRepo'
+  | 'repoHome'
+  | 'workspaces'
+  | 'selfReview'
+  | 'storyline'
+  | 'review';
 
 export function App() {
   // `booting` covers the async session validation at startup (ADR-0013). We
@@ -145,9 +153,9 @@ export function App() {
 
   const onRepoOpened = useCallback(() => {
     setHasRepo(true);
-    // Signed-in home is Workspaces; local-only routes straight to Self-Review
-    // (Workspaces requires a session).
-    setView(localOnly ? 'selfReview' : 'workspaces');
+    // Signed-in home is Workspaces; local-only lands on the Repo-home branch
+    // list (ADR-0016). `stage open` still deep-links straight to Self-Review.
+    setView(localOnly ? 'repoHome' : 'workspaces');
   }, [localOnly]);
 
   const changeRepo = useCallback(() => setView('openRepo'), []);
@@ -159,7 +167,7 @@ export function App() {
   }, []);
   // Exit Self-Review: signed-in → Workspaces; local-only → repo picker (its home).
   const exitSelfReview = useCallback(
-    () => setView(localOnly ? 'openRepo' : 'workspaces'),
+    () => setView(localOnly ? 'repoHome' : 'workspaces'),
     [localOnly],
   );
 
@@ -209,9 +217,12 @@ export function App() {
     return (
       <OpenRepository
         onOpened={onRepoOpened}
-        onBack={hasRepo ? () => setView(localOnly ? 'selfReview' : 'workspaces') : undefined}
+        onBack={hasRepo ? () => setView(localOnly ? 'repoHome' : 'workspaces') : undefined}
       />
     );
+  }
+  if (view === 'repoHome') {
+    return <RepoHome onEnterSelfReview={startSelfReview} onChangeRepo={changeRepo} />;
   }
   if (view === 'selfReview') {
     return <SelfReview onExit={exitSelfReview} seedBaseFromDebrief={seedBase} />;

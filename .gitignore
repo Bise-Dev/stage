@@ -403,11 +403,17 @@ $RECYCLE.BIN/
 # Tauri-generated schemas (regenerated from tauri.conf.json + plugins on build)
 client/src-tauri/gen/
 
+# OpenAPI schema generated from Django app on server start
+backend/generated/
+
 # The client cargo workspace ships an app binary — keep its lockfile.
 !client/Cargo.lock
 
 # Planning docs are local working notes, not committed (see CLAUDE.md).
 docs/plans/
+
+# Brainstorming visual-companion scratch (mockups, server state)
+.superpowers/
 
 # TS incremental build artifacts
 *.tsbuildinfo

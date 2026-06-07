@@ -6,6 +6,7 @@ mod errors;
 mod git;
 pub mod oauth;
 mod recents;
+mod repo_activation;
 mod session;
 mod state;
 mod watcher;
@@ -157,9 +158,12 @@ pub fn run() {
             commands::git_current_branch,
             commands::repo_summary,
             commands::git_local_branches,
+            commands::repo_worktrees,
+            commands::set_focused_worktree,
             commands::git_diff_stats,
             commands::git_diff_files,
             commands::self_review_diff,
+            commands::self_review_base_options,
             commands::repo_overview,
             commands::workspace_create,
             commands::workspace_publish,

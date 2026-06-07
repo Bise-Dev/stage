@@ -37,7 +37,7 @@ The author's chosen narrative for how a reviewer should walk through the change 
 _Avoid_: Tour, walkthrough, guide.
 
 **Self-Review**:
-An iterative, author-only stage in which the author inspects their own evolving diff to gain an improved overview of their current changes and guide further implementation work (with or without an agent). It lives as long as the author keeps editing the branch and ends when they are happy with the change. Distinct from the Storyline: a Self-Review is a working aid for the author; a Storyline is the artifact handed to reviewers. By default Self-Review compares the working tree against `HEAD` (uncommitted only); the author can toggle to a branch-vs-default-branch view that includes committed work. When a coding agent did the work, it can attach a **Debrief** within the Self-Review and read the author's **Review notes** back, forming a local author↔agent review loop. **Does not require Stage authentication** — the client can run in **Local-only mode** during Self-Review; the device-flow login is triggered the first time the author hits "Ready to share".
+An iterative, author-only stage in which the author inspects their own evolving diff to gain an improved overview of their current changes and guide further implementation work (with or without an agent). It lives as long as the author keeps editing the branch and ends when they are happy with the change. Distinct from the Storyline: a Self-Review is a working aid for the author; a Storyline is the artifact handed to reviewers. By default Self-Review compares the **selected worktree** against a **Base branch** (defaulting to the repo's remote default branch), showing the whole change: committed branch work plus any uncommitted edits. The author can toggle to an **Uncommitted** view (the working tree against `HEAD`) to isolate just the edits since the last commit. When a coding agent did the work, it can attach a **Debrief** within the Self-Review and read the author's **Review notes** back, forming a local author↔agent review loop. **Does not require Stage authentication** — the client can run in **Local-only mode** during Self-Review; the device-flow login is triggered the first time the author hits "Ready to share".
 _Avoid_: Local review, pre-flight, draft review.
 
 **Local-only mode** (app state):
@@ -93,3 +93,23 @@ The Stage backend exposes two parallel API surfaces. *Workspace-anchored* endpoi
 
 **Import** (deliberately absent):
 There is no manual "import this PR into Stage" action. A Workspace is created by the author via "Ready to share". When a reviewer encounters a PR with no Workspace, they review through PR-anchored endpoints; they do not create a Workspace on the author's behalf.
+
+**Repo**:
+The local git repository, identified by its git **common directory** — the unit the repo picker opens and that all its worktrees attach to. Carries the GitHub `(owner, name)` from its `origin` remote when one exists (the same pair the backend Workspace uses); with no remote it still exists, keyed by the common-dir. One Repo groups every worktree git reports for that common-dir.
+_Avoid_: "active repo" (that names a path, not the entity); "clone".
+
+**Worktree**:
+A working directory git has attached to a Repo, each checked out on its own branch (git permits at most one worktree per branch). Surfaced as an annotation on the branch in the repo's branch list, never as a separate Repo. Stage only **observes** worktrees — it never creates, removes, prunes, or checks them out; their lifecycle stays with git and whatever tool the author uses.
+_Avoid_: "checkout"; "Workspace" (the backend object); "workspace" (jj's word for this concept).
+
+**Root worktree** / **Linked worktree**:
+Git's original worktree (the one whose gitdir is the common-dir) vs. worktrees added later. The root cannot be removed; linked ones can. Either may hold the Default branch. Shown as a `root` / `⌥ worktree` badge in the branch list's worktree column.
+_Avoid_: "main worktree" (collides with a branch named `main`).
+
+**Default branch**:
+The Repo's default branch, read from `origin/HEAD` (falling back to the repo's configured default). A property of the **branch** (shown beside the branch name), name-agnostic — it need not be called `main`, and it can be checked out on any worktree or none. Distinct from the **Root worktree**, which is a worktree property.
+_Avoid_: assuming the default is `main` (it may be `master`, `develop`, …).
+
+**Base branch** (a.k.a. target branch):
+The branch a change is reviewed and prepared to merge **into** — the comparison point for the committed-work view of Self-Review (and, later, the Storyline). Defaults to the repo's **remote default branch** (repo-wide, the same from any worktree, so it sidesteps a stale local default) and is selectable per Self-Review. Distinct from the **Default branch**, a fixed repo property: the Base branch is a per-review choice that merely *defaults* to it. "Target branch" is the same branch named from the merge-**into** perspective.
+_Avoid_: conflating with "Default branch"; surfacing "base ref" in user-facing copy (that's `base_ref`, a code name).
