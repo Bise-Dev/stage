@@ -15,6 +15,7 @@ import { relativeTimeFromEpoch } from '../../time';
 export function Subheader({
   diff,
   scope,
+  uncommittedCount,
   defaultBranch,
   baseRef,
   baseOptions,
@@ -31,6 +32,8 @@ export function Subheader({
 }: {
   diff: SelfReviewDiff | null;
   scope: SelfReviewScope;
+  /** Uncommitted (workdir-scope) file count for the toggle badge; null until known. */
+  uncommittedCount: number | null;
   defaultBranch: string | null;
   /** The author-chosen base ref the `base`-scope diff compares against. */
   baseRef: string | null;
@@ -138,7 +141,22 @@ export function Subheader({
           onClick={() => onScopeChange('workdir')}
           className={scope === 'workdir' ? 'active' : undefined}
         >
-          Working tree
+          {/* Green when the tree is clean, amber + a file count when there are
+              uncommitted changes. `null` (not yet resolved) keeps the default. */}
+          <span
+            style={
+              uncommittedCount === null
+                ? undefined
+                : { color: uncommittedCount > 0 ? 'var(--orange)' : 'var(--green-d)' }
+            }
+          >
+            Uncommitted
+          </span>
+          {uncommittedCount !== null && uncommittedCount > 0 && (
+            <span className="badge badge-orange" style={{ marginLeft: 6 }}>
+              {uncommittedCount}
+            </span>
+          )}
         </button>
         <button
           type="button"

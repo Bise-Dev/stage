@@ -119,7 +119,10 @@ export function SelfReview({
     }
   }, []);
 
-  const { diff, scope, setScope, loading, error } = useSelfReviewDiff(repoPath, baseRef);
+  const { diff, scope, setScope, loading, error, uncommittedCount } = useSelfReviewDiff(
+    repoPath,
+    baseRef,
+  );
 
   // Cycle-1 author↔agent loop: the agent-authored Debrief + the author's
   // Review notes, both from the local store (ADR-0011/0012). Review notes are
@@ -323,6 +326,7 @@ export function SelfReview({
         <Subheader
           diff={diff}
           scope={scope}
+          uncommittedCount={uncommittedCount}
           defaultBranch={defaultBranch}
           baseRef={baseRef}
           baseOptions={baseOptions}

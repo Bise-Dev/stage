@@ -4,10 +4,14 @@ import { type SelfReviewDiff, type SelfReviewScope, selfReviewDiff } from '../..
 
 const SCOPE_KEY_PREFIX = 'selfReview:scope:';
 
+// Default to the Base view: a Self-Review is opened to review the whole change
+// (committed branch work, which `base` includes), so an all-committed branch —
+// the normal state at an agent handoff — shows its diff on open instead of an
+// empty "Uncommitted" view. An explicit `workdir` pick still persists.
 function loadScope(repoPath: string | null): SelfReviewScope {
-  if (!repoPath) return 'workdir';
+  if (!repoPath) return 'base';
   const v = localStorage.getItem(`${SCOPE_KEY_PREFIX}${repoPath}`);
-  return v === 'base' ? 'base' : 'workdir';
+  return v === 'workdir' ? 'workdir' : 'base';
 }
 
 function saveScope(repoPath: string | null, scope: SelfReviewScope) {
@@ -21,6 +25,9 @@ export type UseSelfReviewDiff = {
   setScope: (s: SelfReviewScope) => void;
   loading: boolean;
   error: string | null;
+  /** File count of the uncommitted (workdir-scope) diff, for the toggle badge.
+   *  `null` until first resolved. */
+  uncommittedCount: number | null;
 };
 
 /**
@@ -50,6 +57,9 @@ export function useSelfReviewDiff(
   // Cache keyed by `${scope}:${baseRef ?? ''}`. Holds the most recent payload
   // for each (scope, base) we've fetched in this session.
   const cacheRef = useRef<Map<string, SelfReviewDiff>>(new Map());
+  // File count of the uncommitted (workdir-scope) diff, surfaced on the
+  // "Uncommitted" toggle regardless of the active scope. `null` = not yet known.
+  const [uncommittedCount, setUncommittedCount] = useState<number | null>(null);
 
   // Reload persisted scope when the repo changes underneath us, and drop the
   // cache — different repo means different diffs.
@@ -102,6 +112,32 @@ export function useSelfReviewDiff(
     }
   }, [scope, baseRef]);
 
+  // The uncommitted file count for the "Uncommitted" toggle. When that scope is
+  // active the main `diff` already IS the workdir diff, so the count is derived
+  // from it (effect below) and this fetch is skipped; otherwise fetch a workdir
+  // diff just for its file count. Reuses `selfReviewDiff`; a clean tree = 0 files.
+  const fetchUncommittedCount = useCallback(async () => {
+    if (!repoPath || scope === 'workdir') return;
+    try {
+      const wd = await selfReviewDiff('workdir', null);
+      setUncommittedCount(wd.files.length);
+    } catch (e) {
+      console.warn('uncommitted_count_failed', e);
+      // Keep the last known count; a transient git lock shouldn't blank the badge.
+    }
+  }, [repoPath, scope]);
+
+  // When viewing Uncommitted, the loaded diff IS the uncommitted set — derive the
+  // count from it directly (no second git call).
+  useEffect(() => {
+    if (scope === 'workdir' && diff) setUncommittedCount(diff.files.length);
+  }, [scope, diff]);
+
+  // Initial + on repo/scope change (in base scope): keep the count fresh.
+  useEffect(() => {
+    void fetchUncommittedCount();
+  }, [fetchUncommittedCount]);
+
   // Initial + scope/base changes. We only show the spinner if we have nothing
   // cached for the new scope — otherwise the optimistic swap above already
   // populated `diff` and the user shouldn't see a loading state.
@@ -125,10 +161,13 @@ export function useSelfReviewDiff(
   // refetched the real diff, and the two raced — flickering the diff to empty.
   const fetchDiffRef = useRef(fetchDiff);
   fetchDiffRef.current = fetchDiff;
+  const fetchCountRef = useRef(fetchUncommittedCount);
+  fetchCountRef.current = fetchUncommittedCount;
   useEffect(() => {
     const refresh = () => {
       cacheRef.current.clear();
       void fetchDiffRef.current();
+      void fetchCountRef.current();
     };
     const unlisten = [listen('repo-changed', refresh), listen('worktrees-changed', refresh)];
     return () => {
@@ -136,5 +175,5 @@ export function useSelfReviewDiff(
     };
   }, []);
 
-  return { diff, scope, setScope, loading, error };
+  return { diff, scope, setScope, loading, error, uncommittedCount };
 }
