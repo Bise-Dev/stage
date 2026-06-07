@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { SignIn } from './screens/onboarding/SignIn';
 import { RepoHome } from './screens/repo/RepoHome';
 import { ReviewStoryline } from './screens/review/ReviewStoryline';
 import { SelfReview } from './screens/selfReview/SelfReview';
+import { Settings } from './screens/settings/Settings';
 import { Storyline, type StorylineCtx } from './screens/storyline/Storyline';
 import { Workspaces } from './screens/workspaces/Workspaces';
 import {
@@ -14,6 +15,7 @@ import {
   authBootstrap,
   authLogout,
   onOpenIntent,
+  onOpenSettings,
   setActiveRepo,
   takeOpenIntent,
 } from './tauri';
@@ -25,7 +27,8 @@ type View =
   | 'workspaces'
   | 'selfReview'
   | 'storyline'
-  | 'review';
+  | 'review'
+  | 'settings';
 
 export function App() {
   // `booting` covers the async session validation at startup (ADR-0013). We
@@ -51,6 +54,14 @@ export function App() {
   // True when Self-Review was reached via `stage open`: seed its base from the
   // Debrief's base, overriding the per-repo localStorage default (ADR-0014).
   const [seedBase, setSeedBase] = useState(false);
+  // The view to return to when Settings is dismissed. Settings is reachable
+  // from any screen (native ⌘, menu item, or the Workspaces RepoMenu), so we
+  // stash where it was opened from rather than assume a fixed home.
+  const [returnView, setReturnView] = useState<View>('workspaces');
+  // Latest view, read by `openSettings` (a stable callback) so the menu-event
+  // listener can stash the current screen without re-subscribing every render.
+  const viewRef = useRef(view);
+  viewRef.current = view;
 
   // Set the active repo and route to Self-Review for a `stage open` intent.
   // Fail-loud (CLAUDE.md): a bad repo path surfaces and falls back to the repo
@@ -191,6 +202,24 @@ export function App() {
     setView('workspaces');
   }, []);
 
+  // Open Settings, stashing the current screen to return to. No-op if already
+  // there (so re-firing ⌘, doesn't lose the original return target).
+  const openSettings = useCallback(() => {
+    if (viewRef.current === 'settings') return;
+    setReturnView(viewRef.current);
+    setView('settings');
+  }, []);
+  const closeSettings = useCallback(() => setView(returnView), [returnView]);
+
+  // The native app menu's "Settings…" item (⌘,) emits `open-settings`; route to
+  // the Settings view wherever the author is (signed-in or local-only).
+  useEffect(() => {
+    const unlisten = onOpenSettings(() => openSettings());
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, [openSettings]);
+
   // Sign out: `auth_logout` revokes the session server-side and clears the
   // persisted token (ADR-0013). It clears memory + disk even if the server call
   // fails, so the author is locally signed out regardless; route back to SignIn
@@ -209,6 +238,18 @@ export function App() {
   }, []);
 
   if (booting) return null;
+  // Settings is reachable from every screen (native ⌘, / RepoMenu), including
+  // local-only mode where `user` is null — so it sits ahead of the auth guards.
+  if (view === 'settings') {
+    return (
+      <Settings
+        user={user}
+        onClose={closeSettings}
+        onSignOut={signOut}
+        onSignIn={() => setView('signIn')}
+      />
+    );
+  }
   if (view === 'signIn')
     return <SignIn onAuthenticated={onAuthenticated} onStayOffline={enterLocalOnly} />;
   if (view === 'openRepo') {
@@ -245,6 +286,7 @@ export function App() {
       onStartSelfReview={startSelfReview}
       onOpenStoryline={openStoryline}
       onOpenReview={openReview}
+      onOpenSettings={openSettings}
       onSignOut={signOut}
     />
   );

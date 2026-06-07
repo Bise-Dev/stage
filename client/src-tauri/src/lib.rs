@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use tauri::menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -85,6 +86,59 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        // Custom app menu. Setting a menu replaces the OS default wholesale, so
+        // we rebuild the standard macOS submenus (Edit/Window) to keep native
+        // copy/paste/undo/quit working, and inject "Settings…" (⌘,) into the app
+        // menu. The item emits `open-settings` to the webview, which routes to
+        // the Settings view (the second entry point is the in-app RepoMenu).
+        .menu(|handle| {
+            let settings = MenuItemBuilder::with_id("settings", "Settings…")
+                .accelerator("CmdOrCtrl+Comma")
+                .build(handle)?;
+            let app_menu = SubmenuBuilder::new(handle, "Stage")
+                .about(Some(AboutMetadata {
+                    name: Some("Stage".into()),
+                    ..Default::default()
+                }))
+                .separator()
+                .item(&settings)
+                .separator()
+                .services()
+                .separator()
+                .hide()
+                .hide_others()
+                .show_all()
+                .separator()
+                .quit()
+                .build()?;
+            let edit_menu = SubmenuBuilder::new(handle, "Edit")
+                .undo()
+                .redo()
+                .separator()
+                .cut()
+                .copy()
+                .paste()
+                .select_all()
+                .build()?;
+            let window_menu = SubmenuBuilder::new(handle, "Window")
+                .minimize()
+                .maximize()
+                .separator()
+                .close_window()
+                .build()?;
+            MenuBuilder::new(handle)
+                .items(&[&app_menu, &edit_menu, &window_menu])
+                .build()
+        })
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "settings" {
+                // Fail-loud (CLAUDE.md): a failed emit means the menu item is
+                // dead — log it rather than swallow.
+                if let Err(e) = app.emit("open-settings", ()) {
+                    tracing::error!(err = %e, "open_settings_emit_failed");
+                }
+            }
+        })
         .setup(move |app| {
             // Stream new ring entries to the webview once the app handle exists.
             // Records before this point still land in the ring (always-on).

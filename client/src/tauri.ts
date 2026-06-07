@@ -23,6 +23,14 @@ export const takeOpenIntent = () => invoke<OpenIntent | null>('take_open_intent'
  */
 export const onOpenIntent = (cb: (intent: OpenIntent) => void): Promise<UnlistenFn> =>
   listen<OpenIntent>('open-intent', (event) => cb(event.payload));
+
+/**
+ * The native app menu's "Settings…" item (⌘,) emits `open-settings`; the webview
+ * listens and routes to the Settings view. Returns the unlisten handle.
+ */
+export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> =>
+  listen('open-settings', () => cb());
+
 export type RecentRepo = { path: string; lastOpenedAt: number };
 export type RepoSummary = {
   defaultBranch: string | null;
