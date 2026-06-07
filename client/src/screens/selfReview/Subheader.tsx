@@ -1,6 +1,7 @@
 import { Dropdown } from '../../components/Dropdown';
 import { Icon } from '../../components/Icon';
 import type { BaseOptions, BranchInfo, SelfReviewDiff, SelfReviewScope } from '../../tauri';
+import { relativeTimeFromEpoch } from '../../time';
 
 /**
  * Top bar of the Self-Review screen. Adapts to the scope toggle:
@@ -210,7 +211,7 @@ function BaseFreshness({
   const behindWarning =
     ld && base === ld.name && ld.behind > 0 ? `${ld.behind} behind origin` : null;
   const fetched = baseOptions.lastFetchSecs
-    ? `fetched ${relTime(baseOptions.lastFetchSecs)}`
+    ? `fetched ${relativeTimeFromEpoch(baseOptions.lastFetchSecs)}`
     : 'never fetched';
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
@@ -228,13 +229,4 @@ function BaseFreshness({
       </button>
     </span>
   );
-}
-
-/** Compact relative time from epoch seconds (e.g. "2h ago"). */
-function relTime(epochSecs: number): string {
-  const s = Math.max(0, Math.floor(Date.now() / 1000) - epochSecs);
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }

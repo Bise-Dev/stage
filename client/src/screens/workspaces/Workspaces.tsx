@@ -30,8 +30,8 @@ import {
   workspaceCreate,
   workspaceDelete,
 } from '../../tauri';
+import { relativeTime, relativeTimeFromEpoch } from '../../time';
 import type { StorylineCtx } from '../storyline/Storyline';
-import { relativeTime, relativeTimeFromEpoch } from './data';
 
 type Show = 'all' | 'yours' | 'review';
 type Kind = 'self-review' | 'ready-to-share' | 'in-review' | 'open-prs';

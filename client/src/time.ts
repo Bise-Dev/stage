@@ -1,9 +1,4 @@
-/* Time formatting helpers for the Workspaces screen.
- *
- * Workspace/PR rows now come live from the repo-overview aggregator (see
- * docs/adr/0009) and local branches from gitLocalBranches — there is no stub
- * data left here.
- */
+/* Relative time-formatting helpers shared across screens. */
 
 const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
   ['year', 31536000],
