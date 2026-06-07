@@ -107,11 +107,12 @@ fn behind_count(repo: &Repository, local: &str, remote: &str) -> Option<u32> {
     Some(behind as u32)
 }
 
-/// FETCH_HEAD mtime (epoch seconds). FETCH_HEAD lives in the common dir, so it
-/// is shared across worktrees. git2 0.19 has no `commondir()` binding -- use the
-/// stage-core helper.
+/// FETCH_HEAD mtime (epoch seconds). `git fetch` writes FETCH_HEAD to the
+/// **per-worktree** gitdir (`repo.path()`) -- NOT the shared common dir -- so we
+/// read it there. Correct for both the main worktree and a linked worktree
+/// (whose fetch lands in `<common>/worktrees/<id>/FETCH_HEAD`).
 fn last_fetch_secs(repo: &Repository) -> Option<i64> {
-    let meta = std::fs::metadata(crate::worktree::repo_common_dir(repo).join("FETCH_HEAD")).ok()?;
+    let meta = std::fs::metadata(repo.path().join("FETCH_HEAD")).ok()?;
     let secs = meta
         .modified()
         .ok()?
@@ -202,6 +203,41 @@ mod tests {
         assert!(
             opts2.last_fetch_secs.is_some(),
             "FETCH_HEAD exists after fetch"
+        );
+    }
+
+    #[test]
+    fn last_fetch_secs_set_after_fetch_in_a_linked_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        std::fs::create_dir_all(&origin).unwrap();
+        git(&origin, &["init", "-q", "-b", "main"]);
+        commit(&origin, "one");
+
+        let work = tmp.path().join("work");
+        git(
+            tmp.path(),
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                work.to_str().unwrap(),
+            ],
+        );
+        let wt = tmp.path().join("wt");
+        git(
+            &work,
+            &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "feat"],
+        );
+
+        // Fetch FROM the linked worktree -- FETCH_HEAD lands in its own gitdir,
+        // not the common dir. last_fetch_secs must still find it.
+        git(&wt, &["fetch", "-q", "origin"]);
+
+        let opts = base_options(&wt).unwrap();
+        assert!(
+            opts.last_fetch_secs.is_some(),
+            "fetch from a linked worktree must register a last-fetch time"
         );
     }
 }
