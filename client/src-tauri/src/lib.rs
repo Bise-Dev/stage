@@ -176,6 +176,7 @@ pub fn run() {
             commands::auth_bootstrap,
             commands::auth_logout,
             commands::github_prs,
+            commands::pr_file_diff,
             commands::self_review_debrief_get,
             commands::self_review_notes_list,
             commands::self_review_note_create,

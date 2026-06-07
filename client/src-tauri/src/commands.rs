@@ -527,6 +527,30 @@ pub async fn github_prs(
     Ok(items)
 }
 
+/// The GitHub file object for one path in a PR (patch + status + counts), read
+/// via the backend (ADR-0001). The reviewer storyline viewer calls this per
+/// step — the reviewer may not have the branch checked out, so the diff comes
+/// from the PR on GitHub rather than the local working tree.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn pr_file_diff(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    repo: String,
+    pr_number: i64,
+    file_path: String,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let diff = state
+        .api
+        .pr_file_diff(&token, &owner, &repo, pr_number, &file_path)
+        .await?;
+    Ok(diff)
+}
+
 // --- Self-Review Debrief (cycle 1: local agent↔author loop; ADR-0011) ---
 //
 // These read/write the shared SQLite store the `stage` CLI authors into, keyed
