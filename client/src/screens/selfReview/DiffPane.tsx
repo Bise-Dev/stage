@@ -1,6 +1,15 @@
 import { DiffModeEnum, DiffViewWithMultiSelect, SplitSide } from '@git-diff-view/react';
 import '@git-diff-view/react/styles/diff-view.css';
-import { type Ref, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import {
+  type Ref,
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Icon } from '../../components/Icon';
 import type { NoteAnchor, ReviewNoteView, SelfReviewFileChange, Side } from '../../tauri';
 import { Composer } from './Composer';
@@ -13,6 +22,16 @@ const STATUS_BADGE = {
   deleted: { label: 'deleted', cls: 'badge-red' },
   renamed: { label: 'renamed', cls: 'badge-purple' },
 } as const;
+
+// Shared empty slice so files with no notes get a *stable* reference — keeps
+// React.memo on FileBlock from re-rendering them when an unrelated file's
+// notes change.
+const EMPTY_NOTES: ReviewNoteView[] = [];
+
+// The library passes us its SplitSide enum; map to our 'left'|'right'.
+// Module-scope (pure) so the render callbacks below don't depend on a
+// per-render closure.
+const sideToOurs = (s: SplitSide): Side => (s === SplitSide.old ? 'left' : 'right');
 
 export type ViewMode = 'split' | 'unified';
 export type ViewLayout = 'scroll' | 'single';
@@ -58,7 +77,12 @@ type DiffPaneProps = NoteOps & {
  *
  * Each FileBlock owns its own `DiffViewWithMultiSelect` and memoizes its
  * `data` prop, so a parent re-render doesn't rebuild the underlying
- * DiffFile or wipe the library's widget store.
+ * DiffFile or wipe the library's widget store. The blocks themselves are
+ * `React.memo`'d and every prop crossing into them is referentially stable
+ * (see the per-file note slices, the stable `registerRef`/`onToggleViewed`
+ * callbacks, and the note ops from the Debrief hook), so marking one file
+ * viewed or adding a note to one file commits only that block — not all N
+ * mounted blocks.
  *
  * Diff annotations are **Review notes** (ADR-0012): the gutter drag and the
  * file-header "Note" button create line- and file-anchored notes; the rail
@@ -90,16 +114,58 @@ export function DiffPane({
     [],
   );
 
+  // One stable ref registrar for every block — passed straight through, so a
+  // block's `ref` callback identity doesn't change on parent re-renders.
+  const registerFileRef = useCallback((path: string, el: HTMLDivElement | null) => {
+    if (el) fileRefs.current.set(path, el);
+    else fileRefs.current.delete(path);
+  }, []);
+
+  // Bundle the note ops once. They're already stable (useCallback in the
+  // Debrief hook); memoizing the bundle keeps the spread below from minting a
+  // fresh object literal each render.
+  const noteOps: NoteOps = useMemo(
+    () => ({ onCreateNote, onReplyNote, onResolveNote, onReopenNote, onDeleteNote }),
+    [onCreateNote, onReplyNote, onResolveNote, onReopenNote, onDeleteNote],
+  );
+
+  // Bucket notes by file once, instead of `notes.filter(...)` per file per
+  // render. Crucially we preserve each slice's array identity when its content
+  // is unchanged: a note mutation replaces the whole `notes` array with fresh
+  // objects, so without this every block would re-render on any note change.
+  // With it, only the file whose notes actually changed gets a new slice.
+  const prevSlicesRef = useRef<Map<string, ReviewNoteView[]>>(new Map());
+  const prevSigsRef = useRef<Map<string, string>>(new Map());
+  const notesByFile = useMemo(() => {
+    const grouped = new Map<string, ReviewNoteView[]>();
+    for (const n of notes) {
+      const file = n.anchor?.file;
+      if (!file) continue;
+      const arr = grouped.get(file);
+      if (arr) arr.push(n);
+      else grouped.set(file, [n]);
+    }
+    const prevSlices = prevSlicesRef.current;
+    const prevSigs = prevSigsRef.current;
+    const nextSlices = new Map<string, ReviewNoteView[]>();
+    const nextSigs = new Map<string, string>();
+    for (const [path, arr] of grouped) {
+      const sig = JSON.stringify(arr);
+      const reused = prevSlices.get(path);
+      if (reused && prevSigs.get(path) === sig) {
+        nextSlices.set(path, reused);
+      } else {
+        nextSlices.set(path, arr);
+      }
+      nextSigs.set(path, sig);
+    }
+    prevSlicesRef.current = nextSlices;
+    prevSigsRef.current = nextSigs;
+    return nextSlices;
+  }, [notes]);
+
   const visibleFiles =
     viewLayout === 'scroll' ? files : files.filter((f) => f.path === selectedPath);
-
-  const noteOps: NoteOps = {
-    onCreateNote,
-    onReplyNote,
-    onResolveNote,
-    onReopenNote,
-    onDeleteNote,
-  };
 
   return (
     <div
@@ -136,15 +202,12 @@ export function DiffPane({
             <LazyFileBlock
               key={f.path}
               file={f}
-              registerRef={(el) => {
-                if (el) fileRefs.current.set(f.path, el);
-                else fileRefs.current.delete(f.path);
-              }}
+              registerRef={registerFileRef}
               viewMode={viewMode}
               collapsed={collapsed}
               isViewed={isViewed}
-              onToggleViewed={() => onToggleViewed(f.path)}
-              notes={notes.filter((n) => n.anchor?.file === f.path)}
+              onToggleViewed={onToggleViewed}
+              notes={notesByFile.get(f.path) ?? EMPTY_NOTES}
               {...noteOps}
             />
           );
@@ -163,18 +226,25 @@ export function DiffPane({
  * viewport (IntersectionObserver with a 600px rootMargin). Once mounted
  * it stays mounted — unmounting would lose composer state and notes
  * in flight.
+ *
+ * Memoized: a parent re-render (e.g. marking *another* file viewed) shouldn't
+ * touch this block at all, since every prop it receives is referentially
+ * stable.
  */
-type LazyFileBlockProps = Omit<FileBlockProps, 'file'> & {
-  file: SelfReviewFileChange;
-  registerRef(el: HTMLDivElement | null): void;
+type LazyFileBlockProps = FileBlockProps & {
+  registerRef(path: string, el: HTMLDivElement | null): void;
 };
-function LazyFileBlock({ registerRef, ...rest }: LazyFileBlockProps) {
+const LazyFileBlock = memo(function LazyFileBlock({ registerRef, ...rest }: LazyFileBlockProps) {
   const [mounted, setMounted] = useState(false);
   const localRef = useRef<HTMLDivElement>(null);
-  const setRef = (el: HTMLDivElement | null) => {
-    localRef.current = el;
-    registerRef(el);
-  };
+  const path = rest.file.path;
+  const setRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      localRef.current = el;
+      registerRef(path, el);
+    },
+    [registerRef, path],
+  );
 
   // Collapsed files render as a tiny header-only row; no need to defer them
   // behind an IntersectionObserver — the cost is already minimal and
@@ -263,7 +333,7 @@ function LazyFileBlock({ registerRef, ...rest }: LazyFileBlockProps) {
       </div>
     </div>
   );
-}
+});
 
 type FileBlockProps = NoteOps & {
   file: SelfReviewFileChange;
@@ -272,12 +342,13 @@ type FileBlockProps = NoteOps & {
    *  viewed and we're in scroll layout (see DiffPane). */
   collapsed: boolean;
   isViewed: boolean;
-  onToggleViewed(): void;
+  /** Stable parent callback; the block calls it with its own `file.path`. */
+  onToggleViewed(path: string): void;
   /** Notes anchored to this file (line- or file-level). */
   notes: ReviewNoteView[];
 };
 
-function FileBlock({
+const FileBlock = memo(function FileBlock({
   file,
   viewMode,
   collapsed,
@@ -297,22 +368,27 @@ function FileBlock({
   // composer state the block needs.
   const [addingFile, setAddingFile] = useState(false);
 
-  // NOTE: every hook must run before the `collapsed` early-return below.
-  // React requires a stable hook order across renders; an early return here
-  // (before the useMemo/useRef/useEffect calls) made a file dropping to
-  // "Viewed" render fewer hooks than its expanded render → "Rendered fewer
-  // hooks than expected". All hooks now run unconditionally; the collapsed
-  // header-only render happens after them.
-
   // Partition the file's notes:
   //  - inline line notes: a fresh line anchor renders at its line via extendData;
   //  - band notes: file-level notes (no line range) and *outdated* line notes
   //    whose anchored lines are gone — they have no inline slot, so they sit in
   //    a band above the diff (they also live in the rail).
-  const lineNotes = notes.filter((n) => n.anchor?.lineStart != null && !n.outdated);
-  const fileLevel = notes.filter((n) => n.anchor != null && n.anchor.lineStart == null);
-  const outdated = notes.filter((n) => n.anchor?.lineStart != null && n.outdated);
-  const bandNotes = [...fileLevel, ...outdated];
+  // All hooks below run unconditionally, *before* the collapsed early-return,
+  // so the hook order is stable when a file toggles between collapsed and
+  // expanded on the same fiber.
+  const lineNotes = useMemo(
+    () => notes.filter((n) => n.anchor?.lineStart != null && !n.outdated),
+    [notes],
+  );
+  const fileLevel = useMemo(
+    () => notes.filter((n) => n.anchor != null && n.anchor.lineStart == null),
+    [notes],
+  );
+  const outdated = useMemo(
+    () => notes.filter((n) => n.anchor?.lineStart != null && n.outdated),
+    [notes],
+  );
+  const bandNotes = useMemo(() => [...fileLevel, ...outdated], [fileLevel, outdated]);
 
   // Memoize the `data` prop. The library's internal useMemo deps on `data`
   // by reference (line 1593 of the lib bundle); a fresh object literal every
@@ -350,11 +426,8 @@ function FileBlock({
     return { oldFile, newFile };
   }, [lineNotes]);
 
-  // The library passes us its SplitSide enum; map to our 'left'|'right'.
-  const sideToOurs = (s: SplitSide): Side => (s === SplitSide.old ? 'left' : 'right');
-
   // The library's widget store, captured via `onCreateUseWidgetHook` so we
-  // can programmatically open the widget slot from `onMultiSelectComplete`
+  // can programmatically open the widget slot from the mouseup handler below
   // (the user expects drag-release → composer; out of the box the library
   // only opens via clicking "+" after the drag, which costs a second click).
   // Type loosely — `createDiffWidgetStore`'s return type isn't exported.
@@ -390,24 +463,111 @@ function FileBlock({
     filePath: string;
   } | null>(null);
 
-  useEffect(() => {
-    const onUp = () => {
-      const result = dvRef.current?.getSelectionResult?.();
-      if (!result?.range) return;
-      const { side: rawSide, startLineNumber, endLineNumber } = result.range;
-      const side = rawSide === 'old' ? SplitSide.old : SplitSide.new;
-      const start = Math.min(startLineNumber, endLineNumber);
-      const end = Math.max(startLineNumber, endLineNumber);
-      pendingRangeRef.current = { side, start, end, filePath: file.path };
-      widgetHookRef.current?.getReadonlyState().setWidget({ side, lineNumber: end });
-    };
-    document.addEventListener('mouseup', onUp);
-    return () => document.removeEventListener('mouseup', onUp);
+  // Scoped to this block's own diff container (was a per-block `document`
+  // listener — with N files mounted, every click ran N handlers, each calling
+  // getSelectionResult()). A mouseup inside the diff bubbles up to this
+  // wrapper, so the cost is now O(1) per click instead of O(files).
+  const handleMouseUp = useCallback(() => {
+    const result = dvRef.current?.getSelectionResult?.();
+    if (!result?.range) return;
+    const { side: rawSide, startLineNumber, endLineNumber } = result.range;
+    const side = rawSide === 'old' ? SplitSide.old : SplitSide.new;
+    const start = Math.min(startLineNumber, endLineNumber);
+    const end = Math.max(startLineNumber, endLineNumber);
+    pendingRangeRef.current = { side, start, end, filePath: file.path };
+    widgetHookRef.current?.getReadonlyState().setWidget({ side, lineNumber: end });
   }, [file.path]);
 
-  // Header-only render when collapsed. We keep the same chrome so the toggle
-  // stays in place — clicking "Viewed" again expands the file back. This sits
-  // *after* every hook so the hook order is identical whether collapsed or not.
+  const renderWidgetLine = useCallback(
+    ({
+      lineNumber,
+      fromLineNumber,
+      side,
+      onClose,
+    }: {
+      lineNumber: number;
+      fromLineNumber?: number;
+      side: SplitSide;
+      onClose: () => void;
+    }) => {
+      // Prefer the range from our mouseup handler (`pendingRangeRef`) since the
+      // library's internal range cache gets cleared by its empty-lines filter.
+      // Fall back to the library's lineNumber/fromLineNumber for any other path.
+      const ourSide = sideToOurs(side);
+      const pending = pendingRangeRef.current;
+      const useRange = pending && pending.side === side && pending.filePath === file.path;
+      const start = useRange ? pending.start : Math.min(lineNumber, fromLineNumber ?? lineNumber);
+      const end = useRange ? pending.end : Math.max(lineNumber, fromLineNumber ?? lineNumber);
+      const rangeLabel = start === end ? `L${start}` : `L${start}–L${end}`;
+      return (
+        <div style={{ padding: '4px 12px' }}>
+          <Composer
+            label={rangeLabel}
+            placeholder="Leave a note…"
+            onSave={(b) => {
+              const trimmed = b.trim();
+              if (!trimmed) {
+                pendingRangeRef.current = null;
+                onClose();
+                return;
+              }
+              onCreateNote(
+                {
+                  file: file.path,
+                  lineStart: start,
+                  lineEnd: end,
+                  side: ourSide,
+                },
+                trimmed,
+              )
+                .then(() => {
+                  pendingRangeRef.current = null;
+                  onClose();
+                })
+                .catch(() => {
+                  // Error surfaced via the hook's banner; keep the
+                  // composer open so the note text isn't lost.
+                });
+            }}
+            onCancel={() => {
+              pendingRangeRef.current = null;
+              onClose();
+            }}
+            autoFocus
+          />
+        </div>
+      );
+    },
+    [file.path, onCreateNote],
+  );
+
+  const renderExtendLine = useCallback(
+    ({ data }: { data?: { noteIds?: string[] } }) => {
+      const ids: string[] = data?.noteIds ?? [];
+      const threads = ids
+        .map((id) => lineNotes.find((n) => n.id === id))
+        .filter((n): n is ReviewNoteView => Boolean(n));
+      if (threads.length === 0) return null;
+      return (
+        <div style={{ padding: '4px 12px' }}>
+          {threads.map((n) => (
+            <Thread
+              key={n.id}
+              note={n}
+              onReply={onReplyNote}
+              onResolve={onResolveNote}
+              onReopen={onReopenNote}
+              onDelete={onDeleteNote}
+            />
+          ))}
+        </div>
+      );
+    },
+    [lineNotes, onReplyNote, onResolveNote, onReopenNote, onDeleteNote],
+  );
+
+  // Header-only render when collapsed. We keep the same chrome so the
+  // toggle stays in place — clicking "Viewed" again expands the file back.
   if (collapsed) {
     return (
       <div
@@ -447,7 +607,7 @@ function FileBlock({
           <button
             type="button"
             className="btn"
-            onClick={onToggleViewed}
+            onClick={() => onToggleViewed(file.path)}
             style={{ background: 'rgba(52,199,89,0.14)', color: 'var(--green-d)' }}
           >
             <Icon name="check" size={11} /> Viewed
@@ -512,7 +672,7 @@ function FileBlock({
         <button
           type="button"
           className="btn"
-          onClick={onToggleViewed}
+          onClick={() => onToggleViewed(file.path)}
           style={
             isViewed ? { background: 'rgba(52,199,89,0.14)', color: 'var(--green-d)' } : undefined
           }
@@ -580,9 +740,10 @@ function FileBlock({
           renders its own `.diff-tailwindcss-wrapper` internally, so we don't
           need to add one ourselves. The `self-review-diff` wrapper scopes
           the hover-"+" CSS overlay (see styles.css) so it doesn't leak to
-          any other diff-view consumer in the future. */}
+          any other diff-view consumer in the future. The mouseup listener is
+          scoped here (bubbles up from the diff) rather than on `document`. */}
       {file.patch && !file.isBinary && !file.isTruncated ? (
-        <div className="self-review-diff">
+        <div className="self-review-diff" onMouseUp={handleMouseUp}>
           <DiffViewWithMultiSelect
             // biome-ignore lint/suspicious/noExplicitAny: ref shape isn't exported as a usable name
             ref={dvRef as unknown as React.Ref<any>}
@@ -610,81 +771,8 @@ function FileBlock({
             onCreateUseWidgetHook={(hook) => {
               widgetHookRef.current = hook as unknown as WidgetHook;
             }}
-            renderWidgetLine={({ lineNumber, fromLineNumber, side, onClose }) => {
-              // Prefer the range from our document-mouseup listener
-              // (`pendingRangeRef`) since the library's internal range cache
-              // gets cleared by its empty-lines filter. Fall back to the
-              // library's lineNumber/fromLineNumber for any other path.
-              const ourSide = sideToOurs(side);
-              const pending = pendingRangeRef.current;
-              const useRange = pending && pending.side === side && pending.filePath === file.path;
-              const start = useRange
-                ? pending.start
-                : Math.min(lineNumber, fromLineNumber ?? lineNumber);
-              const end = useRange
-                ? pending.end
-                : Math.max(lineNumber, fromLineNumber ?? lineNumber);
-              const rangeLabel = start === end ? `L${start}` : `L${start}–L${end}`;
-              return (
-                <div style={{ padding: '4px 12px' }}>
-                  <Composer
-                    label={rangeLabel}
-                    placeholder="Leave a note…"
-                    onSave={(b) => {
-                      const trimmed = b.trim();
-                      if (!trimmed) {
-                        pendingRangeRef.current = null;
-                        onClose();
-                        return;
-                      }
-                      onCreateNote(
-                        {
-                          file: file.path,
-                          lineStart: start,
-                          lineEnd: end,
-                          side: ourSide,
-                        },
-                        trimmed,
-                      )
-                        .then(() => {
-                          pendingRangeRef.current = null;
-                          onClose();
-                        })
-                        .catch(() => {
-                          // Error surfaced via the hook's banner; keep the
-                          // composer open so the note text isn't lost.
-                        });
-                    }}
-                    onCancel={() => {
-                      pendingRangeRef.current = null;
-                      onClose();
-                    }}
-                    autoFocus
-                  />
-                </div>
-              );
-            }}
-            renderExtendLine={({ data }) => {
-              const ids: string[] = data?.noteIds ?? [];
-              const threads = ids
-                .map((id) => lineNotes.find((n) => n.id === id))
-                .filter((n): n is ReviewNoteView => Boolean(n));
-              if (threads.length === 0) return null;
-              return (
-                <div style={{ padding: '4px 12px' }}>
-                  {threads.map((n) => (
-                    <Thread
-                      key={n.id}
-                      note={n}
-                      onReply={onReplyNote}
-                      onResolve={onResolveNote}
-                      onReopen={onReopenNote}
-                      onDelete={onDeleteNote}
-                    />
-                  ))}
-                </div>
-              );
-            }}
+            renderWidgetLine={renderWidgetLine}
+            renderExtendLine={renderExtendLine}
           />
         </div>
       ) : (
@@ -705,4 +793,4 @@ function FileBlock({
       )}
     </div>
   );
-}
+});
