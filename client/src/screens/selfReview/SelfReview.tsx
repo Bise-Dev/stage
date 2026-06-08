@@ -211,19 +211,28 @@ export function SelfReview({
     };
   }, [repoPath, branchKey]);
 
+  // Mirror `viewed` into a ref so toggleViewed can read the current set without
+  // listing `viewed` in its deps. Marking one file viewed then no longer
+  // recreates the callback — which previously cascaded a re-render through
+  // every mounted FileBlock (the callback is passed down to all of them).
+  const viewedRef = useRef(viewed);
+  viewedRef.current = viewed;
+
   const toggleViewed = useCallback(
     (path: string) => {
       if (!repoPath || !diff) return;
-      const next = new Set(viewed);
-      const isOn = next.has(path);
-      if (isOn) next.delete(path);
-      else next.add(path);
-      setViewedState(next);
+      const isOn = viewedRef.current.has(path);
+      setViewedState((prev) => {
+        const next = new Set(prev);
+        if (isOn) next.delete(path);
+        else next.add(path);
+        return next;
+      });
       setViewed(repoPath, diff.currentBranch, path, !isOn).catch((e) =>
         console.warn('self_review_viewed_persist_failed', e),
       );
     },
-    [repoPath, diff, viewed],
+    [repoPath, diff],
   );
 
   const onClearViewed = useCallback(async () => {
