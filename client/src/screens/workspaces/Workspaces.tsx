@@ -11,6 +11,7 @@ import {
   type OverviewOpenPrRow,
   type OverviewRow,
   type OverviewWorkspaceRow,
+  type RepoAccessError,
   type ReviewCtx,
   type User,
   type WorkspaceCreated,
@@ -123,6 +124,13 @@ export function Workspaces({
   const [worktrees, setWorktrees] = useState<WorktreeInfo[]>([]);
   const [rows, setRows] = useState<OverviewRow[]>([]);
   const [overviewError, setOverviewError] = useState<string | null>(null);
+  // Repo-access gate failure (backend 403, code github_app_no_access; ADR-0016).
+  // Distinct from overviewError so we can render an "Install the Stage App" CTA
+  // rather than a bare red banner. installUrl is null → message-only fallback.
+  const [repoAccess, setRepoAccess] = useState<{
+    message: string;
+    installUrl: string | null;
+  } | null>(null);
   const [branchesError, setBranchesError] = useState<string | null>(null);
   const [diffStats, setDiffStats] = useState<Record<string, DiffStats>>({});
   const [show, setShow] = useState<Show>('all');
@@ -172,16 +180,33 @@ export function Workspaces({
     try {
       setRows(await repoOverview(owner, repo));
       setOverviewError(null);
+      setRepoAccess(null);
     } catch (e) {
       // Any failure here is a hard fail per the project's error-handling
       // convention (see CLAUDE.md "Error handling"): no silent fallbacks, no
       // half-rendered overviews. Surface the API's message verbatim.
       console.warn('workspaces_overview_failed', e);
+      // Structured repo-access gate failure (backend 403, code
+      // github_app_no_access): render an "Install the Stage App" CTA instead
+      // of a bare error banner, and drop any stale rows. Everything else stays
+      // the verbatim-message red banner.
+      if (
+        typeof e === 'object' &&
+        e !== null &&
+        (e as { kind?: unknown }).kind === 'github_app_no_access'
+      ) {
+        const re = e as RepoAccessError;
+        setRepoAccess({ message: re.message, installUrl: re.install_url ?? null });
+        setOverviewError(null);
+        setRows([]);
+        return;
+      }
       const msg =
         typeof e === 'object' && e !== null && 'message' in e
           ? String((e as { message: unknown }).message)
           : String(e);
       setOverviewError(msg);
+      setRepoAccess(null);
     }
   }, []);
 
@@ -594,6 +619,40 @@ export function Workspaces({
                 }}
               >
                 Fetch failed: {fetchError}
+              </div>
+            )}
+
+            {repoAccess && (
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: 'var(--red-d)',
+                  background: 'rgba(255,59,48,0.08)',
+                  border: '1px solid rgba(255,59,48,0.20)',
+                  borderRadius: 'var(--r-sm)',
+                  padding: '6px 10px',
+                  marginBottom: 10,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                }}
+              >
+                <span>{repoAccess.message}</span>
+                {repoAccess.installUrl && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      const url = repoAccess.installUrl;
+                      if (url) openUrl(url).catch((e) => console.warn('open_url_failed', e));
+                    }}
+                    title="Install the Stage GitHub App on this repository"
+                    style={{ flex: '0 0 auto' }}
+                  >
+                    Install the Stage App
+                  </button>
+                )}
               </div>
             )}
 

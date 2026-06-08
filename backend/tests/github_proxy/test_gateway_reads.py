@@ -114,3 +114,51 @@ def test_search_issues_raises_when_total_exceeds_cap() -> None:
         g.search_issues("q")
     assert exc.value.status_code == 502
     assert exc.value.message == "github_search_truncated"
+
+
+# ── Installation listing (repo-access gate, ADR-0017) ───────────────────────
+
+
+@respx.mock
+def test_list_user_installations_single_page() -> None:
+    respx.get("https://api.github.com/user/installations").mock(
+        return_value=Response(
+            200,
+            json={"total_count": 1, "installations": [{"id": 7, "account": {"login": "acme"}}]},
+        ),
+    )
+    g = GithubGateway(token="t")
+    out = g.list_user_installations()
+    assert [i["id"] for i in out] == [7]
+
+
+@respx.mock
+def test_list_installation_repos_paginates_until_complete() -> None:
+    """Two pages of repos (100 then 3) concatenated; stops once total_count met."""
+    page_one = [{"full_name": f"acme/r{i}"} for i in range(100)]
+    page_two = [{"full_name": f"acme/r{100 + i}"} for i in range(3)]
+    respx.get(
+        "https://api.github.com/user/installations/7/repositories",
+        params={"per_page": "100", "page": "1"},
+    ).mock(return_value=Response(200, json={"total_count": 103, "repositories": page_one}))
+    respx.get(
+        "https://api.github.com/user/installations/7/repositories",
+        params={"per_page": "100", "page": "2"},
+    ).mock(return_value=Response(200, json={"total_count": 103, "repositories": page_two}))
+    g = GithubGateway(token="t")
+    out = g.list_installation_repos(7)
+    assert len(out) == 103
+    assert out[-1]["full_name"] == "acme/r102"
+
+
+@respx.mock
+def test_list_installation_repos_raises_on_truncation() -> None:
+    """Pages run dry before total_count is reached → fail loud, not partial."""
+    respx.get("https://api.github.com/user/installations/7/repositories").mock(
+        return_value=Response(200, json={"total_count": 50, "repositories": []}),
+    )
+    g = GithubGateway(token="t")
+    with pytest.raises(GithubError) as exc:
+        g.list_installation_repos(7)
+    assert exc.value.status_code == 502
+    assert exc.value.message == "github_installations_truncated"

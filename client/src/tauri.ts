@@ -228,6 +228,16 @@ export type OverviewOpenPrRow = {
 
 export type OverviewRow = OverviewWorkspaceRow | OverviewOpenPrRow;
 
+/** Structured rejection from `repoOverview` when Stage's GitHub App can't
+ *  reach the repo (backend 403, code `github_app_no_access`; see docs/adr/0017).
+ *  `install_url` is null when the app slug isn't configured (message-only
+ *  fallback). All *other* command failures still reject with a bare string. */
+export type RepoAccessError = {
+  kind: 'github_app_no_access';
+  message: string;
+  install_url: string | null;
+};
+
 export const repoOverview = (owner: string, repo: string) =>
   invoke<OverviewRow[]>('repo_overview', { owner, repo });
 

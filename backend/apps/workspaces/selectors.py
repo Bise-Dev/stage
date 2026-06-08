@@ -8,6 +8,7 @@ from django.db.models import Q, QuerySet
 from apps.core.exceptions import ApplicationError
 from apps.users.models import User
 from apps.workspaces.models import IntroComment, StorylineFile, Workspace
+from config.settings.env_schemas import env
 
 logger = structlog.get_logger(__name__)
 
@@ -284,13 +285,115 @@ def _fetch_pr_details(
     return results
 
 
+def _no_access_error(*, repo_owner: str, repo_name: str, reason: str) -> ApplicationError:
+    """Build the 403 raised when Stage's GitHub App can't reach {owner}/{repo}.
+
+    ``message`` is the user-facing sentence the client renders verbatim;
+    ``extra["code"]`` is the stable machine handle the client branches on (see
+    CLAUDE.md "Errors"). ``install_url`` is omitted while the app slug is still
+    the placeholder — the message stands on its own as a fallback.
+    """
+    extra: dict = {
+        "code": "github_app_no_access",
+        "owner": repo_owner,
+        "repo": repo_name,
+        "reason": reason,
+    }
+    slug = env.GITHUB_APP_SLUG
+    if slug and slug != "REPLACE_ME":
+        extra["install_url"] = f"https://github.com/apps/{slug}/installations/new"
+    if reason == "not_installed":
+        message = (
+            f"Stage's GitHub App isn't installed on {repo_owner}. "
+            "Install it to load this repo's workspaces."
+        )
+    else:
+        message = (
+            f"Stage's GitHub App is installed on {repo_owner} but hasn't been granted access "
+            f"to {repo_owner}/{repo_name}. Add this repository to the installation to load its "
+            "workspaces."
+        )
+    return ApplicationError(message, extra=extra, status=403)
+
+
+def repo_access_gate(*, repo_owner: str, repo_name: str, gateway) -> None:
+    """Affirmatively verify Stage's GitHub App can access {owner}/{repo}.
+
+    When the app isn't installed (or the repo isn't selected) GitHub answers
+    ``repo_overview``'s `search_issues` with **200 and empty results** — no
+    exception — so a probe-on-failure can't detect it. This runs *before* the
+    overview fan-out as a positive check (see docs/adr/0017), using only the
+    user-to-server token the gateway already holds:
+
+    - ``GET /user/installations``: no installation whose ``account.login``
+      matches ``repo_owner`` (case-insensitive) → ``not_installed``.
+    - ``GET /user/installations/{id}/repositories``: ``{owner}/{repo}`` absent
+      → ``repo_not_selected``.
+
+    Either gap raises ``ApplicationError(403, code="github_app_no_access")``. A
+    transport/5xx on the installation calls is a *distinct* 502 — affirmative
+    200-with-list responses are unambiguous (empty/no-match → 403), so only an
+    HTTP error on the call itself is the "couldn't check" case.
+    """
+    try:
+        installations = gateway.list_user_installations()
+    except Exception as exc:
+        logger.exception(
+            "repo_access_gate_installations_failed",
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+        )
+        raise ApplicationError(
+            "Couldn't check the Stage GitHub App installation on GitHub.",
+            extra={"code": "github_installations_unavailable", "cause": str(exc)},
+            status=502,
+        ) from exc
+
+    owner_lower = repo_owner.lower()
+    match = next(
+        (
+            inst
+            for inst in installations
+            if ((inst.get("account") or {}).get("login") or "").lower() == owner_lower
+        ),
+        None,
+    )
+    if match is None:
+        raise _no_access_error(repo_owner=repo_owner, repo_name=repo_name, reason="not_installed")
+
+    installation_id = match.get("id")
+    try:
+        repos = gateway.list_installation_repos(installation_id)
+    except Exception as exc:
+        logger.exception("repo_access_gate_repos_failed", installation_id=installation_id)
+        raise ApplicationError(
+            "Couldn't check the Stage GitHub App's repository access on GitHub.",
+            extra={"code": "github_installations_unavailable", "cause": str(exc)},
+            status=502,
+        ) from exc
+
+    target = f"{repo_owner}/{repo_name}".lower()
+    if not any((r.get("full_name") or "").lower() == target for r in repos):
+        raise _no_access_error(
+            repo_owner=repo_owner, repo_name=repo_name, reason="repo_not_selected"
+        )
+
+
 def repo_overview(*, user: User, repo_owner: str, repo_name: str, gateway) -> list[dict]:
     """Unified Workspace + Open-PR rows for one repo (see docs/adr/0009).
 
     Fails loudly on any GitHub error (see CLAUDE.md "Error handling"). The
     caller gets a complete list of rows or a clear 502 — never a half-built
     overview with missing/misleading fields.
+
+    First clears the **repo-access gate** (docs/adr/0017): without it the
+    silent 200-empty `search_issues` response would render an empty overview
+    when Stage's GitHub App isn't installed on the repo. The 403 is never
+    cached (the API caches only on success), so the overview recovers the
+    instant the app is installed.
     """
+    repo_access_gate(repo_owner=repo_owner, repo_name=repo_name, gateway=gateway)
+
     workspaces = list(
         workspace_list(user=user)
         .filter(repo_owner=repo_owner, repo_name=repo_name)

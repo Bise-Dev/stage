@@ -154,6 +154,56 @@ class GithubGateway:
             "items": all_items,
         }
 
+    def _paginate_envelope(self, path: str, *, key: str) -> list[dict[str, Any]]:
+        """Fetch every item from a GitHub ``{total_count, <key>: [...]}`` endpoint.
+
+        Iterates pages at 100/each until the accumulated count reaches
+        ``total_count`` (or a page comes back empty). Mirrors
+        ``search_issues``'s fail-loud stance (CLAUDE.md "Error handling"): if
+        the pages run dry before reaching ``total_count`` we raise rather than
+        return a truncated list. Termination is guaranteed by the empty-page
+        break, so a bogus ``total_count`` can't spin forever.
+        """
+        per_page = 100
+        all_items: list[dict[str, Any]] = []
+        total_count = 0
+        page = 1
+        while True:
+            resp = self._request("GET", path, params={"per_page": per_page, "page": page}).json()
+            total_count = resp.get("total_count", 0)
+            page_items = resp.get(key, [])
+            all_items.extend(page_items)
+            if len(all_items) >= total_count or not page_items:
+                break
+            page += 1
+        if len(all_items) < total_count:
+            raise GithubError(
+                502,
+                "github_installations_truncated",
+                {"path": path, "total_count": total_count, "fetched": len(all_items)},
+            )
+        return all_items
+
+    def list_user_installations(self) -> list[dict[str, Any]]:
+        """Every GitHub App installation the authenticated user can access.
+
+        ``GET /user/installations`` authenticates with the user-to-server token
+        ``GithubGateway`` already holds — no app-JWT (see docs/adr/0017). Each
+        installation carries ``account.login`` and ``id``. Fully paginated.
+        """
+        return self._paginate_envelope("/user/installations", key="installations")
+
+    def list_installation_repos(self, installation_id: int) -> list[dict[str, Any]]:
+        """Every repo selected for ``installation_id`` that the user can see.
+
+        ``GET /user/installations/{id}/repositories`` — same user-to-server
+        token and fail-loud pagination as ``list_user_installations``. Each
+        repo carries ``full_name`` (``owner/repo``).
+        """
+        return self._paginate_envelope(
+            f"/user/installations/{installation_id}/repositories", key="repositories"
+        )
+
     def post_issue_comment(self, o: str, r: str, n: int, *, body: str) -> dict:
         return self._request(
             "POST", f"/repos/{o}/{r}/issues/{n}/comments", json={"body": body}
