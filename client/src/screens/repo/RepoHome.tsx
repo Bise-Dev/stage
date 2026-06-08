@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
@@ -6,14 +6,16 @@ import {
   type BranchInfo,
   type WorktreeInfo,
   getActiveRepo,
+  gitFetch,
   gitLocalBranches,
   onRepoChanged,
   onWorktreesChanged,
+  repoDebriefBranches,
   repoSummary,
   repoWorktrees,
   setFocusedWorktree,
 } from '../../tauri';
-import { RepoBranchList, buildRepoRows } from './RepoBranchList';
+import { RepoBranchList, type RepoFilter, buildRepoRows, repoRowCounts } from './RepoBranchList';
 
 const SHOW_PATHS_KEY = 'repoHome:showPaths';
 
@@ -29,11 +31,63 @@ function repoLabel(remoteUrl: string | null, path: string): string {
   return parts[parts.length - 1] || path;
 }
 
+/** A row in the left filter rail's "Show" group. */
+function FilterRow({
+  label,
+  count,
+  active,
+  icon,
+  onClick,
+}: {
+  label: string;
+  count: number | string;
+  active?: boolean;
+  icon?: React.ReactNode;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="cursor-default"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '5px 10px',
+        borderRadius: 5,
+        border: 'none',
+        width: '100%',
+        textAlign: 'left',
+        background: active ? 'rgba(0,0,0,0.06)' : 'transparent',
+        color: 'var(--gray-800)',
+        fontSize: 12.5,
+        fontFamily: 'inherit',
+        fontWeight: active ? 600 : 500,
+      }}
+    >
+      {icon ? (
+        <span style={{ color: 'var(--gray-500)', display: 'flex' }}>{icon}</span>
+      ) : (
+        <span style={{ width: 7, flex: '0 0 7px' }} />
+      )}
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {label}
+      </span>
+      <span style={{ color: 'var(--gray-500)', fontSize: 11.5, fontWeight: 500, marginLeft: 4 }}>
+        {count}
+      </span>
+    </button>
+  );
+}
+
 /**
- * The local-only landing after opening a repo (ADR-0016): the B2 branch list
- * with worktrees annotated. Self-Review on a worktree-backed branch focuses
- * that worktree then enters the Self-Review screen. Refreshes on repo / worktree
- * changes so an externally-created worktree (e.g. agent-deck) appears live.
+ * The local-only landing after opening a repo (ADR-0016), restyled to the
+ * Workspaces vocabulary (design v3): a left filter rail, a search/action bar,
+ * and card-style branch rows grouped into Worktrees / Repository-root / plain
+ * buckets. Self-Review on a worktree-backed branch focuses that worktree then
+ * enters the Self-Review screen. Refreshes on repo / worktree changes so an
+ * externally-created worktree (e.g. agent-deck) appears live.
  */
 export function RepoHome({
   onEnterSelfReview,
@@ -43,19 +97,29 @@ export function RepoHome({
   onChangeRepo: () => void;
 }) {
   const [label, setLabel] = useState('…');
+  const [repoPath, setRepoPath] = useState('');
   const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [worktrees, setWorktrees] = useState<WorktreeInfo[]>([]);
+  const [debriefBranches, setDebriefBranches] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<RepoFilter>('all');
   const [showPaths, setShowPaths] = useState(
     () => localStorage.getItem(SHOW_PATHS_KEY) !== 'false',
   );
 
   const reload = useCallback(async () => {
     try {
-      const [b, w] = await Promise.all([gitLocalBranches(), repoWorktrees()]);
+      const [b, w, d] = await Promise.all([
+        gitLocalBranches(),
+        repoWorktrees(),
+        repoDebriefBranches(),
+      ]);
       setBranches(b);
       setWorktrees(w);
+      setDebriefBranches(new Set(d));
       setError(null);
     } catch (e) {
       console.warn('repo_home_reload_failed', e);
@@ -72,6 +136,7 @@ export function RepoHome({
           setError('No active repository.');
           return;
         }
+        setRepoPath(r.path);
         const sum = await repoSummary(r.path);
         setLabel(repoLabel(sum.remoteUrl, r.path));
         setDefaultBranch(sum.defaultBranch);
@@ -103,6 +168,20 @@ export function RepoHome({
     });
   }, []);
 
+  const onFetch = useCallback(async () => {
+    setFetching(true);
+    setError(null);
+    try {
+      await gitFetch();
+      await reload();
+    } catch (e) {
+      console.warn('repo_home_fetch_failed', e);
+      setError(String(e));
+    } finally {
+      setFetching(false);
+    }
+  }, [reload]);
+
   const onSelfReview = useCallback(
     async (worktreePath: string) => {
       try {
@@ -116,43 +195,163 @@ export function RepoHome({
     [onEnterSelfReview],
   );
 
-  const rows = buildRepoRows(branches, worktrees, defaultBranch);
+  const rows = useMemo(
+    () => buildRepoRows(branches, worktrees, defaultBranch, debriefBranches),
+    [branches, worktrees, defaultBranch, debriefBranches],
+  );
+  const counts = useMemo(() => repoRowCounts(rows), [rows]);
 
   return (
     <div className="stage">
       <div className="win">
         <TitleBar title={`Stage — ${label}`} />
-        <div
-          style={{
-            height: 56,
-            flex: '0 0 56px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            padding: '0 16px',
-            borderBottom: '1px solid var(--hairline)',
-            background: '#fff',
-          }}
-        >
-          <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
-            {label}
-          </span>
-          <div style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={toggleShowPaths}>
-            <Icon name="eye" size={12} /> Paths: {showPaths ? 'shown' : 'hidden'}
-          </button>
-          <button type="button" className="btn" onClick={onChangeRepo}>
-            Change repository
-          </button>
-        </div>
+        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+          {/* Left filter rail */}
+          <div
+            style={{
+              width: 200,
+              flex: '0 0 200px',
+              borderRight: '1px solid var(--hairline)',
+              padding: '14px 10px',
+              background: '#fbfaf8',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0 6px 8px',
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--gray-700)' }}>
+                Branches
+              </div>
+              <Icon name="branch" size={13} color="var(--gray-500)" />
+            </div>
 
-        {error && <div style={errorBanner}>{error}</div>}
+            <div className="section-label" style={{ padding: '0 6px' }}>
+              Show
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <FilterRow
+                label="All branches"
+                count={counts.all}
+                active={filter === 'all'}
+                onClick={() => setFilter('all')}
+              />
+              <FilterRow
+                label="Worktrees"
+                count={counts.worktrees}
+                active={filter === 'worktrees'}
+                onClick={() => setFilter('worktrees')}
+              />
+              <FilterRow
+                label="Repository root"
+                count={counts.root}
+                active={filter === 'root'}
+                onClick={() => setFilter('root')}
+              />
+            </div>
 
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 14px' }}>
-          <div className="section-label" style={{ padding: '0 6px 6px' }}>
-            Branches
+            <div className="section-label" style={{ marginTop: 14, padding: '0 6px' }}>
+              Paths
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <FilterRow
+                icon={<Icon name="eye" size={11} />}
+                label={showPaths ? 'Shown' : 'Hidden'}
+                count=""
+                active={showPaths}
+                onClick={toggleShowPaths}
+              />
+            </div>
+
+            <div style={{ flex: 1 }} />
+
+            <div className="section-label" style={{ marginTop: 14, padding: '0 6px' }}>
+              Repository
+            </div>
+            <div style={{ padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Icon name="folder" size={13} color="var(--gray-500)" />
+              <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>
+                {label}
+              </span>
+            </div>
+            {repoPath && (
+              <div
+                className="mono"
+                style={{
+                  padding: '0 10px 4px 28px',
+                  color: 'var(--gray-500)',
+                  fontSize: 11,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={repoPath}
+              >
+                {repoPath}
+              </div>
+            )}
           </div>
-          <RepoBranchList rows={rows} showPaths={showPaths} onSelfReview={onSelfReview} />
+
+          {/* Main */}
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              padding: '14px 18px',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+              <div style={{ flex: 1, position: 'relative' }}>
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: 9,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: 'var(--gray-400)',
+                    display: 'flex',
+                  }}
+                >
+                  <Icon name="search" size={13} />
+                </div>
+                <input
+                  className="input"
+                  placeholder="Filter branches by name or path…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  style={{ paddingLeft: 28, width: '100%' }}
+                />
+              </div>
+              <button type="button" className="btn btn-lg" onClick={onFetch} disabled={fetching}>
+                <Icon name="branch" size={12} color="var(--gray-700)" />{' '}
+                {fetching ? 'Fetching…' : 'Fetch'}
+              </button>
+              <button type="button" className="btn btn-lg" onClick={onChangeRepo}>
+                <Icon name="folder" size={12} color="var(--gray-700)" /> Change repository
+              </button>
+            </div>
+
+            {error && <div style={errorBanner}>{error}</div>}
+
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <RepoBranchList
+                rows={rows}
+                showPaths={showPaths}
+                filter={filter}
+                query={query}
+                onSelfReview={onSelfReview}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -166,5 +365,5 @@ const errorBanner: React.CSSProperties = {
   border: '1px solid rgba(255,59,48,0.20)',
   borderRadius: 'var(--r-sm)',
   padding: '6px 10px',
-  margin: '8px 16px 0',
+  marginBottom: 10,
 };
