@@ -6,6 +6,7 @@ import { TitleBar } from '../../components/TitleBar';
 import {
   type RecentRepo,
   type RepoSummary,
+  forgetRecentRepo,
   listRecentRepos,
   repoSummary,
   setActiveRepo,
@@ -75,6 +76,26 @@ export function OpenRepository({ onOpened, onBack }: Props) {
     },
     [onOpened],
   );
+
+  // Remove a repo from the recents list (observe-only: forgets the entry, never
+  // touches the repo on disk). Optimistically drop it from local state, clean
+  // its cached summary, and clear the selection if it was the removed row.
+  const forget = useCallback(async (path: string) => {
+    setError(null);
+    try {
+      await forgetRecentRepo(path);
+    } catch (e) {
+      setError(String(e));
+      return;
+    }
+    setRecents((prev) => prev.filter((r) => r.path !== path));
+    setSummaries((s) => {
+      const next = { ...s };
+      delete next[path];
+      return next;
+    });
+    setSelectedPath((sel) => (sel === path ? null : sel));
+  }, []);
 
   useEffect(() => {
     const unlistenPromises = [
@@ -275,6 +296,7 @@ export function OpenRepository({ onOpened, onBack }: Props) {
                   selected={r.path === selectedPath}
                   onSelect={() => setSelectedPath(r.path)}
                   onActivate={() => tryOpen(r.path)}
+                  onRemove={() => forget(r.path)}
                 />
               ))
             )}
@@ -345,12 +367,14 @@ function RepoRow({
   selected,
   onSelect,
   onActivate,
+  onRemove,
 }: {
   path: string;
   summary: SummaryState | undefined;
   selected: boolean;
   onSelect: () => void;
   onActivate: () => void;
+  onRemove: () => void;
 }) {
   const ready = summary?.kind === 'ready' ? summary.summary : null;
   const slug = ready ? slugFromRemote(ready.remoteUrl) : null;
@@ -364,104 +388,133 @@ function RepoRow({
   const defaultBranchLabel = summary?.kind === 'loading' ? '…' : (ready?.defaultBranch ?? '—');
 
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      onDoubleClick={onActivate}
-      className="flex items-center text-left w-full cursor-default"
-      style={{
-        gap: 12,
-        padding: '10px 14px',
-        background: '#fff',
-        border: `1px solid ${selected ? 'rgba(0,122,255,0.5)' : 'var(--hairline)'}`,
-        borderRadius: 'var(--r-md)',
-        boxShadow: selected ? '0 0 0 3px var(--blue-tint)' : 'var(--sh-1)',
-        fontFamily: 'inherit',
-      }}
-    >
-      <span
-        className="relative inline-block"
+    <div className="relative group">
+      <button
+        type="button"
+        onClick={onSelect}
+        onDoubleClick={onActivate}
+        className="flex items-center text-left w-full cursor-default"
         style={{
-          width: 16,
-          height: 16,
-          borderRadius: 8,
-          flex: '0 0 16px',
-          border: `1.5px solid ${selected ? 'var(--blue)' : 'rgba(0,0,0,0.25)'}`,
+          gap: 12,
+          padding: '10px 38px 10px 14px',
+          background: '#fff',
+          border: `1px solid ${selected ? 'rgba(0,122,255,0.5)' : 'var(--hairline)'}`,
+          borderRadius: 'var(--r-md)',
+          boxShadow: selected ? '0 0 0 3px var(--blue-tint)' : 'var(--sh-1)',
+          fontFamily: 'inherit',
         }}
       >
-        {selected && (
-          <span
-            className="absolute"
-            style={{
-              inset: 3,
-              borderRadius: 5,
-              background: 'var(--blue)',
-            }}
-          />
-        )}
-      </span>
-      <Icon name="folder" size={14} color="var(--gray-600)" />
-      <span className="flex-1 min-w-0">
-        <span className="flex items-center" style={{ gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--gray-900)' }}>{name}</span>
-          {slug ? (
+        <span
+          className="relative inline-block"
+          style={{
+            width: 16,
+            height: 16,
+            borderRadius: 8,
+            flex: '0 0 16px',
+            border: `1.5px solid ${selected ? 'var(--blue)' : 'rgba(0,0,0,0.25)'}`,
+          }}
+        >
+          {selected && (
             <span
-              className="inline-flex items-center"
+              className="absolute"
               style={{
-                gap: 3,
+                inset: 3,
+                borderRadius: 5,
+                background: 'var(--blue)',
+              }}
+            />
+          )}
+        </span>
+        <Icon name="folder" size={14} color="var(--gray-600)" />
+        <span className="flex-1 min-w-0">
+          <span className="flex items-center" style={{ gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--gray-900)' }}>{name}</span>
+            {slug ? (
+              <span
+                className="inline-flex items-center"
+                style={{
+                  gap: 3,
+                  height: 18,
+                  padding: '0 6px',
+                  borderRadius: 9,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  background: 'rgba(0,0,0,0.06)',
+                  color: 'var(--gray-700)',
+                }}
+              >
+                <Icon name="gh" size={9} color="var(--gray-700)" />
+                {slug}
+              </span>
+            ) : ready ? (
+              <span
+                className="inline-flex items-center"
+                style={{
+                  height: 18,
+                  padding: '0 6px',
+                  borderRadius: 9,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  background: 'rgba(255,149,0,0.14)',
+                  color: '#b56500',
+                }}
+              >
+                no remote
+              </span>
+            ) : null}
+            <span
+              className="mono inline-flex items-center"
+              style={{
                 height: 18,
                 padding: '0 6px',
                 borderRadius: 9,
                 fontSize: 11,
                 fontWeight: 600,
-                background: 'rgba(0,0,0,0.06)',
-                color: 'var(--gray-700)',
+                background: 'rgba(0,0,0,0.05)',
+                color: 'var(--gray-600)',
               }}
             >
-              <Icon name="gh" size={9} color="var(--gray-700)" />
-              {slug}
+              {defaultBranchLabel}
             </span>
-          ) : ready ? (
-            <span
-              className="inline-flex items-center"
-              style={{
-                height: 18,
-                padding: '0 6px',
-                borderRadius: 9,
-                fontSize: 11,
-                fontWeight: 600,
-                background: 'rgba(255,149,0,0.14)',
-                color: '#b56500',
-              }}
-            >
-              no remote
-            </span>
-          ) : null}
+          </span>
           <span
-            className="mono inline-flex items-center"
-            style={{
-              height: 18,
-              padding: '0 6px',
-              borderRadius: 9,
-              fontSize: 11,
-              fontWeight: 600,
-              background: 'rgba(0,0,0,0.05)',
-              color: 'var(--gray-600)',
-            }}
+            className="mono block"
+            style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 2 }}
           >
-            {defaultBranchLabel}
+            {path}
           </span>
         </span>
-        <span
-          className="mono block"
-          style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 2 }}
-        >
-          {path}
+        <span className="text-right" style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>
+          <span className="block">{branchesLabel}</span>
         </span>
-      </span>
-      <span className="text-right" style={{ fontSize: 11.5, color: 'var(--gray-500)' }}>
-        <span className="block">{branchesLabel}</span>
-      </span>
-    </button>
+      </button>
+      <button
+        type="button"
+        aria-label={`Remove ${name} from recents`}
+        title="Remove from recents"
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        className="absolute flex items-center justify-center cursor-default opacity-0 group-hover:opacity-100 focus:opacity-100"
+        style={{
+          top: '50%',
+          right: 10,
+          transform: 'translateY(-50%)',
+          width: 18,
+          height: 18,
+          borderRadius: 9,
+          border: 'none',
+          background: 'rgba(0,0,0,0.06)',
+          color: 'var(--gray-600)',
+          fontSize: 14,
+          lineHeight: 1,
+          fontFamily: 'inherit',
+          transition: 'opacity 80ms ease, background 80ms ease',
+        }}
+      >
+        ×
+      </button>
+    </div>
   );
 }

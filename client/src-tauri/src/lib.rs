@@ -236,6 +236,7 @@ pub fn run() {
             commands::github_prs,
             commands::pr_file_diff,
             commands::self_review_debrief_get,
+            commands::repo_debrief_branches,
             commands::self_review_notes_list,
             commands::self_review_note_create,
             commands::self_review_note_reply,

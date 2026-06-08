@@ -654,6 +654,23 @@ pub fn self_review_debrief_get(state: State<'_, AppState>) -> Result<Option<Debr
     Ok(store.get_debrief(&key)?)
 }
 
+/// Branch names that have a stored Debrief for the active repo. Branch-agnostic:
+/// keyed on the repo's (owner, name) identity (repo-wide), so the branch list can
+/// flag which branches carry a Debrief in one call rather than per-branch. A
+/// Debrief is a branch property, so detached worktrees (no branch) never match.
+/// Auth-free + local, like the other Debrief commands.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn repo_debrief_branches(state: State<'_, AppState>) -> Result<Vec<String>, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.list_debrief_branches(&key.repo_owner, &key.repo_name)?)
+}
+
 /// Review notes for the active repo + branch (optionally filtered by `status`),
 /// each carrying its `replies` thread and a computed `outdated` flag.
 /// `outdated` is derived against the current Debrief's base (falling back to the

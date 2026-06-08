@@ -126,6 +126,27 @@ impl Store {
         })
     }
 
+    /// Branch names that have a stored Debrief for the repo identified by
+    /// `(repo_owner, repo_name)`, newest first. Repo-scoped and branch-agnostic
+    /// (owner/name are repo-wide — origin-derived or the common-dir slug), so the
+    /// branch list can flag which branches carry a Debrief in one query rather
+    /// than a `get_debrief` round-trip per branch.
+    pub fn list_debrief_branches(
+        &self,
+        repo_owner: &str,
+        repo_name: &str,
+    ) -> Result<Vec<String>, StageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT branch FROM debrief \
+             WHERE repo_owner = ?1 AND repo_name = ?2 \
+             ORDER BY updated_at DESC",
+        )?;
+        let branches = stmt
+            .query_map(params![repo_owner, repo_name], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(branches)
+    }
+
     /// Delete the Debrief for `key`. Returns whether a row was removed.
     pub fn clear_debrief(&self, key: &RepoKey) -> Result<bool, StageError> {
         let removed = self.conn.execute(

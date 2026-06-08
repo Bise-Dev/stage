@@ -457,6 +457,10 @@ export type ReviewNoteView = ReviewNote & { outdated: boolean };
 /** The stored Debrief for the active repo + branch, or `null` if none. */
 export const selfReviewDebriefGet = () => invoke<Debrief | null>('self_review_debrief_get');
 
+/** Branch names that have a stored Debrief for the active repo (branch-agnostic,
+ *  repo-wide). Lets the branch list flag which branches carry a Debrief. */
+export const repoDebriefBranches = () => invoke<string[]>('repo_debrief_branches');
+
 /** Review notes for the active repo + branch, optionally filtered by status. */
 export const selfReviewNotesList = (status?: NoteStatus) =>
   invoke<ReviewNoteView[]>('self_review_notes_list', { status: status ?? null });
