@@ -20,6 +20,10 @@ class Env(BaseSettings):
     GITHUB_APP_PRIVATE_KEY: str = (
         "-----BEGIN RSA PRIVATE KEY-----\nREPLACE_ME\n-----END RSA PRIVATE KEY-----"
     )
+    # App slug from the GitHub App's public page URL (github.com/apps/<slug>).
+    # Used only to build the install URL surfaced when the repo-access gate
+    # fails; left as a placeholder we check against to decide whether to emit it.
+    GITHUB_APP_SLUG: str = "REPLACE_ME"
     GITHUB_API_BASE: str = "https://api.github.com"
 
 

@@ -139,12 +139,17 @@ def test_workspace_patch_local_phase_creator_only(authed_client) -> None:
     assert resp.status_code == 403
 
 
-def _gw_empty() -> MagicMock:
+def _gw_empty(owner: str = "o", repo: str = "r") -> MagicMock:
     """A gateway whose searches return nothing — enough for an overview that
-    contains only pre-publish (draft) workspaces, which never fan out to GitHub."""
+    contains only pre-publish (draft) workspaces, which never fan out to GitHub.
+
+    Stubs the repo-access gate (ADR-0017) to pass: the app is installed on
+    `owner` and `owner/repo` is selected."""
     gw = MagicMock()
     gw.__enter__ = lambda s: s
     gw.__exit__ = MagicMock(return_value=False)
+    gw.list_user_installations.return_value = [{"account": {"login": owner}, "id": 1}]
+    gw.list_installation_repos.return_value = [{"full_name": f"{owner}/{repo}"}]
     gw.search_issues.return_value = {"items": []}
     gw.get_pr.return_value = {"state": "open", "head": {"ref": "feat/x"}}
     gw.list_reviews.return_value = []
@@ -193,7 +198,10 @@ def test_workspace_delete_invalidates_overview_cache(authed_client) -> None:
     client, user = authed_client
     ws = cast(Workspace, WorkspaceFactory(created_by=user, pr_number=None))
     cache.clear()
-    with patch("apps.workspaces.apis.make_user_gateway", return_value=_gw_empty()):
+    with patch(
+        "apps.workspaces.apis.make_user_gateway",
+        return_value=_gw_empty(ws.repo_owner, ws.repo_name),
+    ):
         primed = client.get(f"/api/v1/repos/{ws.repo_owner}/{ws.repo_name}/overview/")
         assert primed.status_code == 200, primed.content
         assert any(r["kind"] == "workspace" and r["id"] == str(ws.id) for r in primed.json())
