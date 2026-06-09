@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Icon } from '../../components/Icon';
+import { RepoMenu } from '../../components/RepoMenu';
 import { TitleBar } from '../../components/TitleBar';
 import {
   type BranchInfo,
@@ -92,9 +93,13 @@ function FilterRow({
 export function RepoHome({
   onEnterSelfReview,
   onChangeRepo,
+  onOpenSettings,
+  onSignIn,
 }: {
   onEnterSelfReview: () => void;
   onChangeRepo: () => void;
+  onOpenSettings: () => void;
+  onSignIn: () => void;
 }) {
   const [label, setLabel] = useState('…');
   const [repoPath, setRepoPath] = useState('');
@@ -274,28 +279,18 @@ export function RepoHome({
             <div className="section-label" style={{ marginTop: 14, padding: '0 6px' }}>
               Repository
             </div>
-            <div style={{ padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Icon name="folder" size={13} color="var(--gray-500)" />
-              <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>
-                {label}
-              </span>
-            </div>
-            {repoPath && (
-              <div
-                className="mono"
-                style={{
-                  padding: '0 10px 4px 28px',
-                  color: 'var(--gray-500)',
-                  fontSize: 11,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-                title={repoPath}
-              >
-                {repoPath}
-              </div>
-            )}
+            {/* Same picker as the signed-in Workspaces home; local-only has no
+                session, so the auth item is "Sign in" rather than "Sign out".
+                `label` is already "owner/repo" or the path basename, which is
+                exactly what RepoMenu renders from `slug`. */}
+            <RepoMenu
+              slug={label}
+              path={repoPath || null}
+              onChangeRepo={onChangeRepo}
+              onOpenSettings={onOpenSettings}
+              authLabel="Sign in"
+              onAuth={onSignIn}
+            />
           </div>
 
           {/* Main */}
@@ -334,9 +329,6 @@ export function RepoHome({
               <button type="button" className="btn btn-lg" onClick={onFetch} disabled={fetching}>
                 <Icon name="branch" size={12} color="var(--gray-700)" />{' '}
                 {fetching ? 'Fetching…' : 'Fetch'}
-              </button>
-              <button type="button" className="btn btn-lg" onClick={onChangeRepo}>
-                <Icon name="folder" size={12} color="var(--gray-700)" /> Change repository
               </button>
             </div>
 
