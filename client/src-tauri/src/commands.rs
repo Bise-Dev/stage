@@ -633,6 +633,51 @@ pub async fn pr_file_diff(
     Ok(diff)
 }
 
+/// The PR's comments (`{ issue, review }`) from GitHub, via the backend
+/// (ADR-0001). The reviewer storyline viewer fetches these once per open/Refresh
+/// and anchors the review (line) comments inline in each step's diff — including
+/// comments left by non-Stage participants directly on github.com (ADR-0003).
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn pr_comments(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    repo: String,
+    pr_number: i64,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let comments = state
+        .api
+        .pr_comments(&token, &owner, &repo, pr_number)
+        .await?;
+    Ok(comments)
+}
+
+/// The PR's reviews from GitHub, via the backend (ADR-0001). The reviewer viewer
+/// computes the review-decision banner (latest non-pending state per reviewer)
+/// from these — non-Stage reviewers included (ADR-0003).
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn pr_reviews(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    repo: String,
+    pr_number: i64,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let reviews = state
+        .api
+        .pr_reviews(&token, &owner, &repo, pr_number)
+        .await?;
+    Ok(reviews)
+}
+
 // --- Self-Review Debrief (cycle 1: local agent↔author loop; ADR-0011) ---
 //
 // These read/write the shared SQLite store the `stage` CLI authors into, keyed

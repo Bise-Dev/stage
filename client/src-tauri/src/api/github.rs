@@ -50,6 +50,56 @@ impl Client {
         }
         resp.json().await.map_err(|e| Self::json_err(status, e))
     }
+
+    /// The PR's comments, as the backend proxies them from GitHub:
+    /// `{ "issue": [...], "review": [...] }` — issue (PR-level) comments and
+    /// review (line-anchored) comments, **including those left by non-Stage
+    /// participants on github.com** (ADR-0003: GitHub is the source of truth for
+    /// review state). Raw GitHub shapes flow through untyped; the reviewer viewer
+    /// anchors review comments inline by their `path`/`line`/`side` and threads
+    /// replies via `in_reply_to_id`.
+    pub async fn pr_comments(
+        &self,
+        token: &str,
+        o: &str,
+        r: &str,
+        n: i64,
+    ) -> Result<serde_json::Value, Error> {
+        let url = self
+            .base_url
+            .join(&format!("api/v1/repos/{o}/{r}/pulls/{n}/comments/"))
+            .map_err(|e| Error::InvalidBaseUrl(e.to_string()))?;
+        let resp = self.send(self.http.get(url).bearer_auth(token)).await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        resp.json().await.map_err(|e| Self::json_err(status, e))
+    }
+
+    /// The PR's reviews (each carrying `state`: APPROVED / CHANGES_REQUESTED /
+    /// COMMENTED / DISMISSED / PENDING, plus `user`, `body`, `submitted_at`), as
+    /// the backend proxies them from GitHub. Powers the reviewer viewer's review-
+    /// decision banner — the latest non-pending state per reviewer, **non-Stage
+    /// reviewers included** (ADR-0003).
+    pub async fn pr_reviews(
+        &self,
+        token: &str,
+        o: &str,
+        r: &str,
+        n: i64,
+    ) -> Result<serde_json::Value, Error> {
+        let url = self
+            .base_url
+            .join(&format!("api/v1/repos/{o}/{r}/pulls/{n}/reviews/"))
+            .map_err(|e| Error::InvalidBaseUrl(e.to_string()))?;
+        let resp = self.send(self.http.get(url).bearer_auth(token)).await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        resp.json().await.map_err(|e| Self::json_err(status, e))
+    }
 }
 
 #[cfg(test)]
@@ -185,6 +235,106 @@ mod tests {
         let client = Client::new(server.uri()).unwrap();
         let err = client
             .pr_file_diff("stg_bad", "org", "repo", 42, "src/x.rs")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn pr_comments_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/repos/org/repo/pulls/42/comments/"))
+            .and(header_exists("authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "issue": [
+                    { "id": 1, "body": "looks good overall", "user": { "login": "bob" } }
+                ],
+                "review": [
+                    {
+                        "id": 10,
+                        "path": "src/main.rs",
+                        "line": 2,
+                        "side": "RIGHT",
+                        "body": "rename this",
+                        "in_reply_to_id": null,
+                        "user": { "login": "bob" }
+                    }
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let body = client
+            .pr_comments("stg_abc", "org", "repo", 42)
+            .await
+            .unwrap();
+        assert_eq!(body["issue"][0]["body"], "looks good overall");
+        assert_eq!(body["review"][0]["path"], "src/main.rs");
+        assert_eq!(body["review"][0]["line"], 2);
+    }
+
+    #[tokio::test]
+    async fn pr_comments_401_unauthenticated() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/repos/org/repo/pulls/42/comments/"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "message": "unauthenticated",
+                "extra": {}
+            })))
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let err = client
+            .pr_comments("stg_bad", "org", "repo", 42)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn pr_reviews_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/repos/org/repo/pulls/42/reviews/"))
+            .and(header_exists("authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": 100,
+                    "state": "CHANGES_REQUESTED",
+                    "body": "needs work",
+                    "submitted_at": "2026-05-26T12:00:00Z",
+                    "user": { "login": "carol" }
+                }
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let body = client
+            .pr_reviews("stg_abc", "org", "repo", 42)
+            .await
+            .unwrap();
+        assert_eq!(body[0]["state"], "CHANGES_REQUESTED");
+        assert_eq!(body[0]["user"]["login"], "carol");
+    }
+
+    #[tokio::test]
+    async fn pr_reviews_401_unauthenticated() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/repos/org/repo/pulls/42/reviews/"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "message": "unauthenticated",
+                "extra": {}
+            })))
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let err = client
+            .pr_reviews("stg_bad", "org", "repo", 42)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Unauthenticated));
