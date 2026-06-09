@@ -263,7 +263,14 @@ export function App() {
     );
   }
   if (view === 'repoHome') {
-    return <RepoHome onEnterSelfReview={startSelfReview} onChangeRepo={changeRepo} />;
+    return (
+      <RepoHome
+        onEnterSelfReview={startSelfReview}
+        onChangeRepo={changeRepo}
+        onOpenSettings={openSettings}
+        onSignIn={() => setView('signIn')}
+      />
+    );
   }
   if (view === 'selfReview') {
     return <SelfReview onExit={exitSelfReview} seedBaseFromDebrief={seedBase} />;
