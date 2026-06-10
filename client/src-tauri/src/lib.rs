@@ -235,6 +235,8 @@ pub fn run() {
             commands::auth_logout,
             commands::github_prs,
             commands::pr_file_diff,
+            commands::pr_comments,
+            commands::pr_reviews,
             commands::self_review_debrief_get,
             commands::repo_debrief_branches,
             commands::self_review_notes_list,

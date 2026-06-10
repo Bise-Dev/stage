@@ -11,16 +11,30 @@ import { RELOAD } from '../../lib/shortcuts';
 import { useShortcut } from '../../lib/useShortcut';
 import {
   type FileStatus,
+  type GithubIssueComment,
   type GithubPrFile,
+  type GithubReview,
+  type PrComments,
   type ReviewCtx,
   type SelfReviewFileChange,
   type Storyline,
   type StorylineFile,
   type WorkspaceState,
+  prComments,
   prFileDiff,
+  prReviews,
   storylineGet,
 } from '../../tauri';
 import { inferDiffLanguage } from '../selfReview/markdown';
+import { GithubThread } from './GithubThread';
+import {
+  type GithubCommentThread,
+  groupCommentThreads,
+  isOnDiff,
+  parseVisibleLines,
+  reviewersByState,
+  threadAnchor,
+} from './githubReview';
 
 const STATES: Record<WorkspaceState, { label: string; cls: string }> = {
   draft: { label: 'Draft', cls: '' },
@@ -126,6 +140,14 @@ export function ReviewStoryline({
   const [diffErrors, setDiffErrors] = useState<Map<string, string>>(new Map());
   const [diffLoading, setDiffLoading] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // PR-wide GitHub review activity (comments + reviews), fetched once per
+  // open/Refresh — including activity left by non-Stage participants directly on
+  // github.com (ADR-0003). Auxiliary to the storyline: a fetch failure here is
+  // surfaced in its own banner rather than blanking the viewer.
+  const [comments, setComments] = useState<PrComments | null>(null);
+  const [reviews, setReviews] = useState<GithubReview[]>([]);
+  const [activityError, setActivityError] = useState<string | null>(null);
+  const [showConversation, setShowConversation] = useState(false);
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -145,7 +167,24 @@ export function ReviewStoryline({
     } finally {
       setLoading(false);
     }
-  }, [ctx.workspaceId]);
+
+    // Review activity is fetched independently so a comments/reviews failure
+    // doesn't hide a perfectly loadable storyline (and vice versa). Both halves
+    // are surfaced loud — never swallowed into an empty list that would read as
+    // "no comments yet".
+    try {
+      const [c, rv] = await Promise.all([
+        prComments(ctx.owner, ctx.repo, ctx.prNumber),
+        prReviews(ctx.owner, ctx.repo, ctx.prNumber),
+      ]);
+      setComments(c);
+      setReviews(rv);
+      setActivityError(null);
+    } catch (e) {
+      console.warn('review_activity_load_failed', e);
+      setActivityError(msgOf(e));
+    }
+  }, [ctx.workspaceId, ctx.owner, ctx.repo, ctx.prNumber]);
 
   useEffect(() => {
     load();
@@ -153,6 +192,21 @@ export function ReviewStoryline({
 
   const idx = steps.findIndex((s) => s.diff_file_path === selected);
   const step = idx === -1 ? null : steps[idx];
+
+  // Group the PR's review (line) comments into threads once, then narrow to the
+  // selected step's file. The diff pane partitions these into inline (anchored
+  // to a visible line) vs off-diff (line gone) using the loaded patch.
+  const allThreads = useMemo(() => groupCommentThreads(comments?.review ?? []), [comments]);
+  const fileThreads = useMemo(
+    () => (step ? allThreads.filter((t) => t.root.path === step.diff_file_path) : []),
+    [allThreads, step],
+  );
+  // Per-reviewer verdict for the decision banner (non-Stage reviewers included).
+  const decision = useMemo(() => reviewersByState(reviews), [reviews]);
+  // PR-level conversation: issue comments + reviews that carry a summary body.
+  const reviewNotes = useMemo(() => reviews.filter((r) => r.body.trim().length > 0), [reviews]);
+  const issueComments = comments?.issue ?? [];
+  const conversationCount = issueComments.length + reviewNotes.length;
 
   // Fetch the selected step's diff from GitHub (once; cached). Stale steps point
   // at a file no longer in the PR, so skip the fetch — it would 404 — and let
@@ -318,6 +372,27 @@ export function ReviewStoryline({
           </div>
         )}
 
+        {activityError && (
+          <div style={{ padding: '10px 16px 0' }}>
+            <ErrorBanner
+              title="Couldn't load review activity"
+              detail={activityError}
+              onClose={() => setActivityError(null)}
+            />
+          </div>
+        )}
+
+        {(reviews.length > 0 || conversationCount > 0) && (
+          <ReviewActivityBar
+            decision={decision}
+            conversationCount={conversationCount}
+            expanded={showConversation}
+            onToggle={() => setShowConversation((v) => !v)}
+            issueComments={issueComments}
+            reviewNotes={reviewNotes}
+          />
+        )}
+
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           {/* Storyline outline with vertical timeline line */}
           <StorylineRail
@@ -373,6 +448,7 @@ export function ReviewStoryline({
                       file={diffCache.get(step.diff_file_path) ?? null}
                       loading={diffLoading === step.diff_file_path}
                       error={diffErrors.get(step.diff_file_path) ?? null}
+                      threads={fileThreads}
                     />
                   )}
                 </div>
@@ -741,25 +817,57 @@ function StepHeader({
   );
 }
 
-/** The focused step's file diff (from GitHub), in the design's bordered card. */
+/** Payload attached to a diff line via `extendData` and read back in
+ *  `renderExtendLine` — the GitHub comment threads anchored to that line. */
+type ThreadData = { threads: GithubCommentThread[] };
+
+/** The focused step's file diff (from GitHub), in the design's bordered card,
+ *  with GitHub review (line) comments rendered inline at their anchored line.
+ *  Comments whose line is no longer in the current diff are surfaced in an
+ *  off-diff band rather than dropped (fail loud, CLAUDE.md). */
 function StepDiff({
   file,
   loading,
   error,
+  threads,
 }: {
   file: SelfReviewFileChange | null;
   loading: boolean;
   error: string | null;
+  threads: GithubCommentThread[];
 }) {
-  const data = useMemo(() => {
-    if (!file || !file.patch) return null;
-    const lang = inferDiffLanguage(file.path);
-    return {
-      oldFile: { fileName: file.oldPath ?? file.path, fileLang: lang },
-      newFile: { fileName: file.path, fileLang: lang },
-      hunks: [file.patch],
-    };
-  }, [file]);
+  // Build the diff render data, partition threads into inline (anchored to a
+  // line present in the patch) vs off-diff, and bucket the inline ones by side +
+  // line for the library's extendData API — all in one pass over the patch.
+  const { data, extendData, offDiff } = useMemo(() => {
+    const lang = file ? inferDiffLanguage(file.path) : '';
+    const data = file?.patch
+      ? {
+          oldFile: { fileName: file.oldPath ?? file.path, fileLang: lang },
+          newFile: { fileName: file.path, fileLang: lang },
+          hunks: [file.patch],
+        }
+      : null;
+    const visible = file?.patch
+      ? parseVisibleLines(file.patch)
+      : { left: new Set<number>(), right: new Set<number>() };
+    const oldFile: Record<string, { data: ThreadData }> = {};
+    const newFile: Record<string, { data: ThreadData }> = {};
+    const off: GithubCommentThread[] = [];
+    for (const t of threads) {
+      const a = threadAnchor(t);
+      if (!data || !a || !isOnDiff(t, visible)) {
+        off.push(t);
+        continue;
+      }
+      const target = a.side === 'LEFT' ? oldFile : newFile;
+      const key = String(a.line);
+      const bucket = target[key]?.data ?? { threads: [] };
+      bucket.threads.push(t);
+      target[key] = { data: bucket };
+    }
+    return { data, extendData: { oldFile, newFile }, offDiff: off };
+  }, [file, threads]);
 
   if (loading) {
     return (
@@ -773,49 +881,238 @@ function StepDiff({
   }
 
   return (
-    <div
-      style={{
-        background: '#fff',
-        border: '1px solid var(--hairline)',
-        borderRadius: 'var(--r-md)',
-        overflow: 'hidden',
-      }}
-    >
+    <>
+      {offDiff.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div
+            style={{
+              ...banner,
+              color: '#b56500',
+              background: 'rgba(255,149,0,0.08)',
+              border: '1px solid rgba(255,149,0,0.22)',
+              marginBottom: 6,
+            }}
+          >
+            {offDiff.length} comment{offDiff.length === 1 ? '' : 's'} on a line that's no longer in
+            this diff — shown here so none of the review activity is lost.
+          </div>
+          {offDiff.map((t) => (
+            <GithubThread key={t.root.id} thread={t} offDiff />
+          ))}
+        </div>
+      )}
+
       <div
         style={{
-          padding: '6px 10px',
-          borderBottom: '1px solid var(--hairline-2)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          fontSize: 11.5,
+          background: '#fff',
+          border: '1px solid var(--hairline)',
+          borderRadius: 'var(--r-md)',
+          overflow: 'hidden',
         }}
       >
-        <Icon name="doc-stack" size={12} color="var(--gray-500)" />
-        <span className="mono" style={{ fontSize: 11.5, color: 'var(--gray-700)' }}>
-          {file?.path ?? ''}
-        </span>
-        <div style={{ flex: 1 }} />
-        {file && (
-          <span style={{ color: 'var(--gray-500)' }}>
-            +{file.additions} −{file.deletions}
+        <div
+          style={{
+            padding: '6px 10px',
+            borderBottom: '1px solid var(--hairline-2)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 11.5,
+          }}
+        >
+          <Icon name="doc-stack" size={12} color="var(--gray-500)" />
+          <span className="mono" style={{ fontSize: 11.5, color: 'var(--gray-700)' }}>
+            {file?.path ?? ''}
           </span>
+          <div style={{ flex: 1 }} />
+          {file && (
+            <span style={{ color: 'var(--gray-500)' }}>
+              +{file.additions} −{file.deletions}
+            </span>
+          )}
+        </div>
+        {data ? (
+          <DiffView<ThreadData>
+            data={data}
+            extendData={extendData}
+            renderExtendLine={({ data: extData }) => {
+              const ts = extData?.threads ?? [];
+              if (ts.length === 0) return null;
+              return (
+                <div style={{ padding: '2px 12px 6px' }}>
+                  {ts.map((t) => (
+                    <GithubThread key={t.root.id} thread={t} />
+                  ))}
+                </div>
+              );
+            }}
+            diffViewMode={DiffModeEnum.Unified}
+            diffViewHighlight
+            diffViewWrap
+            diffViewFontSize={12}
+            diffViewTheme="light"
+          />
+        ) : (
+          <div style={{ padding: '20px 14px', fontSize: 12, color: 'var(--gray-500)' }}>
+            {file?.isBinary
+              ? 'Binary file — no textual diff to show.'
+              : 'No textual diff available for this file.'}
+          </div>
         )}
       </div>
-      {data ? (
-        <DiffView
-          data={data}
-          diffViewMode={DiffModeEnum.Unified}
-          diffViewHighlight
-          diffViewWrap
-          diffViewFontSize={12}
-          diffViewTheme="light"
-        />
-      ) : (
-        <div style={{ padding: '20px 14px', fontSize: 12, color: 'var(--gray-500)' }}>
-          {file?.isBinary
-            ? 'Binary file — no textual diff to show.'
-            : 'No textual diff available for this file.'}
+    </>
+  );
+}
+
+const REVIEW_STATE_BADGE: Record<GithubReview['state'], { label: string; cls: string }> = {
+  APPROVED: { label: 'approved', cls: 'badge-green' },
+  CHANGES_REQUESTED: { label: 'changes requested', cls: 'badge-orange' },
+  COMMENTED: { label: 'commented', cls: 'badge-blue' },
+  DISMISSED: { label: 'dismissed', cls: '' },
+  PENDING: { label: 'pending', cls: '' },
+};
+
+/** A list of reviewer logins as small avatar chips after a label. */
+function ReviewerChips({ logins }: { logins: string[] }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      {logins.map((l) => (
+        <span key={l} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+          <Avatar name={l} size="sm" />
+          <span style={{ fontSize: 11.5, color: 'var(--gray-700)' }}>{l}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * Subheader strip showing the PR's review decision (latest verdict per
+ * reviewer, **non-Stage reviewers included** — ADR-0003) and a toggle into the
+ * PR-level conversation (issue comments + review summaries). Mirrors what the
+ * workspaces overview computes server-side; here it's the detailed read.
+ */
+function ReviewActivityBar({
+  decision,
+  conversationCount,
+  expanded,
+  onToggle,
+  issueComments,
+  reviewNotes,
+}: {
+  decision: { approved: string[]; changesRequested: string[] };
+  conversationCount: number;
+  expanded: boolean;
+  onToggle: () => void;
+  issueComments: GithubIssueComment[];
+  reviewNotes: GithubReview[];
+}) {
+  const hasVerdict = decision.approved.length > 0 || decision.changesRequested.length > 0;
+
+  // Merge issue comments + review summaries into one chronologically-ordered
+  // conversation. created_at / submitted_at are ISO-8601 (lexically sortable).
+  const conversation = useMemo(() => {
+    const items = [
+      ...issueComments.map((c) => ({
+        key: `i${c.id}`,
+        at: c.created_at,
+        login: c.user?.login ?? 'ghost',
+        body: c.body,
+        state: null as GithubReview['state'] | null,
+      })),
+      ...reviewNotes.map((r) => ({
+        key: `r${r.id}`,
+        at: r.submitted_at ?? '',
+        login: r.user?.login ?? 'ghost',
+        body: r.body,
+        state: r.state,
+      })),
+    ];
+    items.sort((a, b) => a.at.localeCompare(b.at));
+    return items;
+  }, [issueComments, reviewNotes]);
+
+  return (
+    <div style={{ borderBottom: '1px solid var(--hairline)', background: '#fff' }}>
+      <div
+        style={{
+          padding: '8px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        {decision.changesRequested.length > 0 && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span className="badge badge-orange">Changes requested by</span>
+            <ReviewerChips logins={decision.changesRequested} />
+          </span>
+        )}
+        {decision.approved.length > 0 && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span className="badge badge-green">Approved by</span>
+            <ReviewerChips logins={decision.approved} />
+          </span>
+        )}
+        {!hasVerdict && (
+          <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+            No approval or change request yet.
+          </span>
+        )}
+        <div style={{ flex: 1 }} />
+        {conversationCount > 0 && (
+          <button type="button" className="btn" onClick={onToggle}>
+            <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={11} /> Conversation ·{' '}
+            {conversationCount}
+          </button>
+        )}
+      </div>
+
+      {expanded && conversation.length > 0 && (
+        <div
+          style={{
+            padding: '4px 16px 12px',
+            maxHeight: 240,
+            overflow: 'auto',
+            borderTop: '1px solid var(--hairline-2)',
+          }}
+        >
+          {conversation.map((c) => {
+            const badge = c.state ? REVIEW_STATE_BADGE[c.state] : null;
+            return (
+              <div
+                key={c.key}
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  padding: '8px 0',
+                  borderBottom: '1px solid var(--hairline-2)',
+                }}
+              >
+                <Avatar name={c.login} size="sm" />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      fontSize: 11.5,
+                      fontWeight: 600,
+                      color: 'var(--gray-700)',
+                      marginBottom: 1,
+                    }}
+                  >
+                    {c.login}
+                    {badge && <span className={`badge ${badge.cls}`}>{badge.label}</span>}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: 'var(--gray-800)', lineHeight: 1.45 }}>
+                    <Markdown>{c.body}</Markdown>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

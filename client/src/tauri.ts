@@ -305,6 +305,73 @@ export type GithubPrFile = {
 export const prFileDiff = (owner: string, repo: string, prNumber: number, filePath: string) =>
   invoke<GithubPrFile>('pr_file_diff', { owner, repo, prNumber, filePath });
 
+/** Which side of the diff a review comment anchors to (GitHub's vocabulary).
+ *  `RIGHT` = the new (head) version, `LEFT` = the old (base) version. */
+export type GithubCommentSide = 'LEFT' | 'RIGHT';
+
+/** A PR-level (issue) comment — not anchored to any line. Raw GitHub shape;
+ *  only the fields the reviewer viewer renders are typed. */
+export type GithubIssueComment = {
+  id: number;
+  body: string;
+  user: GithubUserRef | null;
+  created_at: string;
+  html_url?: string;
+};
+
+/** A review (line-anchored) comment. `line`/`side` place it in the *current*
+ *  diff; when the comment has slid off the current diff GitHub nulls `line` and
+ *  keeps `original_line`/`original_side` (the viewer falls back to those and, if
+ *  the line still isn't in the rendered hunk, lists it as off-diff rather than
+ *  dropping it — fail loud). `in_reply_to_id` threads replies under their root. */
+export type GithubReviewComment = {
+  id: number;
+  in_reply_to_id: number | null;
+  path: string;
+  line: number | null;
+  original_line: number | null;
+  start_line: number | null;
+  side: GithubCommentSide | null;
+  original_side: GithubCommentSide | null;
+  body: string;
+  user: GithubUserRef | null;
+  created_at: string;
+  html_url?: string;
+};
+
+/** The `{ issue, review }` envelope the backend returns for a PR's comments. */
+export type PrComments = {
+  issue: GithubIssueComment[];
+  review: GithubReviewComment[];
+};
+
+export type GithubReviewState =
+  | 'APPROVED'
+  | 'CHANGES_REQUESTED'
+  | 'COMMENTED'
+  | 'DISMISSED'
+  | 'PENDING';
+
+/** A submitted review. `state` drives the review-decision banner; `body` is the
+ *  review's summary text (may be empty for a bare approval). */
+export type GithubReview = {
+  id: number;
+  user: GithubUserRef | null;
+  body: string;
+  state: GithubReviewState;
+  submitted_at: string | null;
+  html_url?: string;
+};
+
+/** All comments on a PR (issue + review), via the backend (ADR-0001). Includes
+ *  activity left by non-Stage participants on github.com (ADR-0003). */
+export const prComments = (owner: string, repo: string, prNumber: number) =>
+  invoke<PrComments>('pr_comments', { owner, repo, prNumber });
+
+/** All submitted reviews on a PR, via the backend (ADR-0001). */
+export const prReviews = (owner: string, repo: string, prNumber: number) =>
+  invoke<GithubReview[]>('pr_reviews', { owner, repo, prNumber });
+
 /** Context for opening a published workspace in the read-only reviewer viewer
  *  (Step 2 of the reviewer flow). Built from an `OverviewWorkspaceRow` whose
  *  `pr_number` is non-null (only published workspaces are reviewable). Carries
