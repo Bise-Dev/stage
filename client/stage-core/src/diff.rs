@@ -20,6 +20,34 @@ pub struct DiffStats {
     pub removed: usize,
 }
 
+/// Resolve a base ref to its commit, **preferring the remote-tracking copy**
+/// (`origin/<base_ref>`) over a possibly-stale local branch of the same name —
+/// the Self-Review base model (ADR-0016), so a local `main` left behind inside a
+/// worktree never skews the diff. Falls back to `base_ref` verbatim for refs
+/// that are already remote (`origin/main`), tags, or raw SHAs. Returns the
+/// resolved commit and the ref string it actually came from (for the UI).
+fn resolve_base_commit<'r>(
+    repo: &'r Repository,
+    base_ref: &str,
+) -> Result<(git2::Commit<'r>, String), StageError> {
+    let remote = format!("origin/{base_ref}");
+    if let Ok(obj) = repo.revparse_single(&remote) {
+        if let Ok(commit) = obj.peel_to_commit() {
+            return Ok((commit, remote));
+        }
+    }
+    let commit = repo
+        .revparse_single(base_ref)
+        .map_err(|e| {
+            StageError::Diff(format!(
+                "base ref '{base_ref}' not found (also tried '{remote}'): {e}"
+            ))
+        })?
+        .peel_to_commit()
+        .map_err(|e| StageError::Diff(format!("peel base commit '{base_ref}' failed: {e}")))?;
+    Ok((commit, base_ref.to_string()))
+}
+
 /// Added/removed line counts for `head_ref` since it diverged from `base_ref`
 /// (diff of the merge-base tree → head tree), matching PR additions/deletions.
 pub fn diff_stats(
@@ -28,7 +56,7 @@ pub fn diff_stats(
     head_ref: &str,
 ) -> Result<DiffStats, StageError> {
     let repo = Repository::open(repo_path)?;
-    let base_commit = repo.revparse_single(base_ref)?.peel_to_commit()?;
+    let (base_commit, _) = resolve_base_commit(&repo, base_ref)?;
     let head_commit = repo.revparse_single(head_ref)?.peel_to_commit()?;
     let merge_base = repo.merge_base(base_commit.id(), head_commit.id())?;
     let base_tree = repo.find_commit(merge_base)?.tree()?;
@@ -64,7 +92,7 @@ pub fn diff_files(
     head_ref: &str,
 ) -> Result<Vec<ChangedFile>, StageError> {
     let repo = Repository::open(repo_path)?;
-    let base_commit = repo.revparse_single(base_ref)?.peel_to_commit()?;
+    let (base_commit, _) = resolve_base_commit(&repo, base_ref)?;
     let head_commit = repo.revparse_single(head_ref)?.peel_to_commit()?;
     let merge_base = repo.merge_base(base_commit.id(), head_commit.id())?;
     let base_tree = repo.find_commit(merge_base)?.tree()?;
@@ -297,6 +325,100 @@ pub fn self_review_diff(
         current_branch,
         scope,
         base_ref: resolved_base_ref,
+        head_sha,
+        files,
+        stats,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommittedDiff {
+    /// The base ref the diff was actually computed against (e.g. `origin/main`),
+    /// after the remote-tracking preference in [`resolve_base_commit`].
+    pub base_ref: String,
+    /// The head ref diffed (the storyline/PR branch, e.g. `feature-x`).
+    pub head_ref: String,
+    /// Short head sha (8 chars). This is the PR head commit — and the `commit_id`
+    /// a reviewer needs when posting a line comment against this diff.
+    pub head_sha: String,
+    pub files: Vec<FileChange>,
+    pub stats: SelfReviewStats,
+}
+
+/// Diff a storyline's **committed** branch against its base — exactly what the
+/// GitHub PR will contain: `merge_base(base, head) → head` (the "three-dot"
+/// diff GitHub shows on the PR page).
+///
+/// Unlike [`self_review_diff`], this never reads the working tree: both sides are
+/// resolved as refs, so the result is independent of what (if anything) is
+/// checked out. That is the whole point — a storyline can be previewed from the
+/// main checkout, any worktree, or none, as long as `head_ref` exists as a
+/// committed branch. The base prefers the remote-tracking ref (`origin/<base>`)
+/// to dodge a stale local default (ADR-0016).
+///
+/// Fail-loud per CLAUDE.md: a missing ref or an unreadable patch fails the whole
+/// call, naming the offender — never a partial/empty fallback.
+pub fn committed_diff(
+    repo_path: &Path,
+    base_ref: &str,
+    head_ref: &str,
+) -> Result<CommittedDiff, StageError> {
+    let repo = Repository::open(repo_path)?;
+    let (base_commit, resolved_base) = resolve_base_commit(&repo, base_ref)?;
+    let head_commit = repo
+        .revparse_single(head_ref)
+        .map_err(|e| {
+            StageError::Diff(format!(
+                "committed_diff: head ref '{head_ref}' not found: {e}"
+            ))
+        })?
+        .peel_to_commit()
+        .map_err(|e| {
+            StageError::Diff(format!(
+                "committed_diff: peel head commit '{head_ref}' failed: {e}"
+            ))
+        })?;
+    let merge_base_oid = repo
+        .merge_base(base_commit.id(), head_commit.id())
+        .map_err(|e| StageError::Diff(format!("committed_diff: merge_base failed: {e}")))?;
+    let merge_base_tree = repo
+        .find_commit(merge_base_oid)
+        .and_then(|c| c.tree())
+        .map_err(|e| StageError::Diff(format!("committed_diff: merge-base tree failed: {e}")))?;
+    let head_tree = head_commit
+        .tree()
+        .map_err(|e| StageError::Diff(format!("committed_diff: head tree failed: {e}")))?;
+
+    let mut opts = DiffOptions::new();
+    opts.context_lines(3);
+    let diff = repo
+        .diff_tree_to_tree(Some(&merge_base_tree), Some(&head_tree), Some(&mut opts))
+        .map_err(|e| StageError::Diff(format!("committed_diff: tree→tree diff failed: {e}")))?;
+
+    let files = extract_file_changes(&diff)?;
+    let raw_stats = diff
+        .stats()
+        .map_err(|e| StageError::Diff(format!("committed_diff: stats failed: {e}")))?;
+    let stats = SelfReviewStats {
+        added: raw_stats.insertions(),
+        removed: raw_stats.deletions(),
+        files_changed: raw_stats.files_changed(),
+    };
+    let head_sha = head_commit.id().to_string()[..8].to_string();
+
+    debug!(
+        base_ref = %resolved_base,
+        head_ref = %head_ref,
+        files = files.len(),
+        added = stats.added,
+        removed = stats.removed,
+        "committed_diff: done",
+    );
+
+    Ok(CommittedDiff {
+        base_ref: resolved_base,
+        head_ref: head_ref.to_string(),
         head_sha,
         files,
         stats,
@@ -637,6 +759,38 @@ mod tests {
         let b = files.iter().find(|f| f.path == "b.txt").unwrap();
         assert_eq!(b.added, 1);
         assert_eq!(b.removed, 0);
+    }
+
+    #[test]
+    fn committed_diff_is_committed_only_and_checkout_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        fs::write(dir.path().join("base.txt"), "x\n").unwrap();
+        let base = commit_all(&repo, "base", None);
+
+        // Commit a change on `feat`.
+        let base_commit = repo.find_commit(base).unwrap();
+        repo.branch("feat", &base_commit, true).unwrap();
+        repo.set_head("refs/heads/feat").unwrap();
+        fs::write(dir.path().join("feat.txt"), "committed\n").unwrap();
+        commit_all(&repo, "feat work", Some(base));
+
+        // Move HEAD off `feat` (detached at base) so the checkout is NOT the head
+        // ref, and leave an uncommitted file — committed_diff must ignore both.
+        repo.set_head_detached(base).unwrap();
+        fs::write(dir.path().join("dirty.txt"), "uncommitted\n").unwrap();
+
+        let diff = committed_diff(dir.path(), &base.to_string(), "feat").unwrap();
+        let paths: Vec<&str> = diff.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            paths.contains(&"feat.txt"),
+            "committed branch change must show regardless of checkout: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&"dirty.txt"),
+            "uncommitted working-tree change must be excluded: {paths:?}"
+        );
+        assert_eq!(diff.head_ref, "feat");
     }
 
     #[test]

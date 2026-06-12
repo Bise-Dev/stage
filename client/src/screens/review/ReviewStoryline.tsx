@@ -1,5 +1,3 @@
-import { DiffModeEnum, DiffView } from '@git-diff-view/react';
-import '@git-diff-view/react/styles/diff-view.css';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Avatar } from '../../components/Avatar';
@@ -16,16 +14,20 @@ import {
   type GithubReview,
   type PrComments,
   type ReviewCtx,
+  type ReviewEvent,
   type SelfReviewFileChange,
+  type Side,
   type Storyline,
   type StorylineFile,
   type WorkspaceState,
+  prCommentCreate,
   prComments,
   prFileDiff,
+  prReviewCreate,
   prReviews,
   storylineGet,
 } from '../../tauri';
-import { inferDiffLanguage } from '../selfReview/markdown';
+import { type CommentRange, CommentableFileDiff } from '../selfReview/CommentableFileDiff';
 import { GithubThread } from './GithubThread';
 import {
   type GithubCommentThread,
@@ -110,7 +112,7 @@ function toFileChange(f: GithubPrFile): SelfReviewFileChange {
 }
 
 /**
- * Step 2 — read-only reviewer storyline viewer. A reviewer opens a *published*
+ * Reviewer storyline viewer (Steps 2–4). A reviewer opens a *published*
  * workspace authored by someone else and walks the author's ordered steps: each
  * step shows the author's intro (rendered Markdown) above that file's diff,
  * fetched from the PR on GitHub via the backend (ADR-0001 — the reviewer may
@@ -118,10 +120,13 @@ function toFileChange(f: GithubPrFile): SelfReviewFileChange {
  * PR) are flagged instead of fetched. Refresh re-pulls the latest storyline +
  * diffs (MVP propagation; no webhooks).
  *
- * No write affordances: posting comments / reviews / intro replies are Steps
- * 3–5. The author's composer (ordering, intro editing, Save, Publish) is never
- * reachable here — that's why this is a dedicated screen rather than a mode flag
- * on the author's `Storyline.tsx`.
+ * Write-through (Step 4, ADR-0003): the diff uses the **same** commenting
+ * surface as self-review (`CommentableFileDiff`) — drag a line range to leave a
+ * review comment, reply to a thread, or submit a verdict (Approve / Request
+ * changes / Comment). All post to GitHub as the signed-in user, so non-Stage
+ * participants on the PR see them. A **frozen** workspace (closed/merged PR)
+ * disables every write affordance and shows why. The author's composer
+ * (ordering, intro editing, Save, Publish) is never reachable here.
  */
 export function ReviewStoryline({
   ctx,
@@ -134,6 +139,9 @@ export function ReviewStoryline({
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The PR head sha (storyline `head_sha`) — the `commit_id` a fresh GitHub line
+  // comment must anchor to. Null (no published head) disables line commenting.
+  const [headSha, setHeadSha] = useState<string | null>(null);
   // Per-path GitHub diff, resolved lazily as steps are visited. Cleared on
   // Refresh so the next visit re-pulls against the latest PR head.
   const [diffCache, setDiffCache] = useState<Map<string, SelfReviewFileChange>>(new Map());
@@ -141,19 +149,45 @@ export function ReviewStoryline({
   const [diffLoading, setDiffLoading] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   // PR-wide GitHub review activity (comments + reviews), fetched once per
-  // open/Refresh — including activity left by non-Stage participants directly on
-  // github.com (ADR-0003). Auxiliary to the storyline: a fetch failure here is
-  // surfaced in its own banner rather than blanking the viewer.
+  // open/Refresh and re-pulled after each write — including activity left by
+  // non-Stage participants directly on github.com (ADR-0003). Auxiliary to the
+  // storyline: a fetch failure here is surfaced in its own banner rather than
+  // blanking the viewer.
   const [comments, setComments] = useState<PrComments | null>(null);
   const [reviews, setReviews] = useState<GithubReview[]>([]);
   const [activityError, setActivityError] = useState<string | null>(null);
   const [showConversation, setShowConversation] = useState(false);
+  // Last write (comment / reply / verdict) failure, surfaced verbatim in a red
+  // banner (fail loud, CLAUDE.md). Cleared on the next successful write.
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const [verdictOpen, setVerdictOpen] = useState(false);
+  const [submittingVerdict, setSubmittingVerdict] = useState(false);
+
+  // PR-wide review activity, fetched independently of the storyline (a
+  // comments/reviews failure mustn't hide a loadable storyline, or vice versa)
+  // and re-pulled after each write so a just-posted comment/verdict shows up.
+  // Both halves are surfaced loud — never swallowed into an empty list.
+  const loadActivity = useCallback(async () => {
+    try {
+      const [c, rv] = await Promise.all([
+        prComments(ctx.owner, ctx.repo, ctx.prNumber),
+        prReviews(ctx.owner, ctx.repo, ctx.prNumber),
+      ]);
+      setComments(c);
+      setReviews(rv);
+      setActivityError(null);
+    } catch (e) {
+      console.warn('review_activity_load_failed', e);
+      setActivityError(msgOf(e));
+    }
+  }, [ctx.owner, ctx.repo, ctx.prNumber]);
 
   const load = useCallback(async () => {
     setLoadError(null);
     try {
       const storyline: Storyline = await storylineGet(ctx.workspaceId);
       setSteps(storyline.files);
+      setHeadSha(storyline.head_sha);
       setSelected((cur) =>
         cur && storyline.files.some((s) => s.diff_file_path === cur)
           ? cur
@@ -168,23 +202,8 @@ export function ReviewStoryline({
       setLoading(false);
     }
 
-    // Review activity is fetched independently so a comments/reviews failure
-    // doesn't hide a perfectly loadable storyline (and vice versa). Both halves
-    // are surfaced loud — never swallowed into an empty list that would read as
-    // "no comments yet".
-    try {
-      const [c, rv] = await Promise.all([
-        prComments(ctx.owner, ctx.repo, ctx.prNumber),
-        prReviews(ctx.owner, ctx.repo, ctx.prNumber),
-      ]);
-      setComments(c);
-      setReviews(rv);
-      setActivityError(null);
-    } catch (e) {
-      console.warn('review_activity_load_failed', e);
-      setActivityError(msgOf(e));
-    }
-  }, [ctx.workspaceId, ctx.owner, ctx.repo, ctx.prNumber]);
+    await loadActivity();
+  }, [ctx.workspaceId, loadActivity]);
 
   useEffect(() => {
     load();
@@ -207,6 +226,81 @@ export function ReviewStoryline({
   const reviewNotes = useMemo(() => reviews.filter((r) => r.body.trim().length > 0), [reviews]);
   const issueComments = comments?.issue ?? [];
   const conversationCount = issueComments.length + reviewNotes.length;
+
+  // Write affordances (ADR-0003). A frozen workspace = the PR is closed/merged;
+  // the backend rejects writes 409, so we disable them up front and explain why.
+  // Line comments additionally need the PR head sha as their `commit_id`.
+  const frozen = ctx.state === 'frozen';
+  const canComment = !frozen && headSha != null;
+
+  // Post a fresh review (line) comment over the dragged range, write-through to
+  // GitHub. GitHub anchors a single line + side; we use the range's end line
+  // (the widget sits below the last selected line). On success re-pull activity
+  // so the new thread renders inline; on failure surface it and rethrow so the
+  // shared composer stays open with the text intact.
+  const postLineComment = useCallback(
+    async (range: CommentRange, body: string) => {
+      if (!step || !headSha) throw new Error('Cannot comment: no PR head to anchor to.');
+      try {
+        await prCommentCreate(ctx.owner, ctx.repo, ctx.prNumber, {
+          kind: 'review',
+          body,
+          path: step.diff_file_path,
+          line: range.lineEnd,
+          side: range.side === 'left' ? 'LEFT' : 'RIGHT',
+          commit_id: headSha,
+        });
+        setWriteError(null);
+        await loadActivity();
+      } catch (e) {
+        console.warn('review_comment_create_failed', e);
+        setWriteError(msgOf(e));
+        throw e;
+      }
+    },
+    [step, headSha, ctx.owner, ctx.repo, ctx.prNumber, loadActivity],
+  );
+
+  // Reply to an existing review thread (`in_reply_to` its root comment id).
+  const postReply = useCallback(
+    async (rootId: number, body: string) => {
+      try {
+        await prCommentCreate(ctx.owner, ctx.repo, ctx.prNumber, {
+          kind: 'review',
+          body,
+          in_reply_to: rootId,
+        });
+        setWriteError(null);
+        await loadActivity();
+      } catch (e) {
+        console.warn('review_reply_create_failed', e);
+        setWriteError(msgOf(e));
+        throw e;
+      }
+    },
+    [ctx.owner, ctx.repo, ctx.prNumber, loadActivity],
+  );
+
+  // Submit a review verdict (Approve / Request changes / Comment) with a
+  // summary body. On success re-pull activity (the decision banner updates) and
+  // close the panel.
+  const submitVerdict = useCallback(
+    async (event: ReviewEvent, body: string) => {
+      setSubmittingVerdict(true);
+      try {
+        await prReviewCreate(ctx.owner, ctx.repo, ctx.prNumber, body, event);
+        setWriteError(null);
+        setVerdictOpen(false);
+        await loadActivity();
+      } catch (e) {
+        console.warn('review_verdict_create_failed', e);
+        setWriteError(msgOf(e));
+      } finally {
+        setSubmittingVerdict(false);
+      }
+    },
+    [ctx.owner, ctx.repo, ctx.prNumber, loadActivity],
+  );
 
   // Fetch the selected step's diff from GitHub (once; cached). Stale steps point
   // at a file no longer in the PR, so skip the fetch — it would 404 — and let
@@ -382,6 +476,16 @@ export function ReviewStoryline({
           </div>
         )}
 
+        {writeError && (
+          <div style={{ padding: '10px 16px 0' }}>
+            <ErrorBanner
+              title="Couldn't post to GitHub"
+              detail={writeError}
+              onClose={() => setWriteError(null)}
+            />
+          </div>
+        )}
+
         {(reviews.length > 0 || conversationCount > 0) && (
           <ReviewActivityBar
             decision={decision}
@@ -449,9 +553,21 @@ export function ReviewStoryline({
                       loading={diffLoading === step.diff_file_path}
                       error={diffErrors.get(step.diff_file_path) ?? null}
                       threads={fileThreads}
+                      onCreate={canComment ? postLineComment : undefined}
+                      onReply={frozen ? undefined : postReply}
                     />
                   )}
                 </div>
+
+                {/* Verdict composer (Approve / Request changes / Comment) —
+                    write-through to GitHub. Hidden when frozen. */}
+                {verdictOpen && !frozen && (
+                  <VerdictPanel
+                    submitting={submittingVerdict}
+                    onSubmit={submitVerdict}
+                    onCancel={() => setVerdictOpen(false)}
+                  />
+                )}
 
                 {/* Footer: prev / progress / next */}
                 <div
@@ -500,6 +616,32 @@ export function ReviewStoryline({
                       />
                     ))}
                   </div>
+                  {frozen ? (
+                    <span
+                      style={{
+                        fontSize: 11.5,
+                        color: 'var(--gray-500)',
+                        flex: '0 0 auto',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                      title="The workspace is frozen because its PR is closed or merged"
+                    >
+                      <Icon name="eye" size={11} color="var(--gray-500)" /> This PR is closed —
+                      reopen on GitHub to review.
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setVerdictOpen((v) => !v)}
+                      style={{ flex: '0 0 auto' }}
+                    >
+                      <Icon name="check" size={12} color="var(--gray-700)" />{' '}
+                      {verdictOpen ? 'Close review' : 'Finish review…'}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-primary"
@@ -817,57 +959,62 @@ function StepHeader({
   );
 }
 
-/** Payload attached to a diff line via `extendData` and read back in
- *  `renderExtendLine` — the GitHub comment threads anchored to that line. */
-type ThreadData = { threads: GithubCommentThread[] };
-
 /** The focused step's file diff (from GitHub), in the design's bordered card,
- *  with GitHub review (line) comments rendered inline at their anchored line.
- *  Comments whose line is no longer in the current diff are surfaced in an
- *  off-diff band rather than dropped (fail loud, CLAUDE.md). */
+ *  using the **same** commenting surface as self-review (`CommentableFileDiff`):
+ *  GitHub review (line) comments render inline at their anchored line, dragging
+ *  a range opens a composer that posts a comment write-through to GitHub, and a
+ *  thread can be replied to. Comments whose line is no longer in the current
+ *  diff are surfaced in an off-diff band rather than dropped (fail loud,
+ *  CLAUDE.md). `onCreate`/`onReply` omitted ⇒ read-only (frozen / no head sha). */
 function StepDiff({
   file,
   loading,
   error,
   threads,
+  onCreate,
+  onReply,
 }: {
   file: SelfReviewFileChange | null;
   loading: boolean;
   error: string | null;
   threads: GithubCommentThread[];
+  onCreate?: (range: CommentRange, body: string) => Promise<void>;
+  onReply?: (rootId: number, body: string) => Promise<void>;
 }) {
-  // Build the diff render data, partition threads into inline (anchored to a
-  // line present in the patch) vs off-diff, and bucket the inline ones by side +
-  // line for the library's extendData API — all in one pass over the patch.
-  const { data, extendData, offDiff } = useMemo(() => {
-    const lang = file ? inferDiffLanguage(file.path) : '';
-    const data = file?.patch
-      ? {
-          oldFile: { fileName: file.oldPath ?? file.path, fileLang: lang },
-          newFile: { fileName: file.path, fileLang: lang },
-          hunks: [file.patch],
-        }
-      : null;
+  // Partition threads into inline (anchored to a line present in the patch) vs
+  // off-diff, in one pass. Inline ones become anchors for the shared diff
+  // surface; off-diff ones render in a band above it (never dropped).
+  const { inline, inlineAnchors, offDiff } = useMemo(() => {
     const visible = file?.patch
       ? parseVisibleLines(file.patch)
       : { left: new Set<number>(), right: new Set<number>() };
-    const oldFile: Record<string, { data: ThreadData }> = {};
-    const newFile: Record<string, { data: ThreadData }> = {};
+    const inline: { side: Side; line: number; thread: GithubCommentThread }[] = [];
     const off: GithubCommentThread[] = [];
     for (const t of threads) {
       const a = threadAnchor(t);
-      if (!data || !a || !isOnDiff(t, visible)) {
+      if (!file?.patch || !a || !isOnDiff(t, visible)) {
         off.push(t);
         continue;
       }
-      const target = a.side === 'LEFT' ? oldFile : newFile;
-      const key = String(a.line);
-      const bucket = target[key]?.data ?? { threads: [] };
-      bucket.threads.push(t);
-      target[key] = { data: bucket };
+      inline.push({ side: a.side === 'LEFT' ? 'left' : 'right', line: a.line, thread: t });
     }
-    return { data, extendData: { oldFile, newFile }, offDiff: off };
+    return {
+      inline,
+      inlineAnchors: inline.map(({ side, line }) => ({ side, line })),
+      offDiff: off,
+    };
   }, [file, threads]);
+
+  const renderInline = useCallback(
+    (side: Side, line: number) => {
+      const here = inline.filter((it) => it.side === side && it.line === line);
+      if (here.length === 0) return null;
+      return here.map((it) => (
+        <GithubThread key={it.thread.root.id} thread={it.thread} onReply={onReply} />
+      ));
+    },
+    [inline, onReply],
+  );
 
   if (loading) {
     return (
@@ -897,7 +1044,7 @@ function StepDiff({
             this diff — shown here so none of the review activity is lost.
           </div>
           {offDiff.map((t) => (
-            <GithubThread key={t.root.id} thread={t} offDiff />
+            <GithubThread key={t.root.id} thread={t} offDiff onReply={onReply} />
           ))}
         </div>
       )}
@@ -931,36 +1078,120 @@ function StepDiff({
             </span>
           )}
         </div>
-        {data ? (
-          <DiffView<ThreadData>
-            data={data}
-            extendData={extendData}
-            renderExtendLine={({ data: extData }) => {
-              const ts = extData?.threads ?? [];
-              if (ts.length === 0) return null;
-              return (
-                <div style={{ padding: '2px 12px 6px' }}>
-                  {ts.map((t) => (
-                    <GithubThread key={t.root.id} thread={t} />
-                  ))}
-                </div>
-              );
-            }}
-            diffViewMode={DiffModeEnum.Unified}
-            diffViewHighlight
-            diffViewWrap
-            diffViewFontSize={12}
-            diffViewTheme="light"
+        {file ? (
+          <CommentableFileDiff
+            file={file}
+            viewMode="unified"
+            inlineAnchors={inlineAnchors}
+            renderInline={renderInline}
+            onCreate={onCreate}
+            composerPlaceholder="Leave a review comment…"
           />
         ) : (
           <div style={{ padding: '20px 14px', fontSize: 12, color: 'var(--gray-500)' }}>
-            {file?.isBinary
-              ? 'Binary file — no textual diff to show.'
-              : 'No textual diff available for this file.'}
+            No textual diff available for this file.
           </div>
         )}
       </div>
     </>
+  );
+}
+
+/** The verdict composer — a summary body + Approve / Request changes / Comment,
+ *  posted as a GitHub review (ADR-0003). The backend requires a non-empty body
+ *  (even for Approve), so the buttons stay disabled until something is typed. */
+function VerdictPanel({
+  submitting,
+  onSubmit,
+  onCancel,
+}: {
+  submitting: boolean;
+  onSubmit: (event: ReviewEvent, body: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [body, setBody] = useState('');
+  const empty = body.trim().length === 0;
+  const submit = (event: ReviewEvent) => {
+    if (empty || submitting) return;
+    onSubmit(event, body.trim());
+  };
+  return (
+    <div
+      style={{
+        flex: '0 0 auto',
+        padding: '12px 22px',
+        background: '#fff',
+        borderTop: '1px solid var(--hairline)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 6,
+          fontSize: 12.5,
+          fontWeight: 600,
+          color: 'var(--gray-800)',
+        }}
+      >
+        <Icon name="check" size={12} color="var(--gray-700)" /> Finish your review
+      </div>
+      <textarea
+        value={body}
+        placeholder="Summarize your review… (required)"
+        onChange={(e) => setBody(e.target.value)}
+        style={{
+          width: '100%',
+          minHeight: 64,
+          border: '1px solid var(--hairline)',
+          borderRadius: 'var(--r-md)',
+          padding: 8,
+          outline: 'none',
+          resize: 'vertical',
+          fontFamily: 'var(--font-ui)',
+          fontSize: 12.5,
+          color: 'var(--gray-800)',
+          background: '#fff',
+        }}
+      />
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 8 }}>
+        <button type="button" className="btn" onClick={onCancel} disabled={submitting}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => submit('COMMENT')}
+          disabled={empty || submitting}
+          style={{ opacity: empty || submitting ? 0.5 : 1 }}
+        >
+          Comment
+        </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => submit('REQUEST_CHANGES')}
+          disabled={empty || submitting}
+          style={{
+            opacity: empty || submitting ? 0.5 : 1,
+            color: 'var(--orange-d, #b56500)',
+            borderColor: 'rgba(255,149,0,0.35)',
+          }}
+        >
+          Request changes
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => submit('APPROVE')}
+          disabled={empty || submitting}
+          style={{ opacity: empty || submitting ? 0.5 : 1 }}
+        >
+          <Icon name="check" size={11} color="#fff" /> {submitting ? 'Submitting…' : 'Approve'}
+        </button>
+      </div>
+    </div>
   );
 }
 

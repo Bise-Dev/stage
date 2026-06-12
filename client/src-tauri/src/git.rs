@@ -8,7 +8,9 @@ use serde::Serialize;
 // it without compiling Tauri (ADR-0011). Re-exported here under the same
 // `git::` names the command layer already uses; the thin wrappers below map
 // `StageError` into the app's `AppError`.
-pub use stage_core::diff::{ChangedFile, DiffStats, SelfReviewDiff, SelfReviewScope};
+pub use stage_core::diff::{
+    ChangedFile, CommittedDiff, DiffStats, SelfReviewDiff, SelfReviewScope,
+};
 
 use crate::errors::AppError;
 
@@ -123,6 +125,72 @@ pub fn local_branches(repo_path: &Path) -> Result<Vec<BranchInfo>, AppError> {
     out.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
     tracing::info!(repo = %repo_path.display(), count = out.len(), "git_local_branches");
     Ok(out)
+}
+
+/// Remote branches (e.g. `origin/main`), most-recently-committed first, with the
+/// `origin/HEAD` symref skipped. These are the only valid PR **base** targets —
+/// a base that isn't on the remote can't be merged into — so the New Workspace
+/// base picker is sourced from this rather than the local-branch list.
+///
+/// Same fail-loud contract as [`local_branches`]: an unreadable ref name fails
+/// the whole call rather than silently dropping a row.
+pub fn remote_branches(repo_path: &Path) -> Result<Vec<BranchInfo>, AppError> {
+    let repo = Repository::open(repo_path)?;
+    let mut out = Vec::new();
+
+    for entry in repo.branches(Some(BranchType::Remote))? {
+        let (branch, _) = entry.map_err(|e| {
+            AppError::Backend(format!("remote_branches: branch iterator failed: {e}"))
+        })?;
+        let raw_name = branch.name().map_err(|e| {
+            AppError::Backend(format!("remote_branches: unreadable branch name: {e}"))
+        })?;
+        let Some(name) = raw_name.map(str::to_string) else {
+            return Err(AppError::Backend(
+                "remote_branches: non-UTF-8 branch name in repository".into(),
+            ));
+        };
+        // `origin/HEAD` is a symref to the default branch, not a branch the user
+        // would pick as a base — skip it (the default still appears by its name).
+        if name.ends_with("/HEAD") {
+            continue;
+        }
+        let commit = branch.get().peel_to_commit().map_err(|e| {
+            AppError::Backend(format!(
+                "remote_branches: branch '{name}' has unreadable commit: {e}"
+            ))
+        })?;
+        out.push(BranchInfo {
+            name,
+            is_head: false,
+            updated_at: commit.time().seconds(),
+            last_commit: commit.summary().map(str::to_string),
+        });
+    }
+
+    out.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+    tracing::info!(repo = %repo_path.display(), count = out.len(), "git_remote_branches");
+    Ok(out)
+}
+
+/// Diff a storyline's committed branch (`head_ref`) against its base — the diff
+/// the GitHub PR will contain. Wrapper over [`stage_core::diff::committed_diff`];
+/// unlike [`self_review_diff`] it reads no working tree, so it works regardless
+/// of which branch (if any) is checked out.
+pub fn committed_diff(
+    repo_path: &Path,
+    base_ref: &str,
+    head_ref: &str,
+) -> Result<CommittedDiff, AppError> {
+    let diff = stage_core::diff::committed_diff(repo_path, base_ref, head_ref)?;
+    tracing::info!(
+        repo = %repo_path.display(),
+        base = %base_ref,
+        head = %head_ref,
+        files = diff.files.len(),
+        "git_committed_diff"
+    );
+    Ok(diff)
 }
 
 /// Added/removed line counts for `head_ref` since it diverged from `base_ref`.

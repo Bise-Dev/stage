@@ -150,6 +150,33 @@ pub fn git_local_branches(state: State<'_, AppState>) -> Result<Vec<git::BranchI
     git::local_branches(&path)
 }
 
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn git_remote_branches(state: State<'_, AppState>) -> Result<Vec<git::BranchInfo>, AppError> {
+    let path = active_repo_path(&state)?;
+    git::remote_branches(&path)
+}
+
+/// Diff a storyline's committed branch (`head_ref`) against its base — the diff
+/// the PR will contain (`merge_base(base, head) → head`). Reads no working tree,
+/// so it is independent of what is checked out (see `git::committed_diff`).
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn storyline_diff(
+    state: State<'_, AppState>,
+    base_ref: String,
+    head_ref: String,
+) -> Result<git::CommittedDiff, AppError> {
+    let path = active_repo_path(&state)?;
+    git::committed_diff(&path, &base_ref, &head_ref)
+}
+
 /// The worktrees git reports for the active Repo, root first (ADR-0016).
 /// Re-enumerated from git on every call — Stage holds no worktree registry.
 #[tauri::command]
@@ -676,6 +703,60 @@ pub async fn pr_reviews(
         .pr_reviews(&token, &owner, &repo, pr_number)
         .await?;
     Ok(reviews)
+}
+
+/// Post a comment on a PR, write-through to GitHub as the signed-in user
+/// (ADR-0003 — non-Stage participants on the PR see it). `payload` is the full
+/// comment body the reviewer screen builds: `{ kind, body, path?, line?, side?,
+/// commit_id?, in_reply_to? }`. A fresh review line comment carries
+/// `path`+`line`+`side`+`commit_id`; a reply carries `in_reply_to`+`body`. A
+/// frozen workspace (closed/merged PR) comes back as the backend's `409`,
+/// surfaced verbatim for the client banner.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn pr_comment_create(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    repo: String,
+    pr_number: i64,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let created = state
+        .api
+        .pr_comment_create(&token, &owner, &repo, pr_number, payload)
+        .await?;
+    Ok(created)
+}
+
+/// Submit a review verdict on a PR, write-through to GitHub as the signed-in
+/// user (ADR-0003). `event` is `APPROVE | REQUEST_CHANGES | COMMENT`; `body` is
+/// the (non-empty) summary; `comments` is an optional array of line comments
+/// submitted with the review. The workspace state reflects the verdict on the
+/// next overview load.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn pr_review_create(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    repo: String,
+    pr_number: i64,
+    body: String,
+    event: String,
+    comments: Option<serde_json::Value>,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let review = state
+        .api
+        .pr_review_create(&token, &owner, &repo, pr_number, &body, &event, comments)
+        .await?;
+    Ok(review)
 }
 
 // --- Self-Review Debrief (cycle 1: local agent↔author loop; ADR-0011) ---

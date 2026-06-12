@@ -1,5 +1,3 @@
-import { DiffModeEnum, DiffViewWithMultiSelect, SplitSide } from '@git-diff-view/react';
-import '@git-diff-view/react/styles/diff-view.css';
 import {
   type Ref,
   memo,
@@ -12,9 +10,9 @@ import {
 } from 'react';
 import { Icon } from '../../components/Icon';
 import type { NoteAnchor, ReviewNoteView, SelfReviewFileChange, Side } from '../../tauri';
+import { type CommentRange, CommentableFileDiff, type ViewMode } from './CommentableFileDiff';
 import { Composer } from './Composer';
 import { Thread } from './Thread';
-import { inferDiffLanguage } from './markdown';
 
 const STATUS_BADGE = {
   added: { label: 'added', cls: 'badge-green' },
@@ -28,12 +26,14 @@ const STATUS_BADGE = {
 // notes change.
 const EMPTY_NOTES: ReviewNoteView[] = [];
 
-// The library passes us its SplitSide enum; map to our 'left'|'right'.
-// Module-scope (pure) so the render callbacks below don't depend on a
-// per-render closure.
-const sideToOurs = (s: SplitSide): Side => (s === SplitSide.old ? 'left' : 'right');
+// A line note anchors inline at the *end* of its range (the widget sits below
+// the last selected line). Module-scope (pure) so the render callbacks that use
+// it aren't forced to list it as a dependency.
+const lineEndOf = (n: ReviewNoteView): number => n.anchor?.lineEnd ?? n.anchor?.lineStart ?? 0;
 
-export type ViewMode = 'split' | 'unified';
+// `ViewMode` lives with the shared diff surface (CommentableFileDiff); re-export
+// it here so existing importers (SelfReview.tsx) are unaffected.
+export type { ViewMode };
 export type ViewLayout = 'scroll' | 'single';
 
 export type DiffPaneHandle = {
@@ -390,180 +390,42 @@ const FileBlock = memo(function FileBlock({
   );
   const bandNotes = useMemo(() => [...fileLevel, ...outdated], [fileLevel, outdated]);
 
-  // Memoize the `data` prop. The library's internal useMemo deps on `data`
-  // by reference (line 1593 of the lib bundle); a fresh object literal every
-  // render makes it rebuild the DiffFile, and a downstream useEffect then
-  // clears the widget store — so clicking "+" never opens the slot. Only
-  // rebuild when the actual patch content changes.
-  const diffData = useMemo(() => {
-    // Only set `fileLang` when we know it's a lowlight-supported language;
-    // unknown extensions (e.g. `bun.lock`) trip a noisy "not support current
-    // lang: <ext> yet" warning otherwise. The library falls back to a plain
-    // (unhighlighted) render when fileLang is absent.
-    const lang = inferDiffLanguage(file.path);
-    return {
-      oldFile: { fileName: file.oldPath ?? file.path, fileLang: lang },
-      newFile: { fileName: file.path, fileLang: lang },
-      hunks: [file.patch],
-    };
-  }, [file.path, file.oldPath, file.patch]);
-
-  // Bucket inline notes by side + line for the library's extendData API.
-  const extendData = useMemo(() => {
-    const oldFile: Record<string, { data: { noteIds: string[]; lineNumber: number } }> = {};
-    const newFile: Record<string, { data: { noteIds: string[]; lineNumber: number } }> = {};
-    for (const n of lineNotes) {
-      const a = n.anchor;
-      if (!a || a.lineStart == null) continue;
-      const lineEnd = a.lineEnd ?? a.lineStart;
-      const target = a.side === 'left' ? oldFile : newFile;
-      // Attach to the *end* of the range (widget below the last line).
-      const key = String(lineEnd);
-      const bucket = target[key]?.data ?? { noteIds: [], lineNumber: lineEnd };
-      bucket.noteIds.push(n.id);
-      target[key] = { data: bucket };
-    }
-    return { oldFile, newFile };
-  }, [lineNotes]);
-
-  // The library's widget store, captured via `onCreateUseWidgetHook` so we
-  // can programmatically open the widget slot from the mouseup handler below
-  // (the user expects drag-release → composer; out of the box the library
-  // only opens via clicking "+" after the drag, which costs a second click).
-  // Type loosely — `createDiffWidgetStore`'s return type isn't exported.
-  type WidgetHook = {
-    getReadonlyState: () => { setWidget: (arg: { side?: SplitSide; lineNumber?: number }) => void };
-  };
-  const widgetHookRef = useRef<WidgetHook | null>(null);
-
-  /**
-   * Bypass the library's `onMultiSelectComplete` path. The wrapper filters
-   * results when `result.lines.length === 0`, and the manager produces
-   * empty `lines` for our DiffFile because we don't pass `newFile.content`
-   * (the line-number→line-data lookup needs it). Instead we listen for
-   * mouseup ourselves, pull the *range* directly from the manager via the
-   * imperative ref — which is populated correctly — and open the widget
-   * slot at the end line.
-   *
-   * `pendingRangeRef` carries the range hint into `renderWidgetLine`
-   * because the library's `multiResultRef` also stays empty (same filter).
-   */
-  type DvRef = {
-    getSelectionResult: () => {
-      range: { side: 'old' | 'new'; startLineNumber: number; endLineNumber: number };
-      lines: unknown[];
-    } | null;
-    clearSelection?: () => void;
-  };
-  const dvRef = useRef<DvRef | null>(null);
-  const pendingRangeRef = useRef<{
-    side: SplitSide;
-    start: number;
-    end: number;
-    filePath: string;
-  } | null>(null);
-
-  // Scoped to this block's own diff container (was a per-block `document`
-  // listener — with N files mounted, every click ran N handlers, each calling
-  // getSelectionResult()). A mouseup inside the diff bubbles up to this
-  // wrapper, so the cost is now O(1) per click instead of O(files).
-  const handleMouseUp = useCallback(() => {
-    const result = dvRef.current?.getSelectionResult?.();
-    if (!result?.range) return;
-    const { side: rawSide, startLineNumber, endLineNumber } = result.range;
-    const side = rawSide === 'old' ? SplitSide.old : SplitSide.new;
-    const start = Math.min(startLineNumber, endLineNumber);
-    const end = Math.max(startLineNumber, endLineNumber);
-    pendingRangeRef.current = { side, start, end, filePath: file.path };
-    widgetHookRef.current?.getReadonlyState().setWidget({ side, lineNumber: end });
-  }, [file.path]);
-
-  const renderWidgetLine = useCallback(
-    ({
-      lineNumber,
-      fromLineNumber,
-      side,
-      onClose,
-    }: {
-      lineNumber: number;
-      fromLineNumber?: number;
-      side: SplitSide;
-      onClose: () => void;
-    }) => {
-      // Prefer the range from our mouseup handler (`pendingRangeRef`) since the
-      // library's internal range cache gets cleared by its empty-lines filter.
-      // Fall back to the library's lineNumber/fromLineNumber for any other path.
-      const ourSide = sideToOurs(side);
-      const pending = pendingRangeRef.current;
-      const useRange = pending && pending.side === side && pending.filePath === file.path;
-      const start = useRange ? pending.start : Math.min(lineNumber, fromLineNumber ?? lineNumber);
-      const end = useRange ? pending.end : Math.max(lineNumber, fromLineNumber ?? lineNumber);
-      const rangeLabel = start === end ? `L${start}` : `L${start}–L${end}`;
-      return (
-        <div style={{ padding: '4px 12px' }}>
-          <Composer
-            label={rangeLabel}
-            placeholder="Leave a note…"
-            onSave={(b) => {
-              const trimmed = b.trim();
-              if (!trimmed) {
-                pendingRangeRef.current = null;
-                onClose();
-                return;
-              }
-              onCreateNote(
-                {
-                  file: file.path,
-                  lineStart: start,
-                  lineEnd: end,
-                  side: ourSide,
-                },
-                trimmed,
-              )
-                .then(() => {
-                  pendingRangeRef.current = null;
-                  onClose();
-                })
-                .catch(() => {
-                  // Error surfaced via the hook's banner; keep the
-                  // composer open so the note text isn't lost.
-                });
-            }}
-            onCancel={() => {
-              pendingRangeRef.current = null;
-              onClose();
-            }}
-            autoFocus
-          />
-        </div>
-      );
-    },
-    [file.path, onCreateNote],
+  // Project the inline line-notes onto the shared diff surface: each renders at
+  // the *end* of its range (the widget sits below the last line). The shared
+  // CommentableFileDiff owns the library wiring; here we only say *where* threads
+  // anchor and *how* to render them (a local Thread) + *how* to create one.
+  const inlineAnchors = useMemo(
+    () => lineNotes.map((n) => ({ side: n.anchor?.side ?? 'right', line: lineEndOf(n) })),
+    [lineNotes],
   );
 
-  const renderExtendLine = useCallback(
-    ({ data }: { data?: { noteIds?: string[] } }) => {
-      const ids: string[] = data?.noteIds ?? [];
-      const threads = ids
-        .map((id) => lineNotes.find((n) => n.id === id))
-        .filter((n): n is ReviewNoteView => Boolean(n));
-      if (threads.length === 0) return null;
-      return (
-        <div style={{ padding: '4px 12px' }}>
-          {threads.map((n) => (
-            <Thread
-              key={n.id}
-              note={n}
-              onReply={onReplyNote}
-              onResolve={onResolveNote}
-              onReopen={onReopenNote}
-              onDelete={onDeleteNote}
-            />
-          ))}
-        </div>
+  const renderInline = useCallback(
+    (side: Side, line: number) => {
+      const threads = lineNotes.filter(
+        (n) => (n.anchor?.side ?? 'right') === side && lineEndOf(n) === line,
       );
+      if (threads.length === 0) return null;
+      return threads.map((n) => (
+        <Thread
+          key={n.id}
+          note={n}
+          onReply={onReplyNote}
+          onResolve={onResolveNote}
+          onReopen={onReopenNote}
+          onDelete={onDeleteNote}
+        />
+      ));
     },
     [lineNotes, onReplyNote, onResolveNote, onReopenNote, onDeleteNote],
+  );
+
+  const handleCreate = useCallback(
+    (range: CommentRange, body: string) =>
+      onCreateNote(
+        { file: file.path, lineStart: range.lineStart, lineEnd: range.lineEnd, side: range.side },
+        body,
+      ),
+    [file.path, onCreateNote],
   );
 
   // Header-only render when collapsed. We keep the same chrome so the
@@ -736,61 +598,18 @@ const FileBlock = memo(function FileBlock({
         </div>
       )}
 
-      {/* The diff itself — only when there's a patch to render. The library
-          renders its own `.diff-tailwindcss-wrapper` internally, so we don't
-          need to add one ourselves. The `self-review-diff` wrapper scopes
-          the hover-"+" CSS overlay (see styles.css) so it doesn't leak to
-          any other diff-view consumer in the future. The mouseup listener is
-          scoped here (bubbles up from the diff) rather than on `document`. */}
-      {file.patch && !file.isBinary && !file.isTruncated ? (
-        <div className="self-review-diff" onMouseUp={handleMouseUp}>
-          <DiffViewWithMultiSelect
-            // biome-ignore lint/suspicious/noExplicitAny: ref shape isn't exported as a usable name
-            ref={dvRef as unknown as React.Ref<any>}
-            data={diffData}
-            diffViewMode={viewMode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
-            diffViewHighlight
-            // Bypass the library's width-based widget gating. Without this it
-            // gates "render the widget content" on a measured `.unified-diff-
-            // table-wrapper` width — the measurement lags the first paint, so
-            // the widget row appears empty until the next resize event.
-            diffViewWrap
-            // No "+" gutter icon: it sits at `left-[100%] translate-x-[-50%]`,
-            // straddling the line-number / code boundary — exactly where the
-            // user wants to start a drag. Its onMouseDown calls
-            // e.stopPropagation(), so the multi-select manager underneath
-            // never sees the pointerdown and the drag never starts. Instead
-            // every entry goes through the multi-select pipeline:
-            // `onMultiSelectComplete` fires on mouseup for both a single-line
-            // click (start === end) and a real drag, and we programmatically
-            // open the widget via the captured store hook below. GitHub's
-            // model, end-to-end uniform.
-            diffViewAddWidget={false}
-            extendData={extendData}
-            enableMultiSelect
-            onCreateUseWidgetHook={(hook) => {
-              widgetHookRef.current = hook as unknown as WidgetHook;
-            }}
-            renderWidgetLine={renderWidgetLine}
-            renderExtendLine={renderExtendLine}
-          />
-        </div>
-      ) : (
-        <div
-          style={{
-            padding: '20px 14px',
-            fontSize: 12,
-            color: 'var(--gray-500)',
-            background: 'var(--gray-50)',
-          }}
-        >
-          {file.isBinary
-            ? 'Binary file — not shown.'
-            : file.isTruncated
-              ? 'Diff too large to render inline (clipped at 256 KB). Use `git diff` to inspect.'
-              : 'Empty diff.'}
-        </div>
-      )}
+      {/* The diff + inline-comment surface, shared with the reviewer storyline
+          (Step 4). It owns the @git-diff-view wiring (drag→Composer, inline
+          thread slots); here we feed it the line-note anchors, a Thread renderer,
+          and the create handler. Binary/truncated/empty fallbacks live inside it. */}
+      <CommentableFileDiff
+        file={file}
+        viewMode={viewMode}
+        inlineAnchors={inlineAnchors}
+        renderInline={renderInline}
+        onCreate={handleCreate}
+        composerPlaceholder="Leave a note…"
+      />
     </div>
   );
 });

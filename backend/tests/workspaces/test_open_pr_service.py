@@ -125,6 +125,47 @@ def test_pull_request_open_reviewer_fails_warning_recorded() -> None:
 
 
 @pytest.mark.django_db
+def test_pull_request_open_create_pull_422_surfaced() -> None:
+    # GitHub rejects PR creation (e.g. no commits between base and head). The
+    # GithubError must not escape as a 500 — it becomes a fail-loud
+    # ApplicationError(502) whose message carries GitHub's per-field detail.
+    creator = cast(User, UserFactory())
+    ws = cast(Workspace, WorkspaceFactory(created_by=creator, pr_number=None))
+    gw = _make_gateway()
+    gw.create_pull.side_effect = GithubError(
+        422,
+        "Validation Failed",
+        {
+            "errors": [
+                {
+                    "resource": "PullRequest",
+                    "code": "custom",
+                    "message": "No commits between main and feat/x",
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(ApplicationError) as exc:
+        pull_request_open(
+            workspace=ws,
+            creator=creator,
+            title="t",
+            body="",
+            reviewers=[],
+            labels=[],
+            draft=False,
+            gateway=gw,
+        )
+
+    assert exc.value.status == 502
+    assert "No commits between main and feat/x" in exc.value.message
+    assert exc.value.extra["code"] == "open_pr_failed"
+    ws.refresh_from_db()
+    assert ws.pr_number is None  # nothing persisted on failure
+
+
+@pytest.mark.django_db
 def test_pull_request_reopen_happy_path() -> None:
     creator = cast(User, UserFactory())
     ws = cast(Workspace, WorkspaceFactory(created_by=creator, pr_number=55))

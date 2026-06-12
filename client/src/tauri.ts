@@ -108,6 +108,10 @@ export const repoSummary = (path: string) => invoke<RepoSummary>('repo_summary',
 
 export const gitLocalBranches = () => invoke<BranchInfo[]>('git_local_branches');
 
+/** Remote branches (e.g. `origin/main`), recency-sorted, `origin/HEAD` skipped.
+ *  The only valid PR base targets — sourced by the New Workspace base picker. */
+export const gitRemoteBranches = () => invoke<BranchInfo[]>('git_remote_branches');
+
 export type DiffStats = { added: number; removed: number };
 export const gitDiffStats = (baseRef: string, headRef: string) =>
   invoke<DiffStats>('git_diff_stats', { baseRef, headRef });
@@ -163,6 +167,23 @@ export type SelfReviewDiff = {
  */
 export const selfReviewDiff = (scope: SelfReviewScope, baseRef: string | null) =>
   invoke<SelfReviewDiff>('self_review_diff', { scope, baseRef });
+
+/** The committed diff a storyline composes over and the PR will contain:
+ *  `merge_base(base, head) → head`. Reuses the Self-Review file-change shape but
+ *  reads no working tree, so it is independent of what is checked out. `baseRef`
+ *  is the resolved ref it compared against (prefers `origin/<base>`); `headSha`
+ *  is the PR head commit (and the `commit_id` for line comments). Mirrors
+ *  `stage_core::diff::CommittedDiff`. */
+export type CommittedDiff = {
+  baseRef: string;
+  headRef: string;
+  headSha: string;
+  files: SelfReviewFileChange[];
+  stats: SelfReviewStats;
+};
+
+export const storylineDiff = (baseRef: string, headRef: string) =>
+  invoke<CommittedDiff>('storyline_diff', { baseRef, headRef });
 
 export const gitFetch = () => invoke<FetchOutcome>('git_fetch');
 
@@ -371,6 +392,47 @@ export const prComments = (owner: string, repo: string, prNumber: number) =>
 /** All submitted reviews on a PR, via the backend (ADR-0001). */
 export const prReviews = (owner: string, repo: string, prNumber: number) =>
   invoke<GithubReview[]>('pr_reviews', { owner, repo, prNumber });
+
+/** A review verdict the reviewer can submit (Step 4). GitHub's create-review
+ *  `event` vocabulary; maps to the workspace states the overview shows. */
+export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
+
+/** The body for posting a PR comment write-through to GitHub (ADR-0003). A fresh
+ *  review *line* comment carries `path`+`line`+`side`+`commit_id`; a reply
+ *  carries `in_reply_to`+`body`; a PR-level note is just `kind:'issue'`+`body`.
+ *  The backend validates the combination. */
+export type PrCommentCreateInput = {
+  kind: 'issue' | 'review';
+  body: string;
+  path?: string | null;
+  line?: number | null;
+  side?: GithubCommentSide | null;
+  commit_id?: string | null;
+  in_reply_to?: number | null;
+};
+
+/** Post a comment on a PR, write-through to GitHub as the signed-in user
+ *  (ADR-0003). Resolves to the created `GithubReviewComment` (or issue comment).
+ *  Rejects with the backend message verbatim — incl. `409` for a frozen
+ *  (closed/merged) workspace — which the caller renders in a red banner. */
+export const prCommentCreate = (
+  owner: string,
+  repo: string,
+  prNumber: number,
+  payload: PrCommentCreateInput,
+) => invoke<GithubReviewComment>('pr_comment_create', { owner, repo, prNumber, payload });
+
+/** Submit a review verdict on a PR, write-through to GitHub (ADR-0003). `body`
+ *  must be non-empty (backend contract). `comments` optionally batches line
+ *  comments into the review. Resolves to the created `GithubReview`. */
+export const prReviewCreate = (
+  owner: string,
+  repo: string,
+  prNumber: number,
+  body: string,
+  event: ReviewEvent,
+  comments?: PrCommentCreateInput[],
+) => invoke<GithubReview>('pr_review_create', { owner, repo, prNumber, body, event, comments });
 
 /** Context for opening a published workspace in the read-only reviewer viewer
  *  (Step 2 of the reviewer flow). Built from an `OverviewWorkspaceRow` whose

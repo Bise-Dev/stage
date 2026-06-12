@@ -7,7 +7,7 @@ import {
   type ChangedFile,
   type SelfReviewFileChange,
   gitDiffFiles,
-  selfReviewDiff,
+  storylineDiff,
   storylineGet,
   storylineUpdate,
   workspacePublish,
@@ -154,24 +154,19 @@ export function Storyline({
     }
   }, [ctx.baseRef, ctx.headRef, ctx.workspaceId]);
 
-  // Diff for the preview pane. `self_review_diff` diffs the *checked-out* branch
-  // against the base, so if the working tree isn't on this storyline's head ref
-  // we'd be previewing the wrong branch — surface that as an explicit error
-  // rather than showing a misleading diff (fail-loud, per CLAUDE.md).
+  // Diff for the preview pane. `storyline_diff` is a committed tree↔tree diff
+  // (`merge_base(base, head) → head`) — exactly what the PR will contain — and
+  // reads no working tree, so it is independent of what (if anything) is checked
+  // out. No "wrong branch checked out" case to guard: the head ref is resolved
+  // directly. Same committed resolution as the step list (`gitDiffFiles`).
   const loadDiff = useCallback(async () => {
     setDiffLoading(true);
     setDiffError(null);
     try {
-      const diff = await selfReviewDiff('base', ctx.baseRef);
-      if (diff.currentBranch !== ctx.headRef) {
-        setDiffByPath(new Map());
-        setDiffError(
-          `The working tree is on "${diff.currentBranch}", but this storyline is for "${ctx.headRef}". Check out ${ctx.headRef} to preview its diffs.`,
-        );
-        return;
-      }
+      const diff = await storylineDiff(ctx.baseRef, ctx.headRef);
       setDiffByPath(new Map(diff.files.map((f) => [f.path, f])));
     } catch (e) {
+      // Fail loud (CLAUDE.md): surface the cause; no empty-state fallback.
       console.warn('storyline_diff_load_failed', e);
       setDiffError(msgOf(e));
     } finally {
@@ -354,21 +349,13 @@ export function Storyline({
     onBack();
   };
 
-  // Empty list because the branch has no *committed* changes against its base,
-  // even though the working tree does. The file list comes from a commit-tree
-  // diff (`gitDiffFiles`), which excludes the working tree; the preview diff
-  // (`diffByPath`, via `selfReviewDiff`) includes it — so a non-empty
-  // `diffByPath` with an empty order/pool means "uncommitted changes only".
-  // A load failure or branch mismatch (`diffError`, which empties `diffByPath`)
-  // takes precedence and is surfaced by its own banner.
+  // The branch has no committed changes against its base. The step list
+  // (`gitDiffFiles`) and the preview (`storylineDiff`) are both committed
+  // tree↔tree diffs now, so they agree — an empty order/pool genuinely means
+  // there is nothing to compose a storyline over yet. (A load failure surfaces
+  // through `loadError`/`diffError`, which take precedence via their own banners.)
   const noCommittedChanges =
-    !loading &&
-    !loadError &&
-    !diffLoading &&
-    !diffError &&
-    steps.length === 0 &&
-    pool.length === 0 &&
-    diffByPath.size > 0;
+    !loading && !loadError && !diffLoading && !diffError && steps.length === 0 && pool.length === 0;
 
   return (
     <div className="stage">
@@ -505,9 +492,9 @@ export function Storyline({
               )}
               {noCommittedChanges && (
                 <div style={infoBanner}>
-                  No committed changes against <span className="mono">{ctx.baseRef}</span> yet —
-                  commit your work to build the storyline. ({diffByPath.size} uncommitted change
-                  {diffByPath.size === 1 ? '' : 's'} detected.)
+                  <span className="mono">{ctx.headRef}</span> has no committed changes against{' '}
+                  <span className="mono">{ctx.baseRef}</span> yet — commit (and push) your branch to
+                  build the storyline.
                 </div>
               )}
             </div>
