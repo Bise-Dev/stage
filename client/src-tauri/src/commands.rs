@@ -536,6 +536,33 @@ pub async fn workspace_create(
     Ok(ws)
 }
 
+/// Update a pre-publish workspace's base/head ref. PATCH the backend; it 409s
+/// once a PR is open (refs are locked post-publish). Used by the storyline
+/// screen's base picker to re-target the comparison (and the eventual PR).
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn workspace_update(
+    state: tauri::State<'_, AppState>,
+    workspace_id: String,
+    head_ref: Option<String>,
+    base_ref: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let ws = state
+        .api
+        .workspace_update(
+            &token,
+            &workspace_id,
+            head_ref.as_deref(),
+            base_ref.as_deref(),
+        )
+        .await?;
+    Ok(ws)
+}
+
 /// Publish a workspace to GitHub: push its branch with the user's own git
 /// credentials (ADR-0016), then open or adopt its PR via the backend.
 ///

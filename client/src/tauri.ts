@@ -477,6 +477,18 @@ export type WorkspaceCreated = {
 export const workspaceCreate = (input: WorkspaceCreateInput) =>
   invoke<WorkspaceCreated>('workspace_create', input);
 
+/** Update a pre-publish workspace's refs (only the given fields). The backend
+ *  rejects this with 409 once a PR is open — refs are locked post-publish. */
+export const workspaceUpdate = (
+  workspaceId: string,
+  patch: { baseRef?: string; headRef?: string },
+) =>
+  invoke<WorkspaceCreated>('workspace_update', {
+    workspaceId,
+    baseRef: patch.baseRef ?? null,
+    headRef: patch.headRef ?? null,
+  });
+
 export const workspaceDelete = (workspaceId: string) =>
   invoke<void>('workspace_delete', { workspaceId });
 

@@ -222,6 +222,7 @@ pub fn run() {
             commands::self_review_base_options,
             commands::repo_overview,
             commands::workspace_create,
+            commands::workspace_update,
             commands::workspace_publish,
             commands::workspace_delete,
             commands::storyline_get,

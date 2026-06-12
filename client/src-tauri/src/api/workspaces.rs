@@ -33,6 +33,43 @@ impl Client {
         resp.json().await.map_err(|e| Self::json_err(status, e))
     }
 
+    /// Update a pre-publish workspace's refs. PATCH /api/v1/workspaces/{id}/.
+    /// Only the provided fields are sent. The backend rejects this with 409 once
+    /// a PR is open (`head_ref / base_ref not editable once a PR is open`).
+    /// Returns the updated workspace as raw JSON.
+    pub async fn workspace_update(
+        &self,
+        token: &str,
+        workspace_id: &str,
+        head_ref: Option<&str>,
+        base_ref: Option<&str>,
+    ) -> Result<serde_json::Value, Error> {
+        let url = self
+            .base_url
+            .join(&format!("api/v1/workspaces/{workspace_id}/"))
+            .unwrap();
+        let mut body = serde_json::Map::new();
+        if let Some(h) = head_ref {
+            body.insert("head_ref".into(), h.into());
+        }
+        if let Some(b) = base_ref {
+            body.insert("base_ref".into(), b.into());
+        }
+        let resp = self
+            .send(
+                self.http
+                    .patch(url)
+                    .bearer_auth(token)
+                    .json(&serde_json::Value::Object(body)),
+            )
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        resp.json().await.map_err(|e| Self::json_err(status, e))
+    }
+
     /// Read a workspace's storyline. GET /api/v1/workspaces/{id}/storyline/.
     /// `etag` in the returned body drives optimistic concurrency on update.
     pub async fn storyline_get(

@@ -4,13 +4,16 @@ import { ErrorBanner } from '../../components/ErrorBanner';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
 import {
+  type BranchInfo,
   type ChangedFile,
   type SelfReviewFileChange,
   gitDiffFiles,
+  gitRemoteBranches,
   storylineDiff,
   storylineGet,
   storylineUpdate,
   workspacePublish,
+  workspaceUpdate,
 } from '../../tauri';
 import { IntroStep } from './IntroStep';
 import { OrderStep } from './OrderStep';
@@ -106,6 +109,15 @@ export function Storyline({
   // Fresh workspaces start on ordering; an already-published one opens straight
   // on the intro step, where the "Push update" button lives.
   const [step, setStep] = useState<WizardStep>(ctx.prNumber === null ? 'order' : 'intro');
+  // The base branch (PR merge target / comparison point). Editable pre-publish
+  // via the toolbar picker; locked once a PR is open (the backend 409s). Seeded
+  // from the workspace and persisted on change so the diff and the eventual PR
+  // stay in sync.
+  const [baseRef, setBaseRef] = useState(ctx.baseRef);
+  // Remote branches (origin/*) feeding the base picker — the only valid PR
+  // targets. Additive: a load failure leaves the picker showing the current base.
+  const [remoteBranches, setRemoteBranches] = useState<BranchInfo[]>([]);
+  const [baseError, setBaseError] = useState<string | null>(null);
   const [steps, setSteps] = useState<Step[]>([]);
   const [pool, setPool] = useState<ChangedFile[]>([]);
   const [etag, setEtag] = useState<string | null>(null);
@@ -136,7 +148,7 @@ export function Storyline({
     setLoadError(null);
     try {
       const [changed, storyline] = await Promise.all([
-        gitDiffFiles(ctx.baseRef, ctx.headRef),
+        gitDiffFiles(baseRef, ctx.headRef),
         storylineGet(ctx.workspaceId),
       ]);
       const { steps: s, pool: p } = reconcile(changed, storyline.files);
@@ -152,7 +164,7 @@ export function Storyline({
     } finally {
       setLoading(false);
     }
-  }, [ctx.baseRef, ctx.headRef, ctx.workspaceId]);
+  }, [baseRef, ctx.headRef, ctx.workspaceId]);
 
   // Diff for the preview pane. `storyline_diff` is a committed tree↔tree diff
   // (`merge_base(base, head) → head`) — exactly what the PR will contain — and
@@ -163,7 +175,7 @@ export function Storyline({
     setDiffLoading(true);
     setDiffError(null);
     try {
-      const diff = await storylineDiff(ctx.baseRef, ctx.headRef);
+      const diff = await storylineDiff(baseRef, ctx.headRef);
       setDiffByPath(new Map(diff.files.map((f) => [f.path, f])));
     } catch (e) {
       // Fail loud (CLAUDE.md): surface the cause; no empty-state fallback.
@@ -172,12 +184,38 @@ export function Storyline({
     } finally {
       setDiffLoading(false);
     }
-  }, [ctx.baseRef, ctx.headRef]);
+  }, [baseRef, ctx.headRef]);
 
   useEffect(() => {
     load();
     loadDiff();
   }, [load, loadDiff]);
+
+  // Remote branches for the base picker (origin/*). Loaded once; a failure is
+  // non-fatal — the picker still shows the current base.
+  useEffect(() => {
+    gitRemoteBranches()
+      .then(setRemoteBranches)
+      .catch((e) => console.warn('storyline_remote_branches_failed', e));
+  }, []);
+
+  // Re-target the base branch (pre-publish only). Persist first, then swap local
+  // state — which re-runs `load`/`loadDiff` against the new base via their deps.
+  // On failure the base is unchanged and the cause is surfaced (fail-loud).
+  const changeBase = useCallback(
+    async (next: string) => {
+      if (next === baseRef) return;
+      setBaseError(null);
+      try {
+        await workspaceUpdate(ctx.workspaceId, { baseRef: next });
+        setBaseRef(next);
+      } catch (e) {
+        console.warn('storyline_base_change_failed', e);
+        setBaseError(msgOf(e));
+      }
+    },
+    [baseRef, ctx.workspaceId],
+  );
 
   // --- Ordering (Step 1) ---
   // OrderStep computes the complete ordered storyline as a path list (add,
@@ -379,9 +417,45 @@ export function Storyline({
               <Icon name="chevron-left" size={10} color="var(--gray-700)" /> Workspaces
             </button>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <span className="badge mono" style={{ background: 'rgba(0,0,0,0.06)' }}>
-                {ctx.baseRef}
-              </span>
+              {published ? (
+                // Refs are locked once a PR is open (backend 409s on edit).
+                <span
+                  className="badge mono"
+                  style={{ background: 'rgba(0,0,0,0.06)' }}
+                  title="Base is locked once the PR is open"
+                >
+                  {baseRef}
+                </span>
+              ) : (
+                <select
+                  className="input mono"
+                  aria-label="Base branch"
+                  title="Branch to compare against and open the PR into"
+                  value={baseRef}
+                  onChange={(e) => changeBase(e.target.value)}
+                  style={{ height: 24, padding: '0 4px', fontSize: 11.5, maxWidth: 220 }}
+                >
+                  {(() => {
+                    // origin/* only — a base that isn't on the remote can't be a
+                    // PR target. Values are the bare name (stored + opened
+                    // against); labels show the origin/ prefix.
+                    const seen = new Set<string>();
+                    const opts: Array<{ value: string; label: string }> = [];
+                    const push = (value: string, label: string) => {
+                      if (!value || seen.has(value)) return;
+                      seen.add(value);
+                      opts.push({ value, label });
+                    };
+                    for (const b of remoteBranches) push(b.name.replace(/^origin\//, ''), b.name);
+                    push(baseRef, `origin/${baseRef}`);
+                    return opts.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ));
+                  })()}
+                </select>
+              )}
               <Icon name="arrow-right" size={11} color="var(--gray-400)" />
               <span
                 className="badge mono"
@@ -490,10 +564,17 @@ export function Storyline({
                   onClose={() => setPublishError(null)}
                 />
               )}
+              {baseError && (
+                <ErrorBanner
+                  title="Couldn't change base branch"
+                  detail={baseError}
+                  onClose={() => setBaseError(null)}
+                />
+              )}
               {noCommittedChanges && (
                 <div style={infoBanner}>
                   <span className="mono">{ctx.headRef}</span> has no committed changes against{' '}
-                  <span className="mono">{ctx.baseRef}</span> yet — commit (and push) your branch to
+                  <span className="mono">{baseRef}</span> yet — commit (and push) your branch to
                   build the storyline.
                 </div>
               )}
