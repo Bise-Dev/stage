@@ -145,7 +145,7 @@ impl LoopbackListener {
                 // Send the friendly HTML response, then close write side. We respond
                 // BEFORE returning so the browser tab shows the message even if the
                 // exchange later fails.
-                let body = "<!doctype html><html><body><p>You can close this tab.</p></body></html>";
+                let body = "<!doctype html><html><head><title>Stage — Signed in</title></head><body><p>You can close this tab.</p></body></html>";
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),
