@@ -39,7 +39,7 @@ def test_storyline_replace_rejects_stale_etag(author_ws) -> None:
     assert exc.value.message == "etag_mismatch"
 
 
-def test_storyline_replace_rejects_frozen(author_ws) -> None:
+def test_storyline_replace_rejects_archived(author_ws) -> None:
     ws, user = author_ws
     ws.pr_number = 1
     ws.save(update_fields=["pr_number"])
@@ -50,7 +50,7 @@ def test_storyline_replace_rejects_frozen(author_ws) -> None:
             workspace=ws, user=user, files=[], if_match=ws.storyline.etag, gateway=gateway
         )
     assert exc.value.status == 409
-    assert exc.value.extra["code"] == "workspace_frozen"
+    assert exc.value.extra["code"] == "workspace_archived"
 
 
 def test_storyline_replace_swaps_files_and_returns_new_etag(author_ws) -> None:

@@ -139,6 +139,9 @@ export function Workspaces({
   const [show, setShow] = useState<Show>('all');
   const [kind, setKind] = useState<Kind | null>(null);
   const [query, setQuery] = useState('');
+  // Archived (closed/merged-PR) workspaces are hidden from "Awaiting your
+  // review" by default; this toggle reveals them.
+  const [showArchived, setShowArchived] = useState(false);
   const [railWidth, setRailWidth] = useRailWidth();
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -398,9 +401,15 @@ export function Workspaces({
   const yoursInReview = workspaceRows.filter(
     (w) => w.pr_number !== null && w.created_by.github_login === me,
   );
-  const reviewInReview = workspaceRows.filter(
+  // Every published workspace you're a reviewer on. Archived ones (closed/merged
+  // PR) are hidden by default — they're done — but revealed by `showArchived`.
+  const reviewInReviewAll = workspaceRows.filter(
     (w) => w.pr_number !== null && w.created_by.github_login !== me,
   );
+  const reviewArchivedCount = reviewInReviewAll.filter((w) => w.state === 'archived').length;
+  const reviewInReview = showArchived
+    ? reviewInReviewAll
+    : reviewInReviewAll.filter((w) => w.state !== 'archived');
   const openAuthor = openPrRows.filter((p) => p.role === 'author');
   const openReviewer = openPrRows.filter((p) => p.role === 'reviewer');
 
@@ -828,6 +837,31 @@ export function Workspaces({
                       ))}
                     </Bucket>
                   )}
+                  {/* Archived (closed/merged-PR) reviews are hidden by default —
+                      they're done. Reveal them on demand without leaving the column. */}
+                  {showKind('in-review') && reviewArchivedCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowArchived((v) => !v)}
+                      style={{
+                        alignSelf: 'flex-start',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        background: 'none',
+                        border: 'none',
+                        padding: '2px 2px',
+                        cursor: 'pointer',
+                        fontSize: 11.5,
+                        color: 'var(--gray-500)',
+                      }}
+                    >
+                      <Icon name="eye" size={11} color="var(--gray-500)" />
+                      {showArchived
+                        ? `Hide archived (${reviewArchivedCount})`
+                        : `Show archived (${reviewArchivedCount})`}
+                    </button>
+                  )}
                   {showKind('open-prs') && openReviewer.filter(matchOpenPr).length > 0 && (
                     <Bucket
                       color="var(--gray-400)"
@@ -1223,7 +1257,7 @@ const STATES: Record<WorkspaceState, { label: string; cls: string }> = {
   in_review: { label: 'In review', cls: 'badge-blue' },
   changes_requested: { label: 'Changes requested', cls: 'badge-orange' },
   approved: { label: 'Approved', cls: 'badge-green' },
-  frozen: { label: 'Frozen', cls: '' },
+  archived: { label: 'Archived', cls: '' },
 };
 
 function WorkspaceRowCompact({

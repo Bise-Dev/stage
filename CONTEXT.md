@@ -61,7 +61,7 @@ The condition that gates the "Open PR" / "Push update" action: the Storyline has
 _Avoid_: "complete", "done".
 
 **Workspace state** (derived, never stored):
-The single status shown per Workspace, computed from two owners. Pre-publish (no PR): **Draft** (Storyline not yet Ready-to-publish) or **Ready to publish**. Published (PR open): the GitHub review decision — **In review** (no decision yet), **Changes requested**, or **Approved**. PR closed/merged: **Frozen**. "Reviewing" is **not** a state — it describes your role/column, not the Workspace.
+The single status shown per Workspace, computed from two owners. Pre-publish (no PR): **Draft** (Storyline not yet Ready-to-publish) or **Ready to publish**. Published (PR open): the GitHub review decision — **In review** (no decision yet), **Changes requested**, or **Approved**. PR closed/merged: **Archived**. "Reviewing" is **not** a state — it describes your role/column, not the Workspace.
 _Avoid_: storing it; using "Ready to share" as a state (that's the creation gesture).
 
 **Publish** (verb):
@@ -69,7 +69,7 @@ The action that gets this workspace's branch + PR onto github. **There is no Git
 _Avoid_: "submit" (used inside publish for the github Review event), "send".
 
 **Workspace lifetime**:
-A Workspace outlives the github PR it points to. PR close / merge does not delete the Workspace — reads stay available and the author can resume Self-Review on the same branch, edit the Storyline, and re-publish (re-opening a PR if needed). There is **no archive concept**: mutability follows the github PR state strictly (closed PR → frozen workspace; reopened PR → thawed). See `docs/design.md` § 8.
+A Workspace outlives the github PR it points to. PR close / merge does not delete the Workspace — reads stay available and the author can resume Self-Review on the same branch, edit the Storyline, and re-publish (re-opening a PR if needed). Archiving is **not** a manual action and is **never stored**: it follows the github PR state strictly (closed/merged PR → archived workspace; reopened PR → restored). See `docs/design.md` § 8.
 
 **Comment** (POC stance — no backend entity):
 For the POC, Stage backend does **not** store a Comment entity. Pre-publish drafts are a Local Client concern; the client posts to the backend, which writes through to github in the same request cycle. The local-first offline-drafts sync model is a roadmap goal, not POC scope. See `docs/adr/0003-write-through-comments-poc.md`.
@@ -81,12 +81,12 @@ Discussions on Storyline intros remain a backend entity — github has no equiva
 A Storyline step whose `diff_file_path` is no longer part of the change set the author is composing against (file removed, renamed, or never existed in that change set). One concept, two detection sites depending on lifecycle phase: **pre-publish** the client detects it against the **local branch diff** during storyline composition (no PR exists yet); **post-publish** the backend detects it against the **current PR head** on storyline read. Either way it is surfaced as a flag per step; nothing auto-fixes it — the author edits the storyline to resolve. The two detectors can disagree (the local diff and the eventual PR diff need not match — see *Publish*), which is expected: each reports staleness relative to the change set in view at that phase.
 _Avoid_: "broken step", "outdated step", "orphaned step" (we use "stale" consistently for all detection sites).
 
-**Frozen workspace**:
-A workspace whose github PR is closed or merged. All write endpoints (storyline edit, IntroComment post, github review submission) reject with `409 workspace_frozen`. Reads still work. Re-opening the PR thaws the workspace. There is no manual archive concept; mutability follows the PR's github state strictly.
-_Avoid_: "archived" (no such notion in v1).
+**Archived workspace**:
+A workspace whose github PR is closed or merged. All write endpoints (storyline edit, IntroComment post, github review submission) reject with `409 workspace_archived`. Reads still work. Re-opening the PR restores the workspace. Archiving is derived strictly from the PR's github state — there is no manual "archive" gesture and the state is never stored.
+_Avoid_: "frozen" (former name for this state); implying a manual archive action or a stored flag (it's derived from the PR state). The default review list hides archived workspaces — that's a view filter, not a separate state.
 
 **Decisions document** (future):
-A planned export of a frozen workspace into a single self-contained artifact (markdown / structured) capturing the storyline + intros + IntroComments + the github review activity. Out of POC scope, but the immutability rule above guarantees the export is deterministic.
+A planned export of an archived workspace into a single self-contained artifact (markdown / structured) capturing the storyline + intros + IntroComments + the github review activity. Out of POC scope, but the immutability rule above guarantees the export is deterministic.
 
 **Workspace-anchored** vs **PR-anchored** endpoints:
 The Stage backend exposes two parallel API surfaces. *Workspace-anchored* endpoints (URL contains `/workspaces/{uuid}/...`) require a Workspace to exist; they serve storyline + IntroComments. *PR-anchored* endpoints (URL contains `/repos/{owner}/{repo}/pulls/{number}/...`) require only a github PR; they pure-passthrough to github. A reviewer whose author did not use Stage uses only PR-anchored endpoints — Stage degrades to a thin review wrapper rather than refusing service.

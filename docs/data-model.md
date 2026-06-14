@@ -171,7 +171,7 @@ Workspace lifecycle states are **all computed**, never stored. The Client render
 | `published` | workspace exists; `pr_number` set; referenced PR is open |
 | `closed` / `merged` | workspace exists; referenced PR is closed (without merge) or merged |
 
-**Frozen** is the state where every write endpoint returns `409 workspace_frozen`. A workspace is frozen iff its referenced PR is closed or merged. Computed live from github on every write request (no cache in v1).
+**Archived** is the state where every write endpoint returns `409 workspace_archived`. A workspace is archived iff its referenced PR is closed or merged. Computed live from github on every write request (no cache in v1).
 
 ---
 
@@ -203,5 +203,5 @@ The **only** stored privileged identity is `Workspace.created_by_fk`. Any rule e
 
 - Branch deleted and re-created with the same name: treated as opaque; per-file stale-step flagging surfaces the divergence to the author.
 - Force-push that shifts head SHA dramatically: same — staleness surfaces per file.
-- Merged PR + author wants to keep iterating: backend rejects writes (`409 workspace_frozen`). Path forward is `POST /reopen-pr` (if github allows) or `POST /open-pr` again on the workspace (overwrites `pr_number`).
+- Merged PR + author wants to keep iterating: backend rejects writes (`409 workspace_archived`). Path forward is `POST /reopen-pr` (if github allows) or `POST /open-pr` again on the workspace (overwrites `pr_number`).
 - "Stale local workspace" cleanup (author abandoned but never archived): persists forever in v1; cleanup heuristics deferred.

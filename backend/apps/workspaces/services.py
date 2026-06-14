@@ -67,9 +67,9 @@ def storyline_replace(
         pr = gateway.get_pr(workspace.repo_owner, workspace.repo_name, workspace.pr_number)
         if pr.get("state") == "closed":
             raise ApplicationError(
-                "This workspace is frozen — its GitHub PR is closed or merged. "
+                "This workspace is archived — its GitHub PR is closed or merged. "
                 "Reopen the PR on GitHub to make changes again.",
-                extra={"code": "workspace_frozen", "workspace_id": str(workspace.id)},
+                extra={"code": "workspace_archived", "workspace_id": str(workspace.id)},
                 status=409,
             )
 
@@ -137,14 +137,14 @@ def workspace_create(
     return ws
 
 
-def _assert_not_frozen(workspace: Workspace, gateway) -> None:
+def _assert_not_archived(workspace: Workspace, gateway) -> None:
     if workspace.pr_number is not None:
         pr = gateway.get_pr(workspace.repo_owner, workspace.repo_name, workspace.pr_number)
         if pr.get("state") == "closed":
             raise ApplicationError(
-                "This workspace is frozen — its GitHub PR is closed or merged. "
+                "This workspace is archived — its GitHub PR is closed or merged. "
                 "Reopen the PR on GitHub to make changes again.",
-                extra={"code": "workspace_frozen", "workspace_id": str(workspace.id)},
+                extra={"code": "workspace_archived", "workspace_id": str(workspace.id)},
                 status=409,
             )
 
@@ -161,7 +161,7 @@ def intro_comment_create(
     workspace = storyline_file.storyline.workspace
     if workspace.pr_number is None and user.pk != workspace.created_by_id:
         raise ApplicationError("creator_only_pre_publish", status=403)
-    _assert_not_frozen(workspace, gateway)
+    _assert_not_archived(workspace, gateway)
     if parent is not None and parent.parent_id is not None:
         raise ApplicationError("depth_exceeded", status=400)
     return IntroComment.objects.create(

@@ -21,7 +21,7 @@ Every bucket is now backed by real data:
 | --- | --- | --- |
 | **Self-Review** (branch, no workspace) | `gitLocalBranches` + `gitDiffStats` | All local branches (name, current-HEAD marker, last-commit summary/time, `+/−` vs the default branch), most-recent first, refreshed on `repo-changed`. |
 | **Ready to share** (workspace, no PR) | repo-overview aggregator + `gitDiffStats` | Pre-publish workspaces. State (Draft / Ready-to-publish) and storyline count are Stage-computed; `+/−` from a local diff of head vs base. |
-| **In review** (workspace + PR) | repo-overview aggregator | Published workspaces. State (In review / Changes requested / Approved / Frozen) from the PR review decision; `+/−` and comment count from the PR; split into your column vs the review column by `created_by`. |
+| **In review** (workspace + PR) | repo-overview aggregator | Published workspaces. State (In review / Changes requested / Approved / Archived) from the PR review decision; `+/−` and comment count from the PR; split into your column vs the review column by `created_by`. |
 | **Open PRs** (PR, no workspace) | repo-overview aggregator | PRs you author/review with no workspace (`author`/`reviewer` role); branch + `+/−` from the PR. |
 
 The overview is one repo-scoped call (`repo_overview`, see `docs/adr/0009`) that merges Stage workspaces with GitHub PR data server-side. Local branches stay client-side.

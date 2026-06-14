@@ -26,7 +26,7 @@ type CommentableFileDiffProps = {
   renderInline: (side: Side, line: number) => ReactNode;
   /** Create a comment over the dragged/clicked range. Omit to make the diff
    *  **read-only**: no composer slot and no multi-select drag, but inline
-   *  threads still render (used for a frozen workspace / closed PR). */
+   *  threads still render (used for an archived workspace / closed PR). */
   onCreate?: (range: CommentRange, body: string) => Promise<void>;
   composerPlaceholder?: string;
 };
@@ -44,7 +44,7 @@ const sideToOurs = (s: SplitSide): Side => (s === SplitSide.old ? 'left' : 'righ
  * through `inlineAnchors` / `renderInline` / `onCreate`.
  *
  * Read-only (`onCreate` omitted) drops the write affordances but keeps the
- * inline threads — used when a PR is frozen (closed/merged).
+ * inline threads — used when a PR is archived (closed/merged).
  */
 export function CommentableFileDiff({
   file,

@@ -41,7 +41,7 @@ Common `message` values:
 | `unauthenticated` | missing / invalid / revoked Bearer token (401) |
 | `forbidden` | authenticated, but action requires creator privilege (403) |
 | `not_found` | resource doesn't exist (404) |
-| `workspace_frozen` | write attempted on a workspace whose PR is closed or merged (409) |
+| `workspace_archived` | write attempted on a workspace whose PR is closed or merged (409) |
 | `etag_mismatch` | storyline PUT `If-Match` does not match current `etag` (409) |
 | `pr_already_open` | open-pr called on a workspace whose PR is already open (409) |
 | `validation_error` | malformed request body (400) |
@@ -196,7 +196,7 @@ Update workspace metadata. **Only `head_ref` and `base_ref` are mutable**, and o
 
 **Response 200:** updated workspace.
 
-**Errors:** `409` if changing `head_ref` to a value already used by another workspace; `409 workspace_frozen` if the PR is open or closed.
+**Errors:** `409` if changing `head_ref` to a value already used by another workspace; `409 workspace_archived` if the PR is open or closed.
 
 ---
 
@@ -258,7 +258,7 @@ The full list replaces the previous one (delete + bulk-insert in one transaction
 
 **Response 200:** new storyline payload (same shape as GET), with the new `etag`.
 
-**Errors:** `403 forbidden` (not creator); `409 etag_mismatch`; `409 workspace_frozen`; `412 precondition_required` (missing `If-Match`).
+**Errors:** `403 forbidden` (not creator); `409 etag_mismatch`; `409 workspace_archived`; `412 precondition_required` (missing `If-Match`).
 
 ### `GET /api/v1/workspaces/{uuid}/storyline/files/{file_id}/`
 Single step metadata (used when the reviewer focuses a step). `{file_id}` is a UUID.
@@ -327,7 +327,7 @@ Post a new intro comment (root or reply).
 
 **Response 201:** the created comment (single-comment shape, with empty `replies`).
 
-**Errors:** `403` if `parent_id` would create depth > 1; `409 workspace_frozen`.
+**Errors:** `403` if `parent_id` would create depth > 1; `409 workspace_archived`.
 
 ### `PATCH /api/v1/intro-comments/{id}/`
 Edit the body. Only the comment author. `{id}` is a UUID.
@@ -339,21 +339,21 @@ Edit the body. Only the comment author. `{id}` is a UUID.
 
 **Response 200:** updated comment.
 
-**Errors:** `403`; `409 workspace_frozen`.
+**Errors:** `403`; `409 workspace_archived`.
 
 ### `POST /api/v1/intro-comments/{id}/delete/`
 Soft-delete. Only the comment author. Thread structure preserved (`deleted_at` set).
 
 **Response 204.**
 
-**Errors:** `403`; `409 workspace_frozen`.
+**Errors:** `403`; `409 workspace_archived`.
 
 ### `POST /api/v1/intro-comments/{id}/resolve/`
 Mark a root thread as resolved. **Creator-only.** Only roots (`parent_id IS NULL`) can be resolved.
 
 **Response 200:** updated comment with `resolved_at` / `resolved_by` set.
 
-**Errors:** `403`; `409 workspace_frozen`; `400 validation_error` if comment is not a root.
+**Errors:** `403`; `409 workspace_archived`; `400 validation_error` if comment is not a root.
 
 ### `POST /api/v1/intro-comments/{id}/unresolve/`
 Inverse of `/resolve/`. **Creator-only.**
