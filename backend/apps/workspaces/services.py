@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 
+import structlog
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -10,9 +11,31 @@ from apps.github_proxy.exceptions import GithubError
 from apps.users.models import User
 from apps.workspaces.models import IntroComment, Storyline, StorylineFile, Workspace
 
+logger = structlog.get_logger(__name__)
+
 
 def _new_etag() -> str:
     return str(uuid.uuid4())
+
+
+def _github_detail(exc: GithubError) -> str:
+    """GitHub's human reason for a 4xx, for surfacing verbatim to the user.
+
+    GitHub's top-level `message` on a 422 is the unhelpful "Validation Failed";
+    the actionable text (e.g. "No commits between main and <branch>") lives in
+    the per-field `errors[]`. Prefer that detail, falling back to the message.
+    """
+    detail = exc.message
+    errors = exc.body.get("errors") if isinstance(exc.body, dict) else None
+    if isinstance(errors, list):
+        parts = [
+            str(e.get("message") or e.get("code"))
+            for e in errors
+            if isinstance(e, dict) and (e.get("message") or e.get("code"))
+        ]
+        if parts:
+            detail = f"{detail}: {'; '.join(parts)}"
+    return detail
 
 
 @transaction.atomic
@@ -225,9 +248,24 @@ def pull_request_open(
         raise ApplicationError("creator_only", status=403)
 
     o, r = workspace.repo_owner, workspace.repo_name
+    log = logger.bind(
+        workspace_id=str(workspace.id), head=workspace.head_ref, base=workspace.base_ref
+    )
 
     if workspace.pr_number is None:
-        existing = gateway.list_open_pulls(o, r, head=workspace.head_ref)
+        try:
+            existing = gateway.list_open_pulls(o, r, head=workspace.head_ref)
+        except GithubError as exc:
+            log.exception("open_pr_list_failed")
+            raise ApplicationError(
+                f"Couldn't check GitHub for an existing pull request — {_github_detail(exc)}.",
+                extra={
+                    "code": "open_pr_failed",
+                    "cause": str(exc),
+                    "github_status": exc.status_code,
+                },
+                status=502,
+            ) from exc
         if existing:
             pr = existing[0]
             workspace.pr_number = pr["number"]
@@ -236,19 +274,42 @@ def pull_request_open(
             warnings = _apply_pr_warnings(gateway, o, r, workspace.pr_number, reviewers, labels)
             return {"workspace": workspace, "pr": pr, "warnings": warnings}
     else:
-        pr = gateway.get_pr(o, r, workspace.pr_number)
+        try:
+            pr = gateway.get_pr(o, r, workspace.pr_number)
+        except GithubError as exc:
+            log.exception("open_pr_get_failed", pr_number=workspace.pr_number)
+            raise ApplicationError(
+                f"Couldn't load PR #{workspace.pr_number} from GitHub — {_github_detail(exc)}.",
+                extra={
+                    "code": "open_pr_failed",
+                    "cause": str(exc),
+                    "github_status": exc.status_code,
+                },
+                status=502,
+            ) from exc
         if pr.get("state") == "open":
             raise ApplicationError("pr_already_open", status=409)
 
-    pr = gateway.create_pull(
-        o,
-        r,
-        title=title,
-        body=body,
-        base=workspace.base_ref,
-        head=workspace.head_ref,
-        draft=draft,
-    )
+    # GitHub commonly 422s here when the head branch has no commits ahead of base
+    # ("No commits between …"), isn't pushed, or a PR already exists. Surface the
+    # reason verbatim (fail loud, CLAUDE.md) rather than letting it 500.
+    try:
+        pr = gateway.create_pull(
+            o,
+            r,
+            title=title,
+            body=body,
+            base=workspace.base_ref,
+            head=workspace.head_ref,
+            draft=draft,
+        )
+    except GithubError as exc:
+        log.exception("open_pr_create_pull_failed")
+        raise ApplicationError(
+            f"GitHub wouldn't open the pull request — {_github_detail(exc)}.",
+            extra={"code": "open_pr_failed", "cause": str(exc), "github_status": exc.status_code},
+            status=502,
+        ) from exc
     workspace.pr_number = pr["number"]
     workspace.pr_opened_at = timezone.now()
     workspace.save(update_fields=["pr_number", "pr_opened_at", "updated_at"])

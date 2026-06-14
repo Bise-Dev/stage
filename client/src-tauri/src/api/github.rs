@@ -100,11 +100,78 @@ impl Client {
         }
         resp.json().await.map_err(|e| Self::json_err(status, e))
     }
+
+    /// Post a comment on a PR, write-through to GitHub as the signed-in user
+    /// (ADR-0003) — so non-Stage participants on the same PR see it. The caller
+    /// builds the full body: `{ kind, body, path?, line?, side?, commit_id?,
+    /// in_reply_to? }` (a fresh review line comment needs `path`+`line`+`side`+
+    /// `commit_id`; a reply needs `in_reply_to`+`body`; an issue comment just
+    /// `kind:"issue"`+`body`). The backend validates the shape and surfaces a
+    /// frozen workspace as `409` / GitHub's own error verbatim through
+    /// `map_error`.
+    pub async fn pr_comment_create(
+        &self,
+        token: &str,
+        o: &str,
+        r: &str,
+        n: i64,
+        body_json: serde_json::Value,
+    ) -> Result<serde_json::Value, Error> {
+        let url = self
+            .base_url
+            .join(&format!("api/v1/repos/{o}/{r}/pulls/{n}/comments/create/"))
+            .map_err(|e| Error::InvalidBaseUrl(e.to_string()))?;
+        let resp = self
+            .send(self.http.post(url).bearer_auth(token).json(&body_json))
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        resp.json().await.map_err(|e| Self::json_err(status, e))
+    }
+
+    /// Submit a review verdict on a PR, write-through to GitHub as the signed-in
+    /// user (ADR-0003). `event` is `APPROVE | REQUEST_CHANGES | COMMENT`; `body`
+    /// is the summary (the backend requires it non-empty); `comments` is an
+    /// optional array of line comments submitted with the review. The workspace
+    /// state (overview) reflects the new verdict on its next load.
+    // Positional `token, o, r, n` (the PR-anchored convention every SDK method
+    // here follows) plus the three review-payload fields tips this one past
+    // clippy's 7-arg guidance; bundling them would only obscure the call site.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn pr_review_create(
+        &self,
+        token: &str,
+        o: &str,
+        r: &str,
+        n: i64,
+        body: &str,
+        event: &str,
+        comments: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, Error> {
+        let url = self
+            .base_url
+            .join(&format!("api/v1/repos/{o}/{r}/pulls/{n}/review/create/"))
+            .map_err(|e| Error::InvalidBaseUrl(e.to_string()))?;
+        let mut payload = serde_json::json!({ "body": body, "event": event });
+        if let Some(comments) = comments {
+            payload["comments"] = comments;
+        }
+        let resp = self
+            .send(self.http.post(url).bearer_auth(token).json(&payload))
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(Self::map_error(resp).await);
+        }
+        resp.json().await.map_err(|e| Self::json_err(status, e))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use wiremock::matchers::{header_exists, method, path, query_param};
+    use wiremock::matchers::{body_json, header_exists, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::super::client::Client;
@@ -335,6 +402,206 @@ mod tests {
         let client = Client::new(server.uri()).unwrap();
         let err = client
             .pr_reviews("stg_bad", "org", "repo", 42)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn pr_comment_create_review_line_ok() {
+        let server = MockServer::start().await;
+        // A fresh review (line) comment: the full body is forwarded verbatim and
+        // GitHub answers 201 with the created comment.
+        Mock::given(method("POST"))
+            .and(path("/api/v1/repos/org/repo/pulls/42/comments/create/"))
+            .and(header_exists("authorization"))
+            .and(body_json(serde_json::json!({
+                "kind": "review",
+                "body": "rename this",
+                "path": "src/main.rs",
+                "line": 2,
+                "side": "RIGHT",
+                "commit_id": "deadbeef"
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": 10,
+                "path": "src/main.rs",
+                "line": 2,
+                "side": "RIGHT",
+                "body": "rename this",
+                "in_reply_to_id": null,
+                "user": { "login": "me" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let created = client
+            .pr_comment_create(
+                "stg_abc",
+                "org",
+                "repo",
+                42,
+                serde_json::json!({
+                    "kind": "review",
+                    "body": "rename this",
+                    "path": "src/main.rs",
+                    "line": 2,
+                    "side": "RIGHT",
+                    "commit_id": "deadbeef"
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created["id"], 10);
+        assert_eq!(created["user"]["login"], "me");
+    }
+
+    #[tokio::test]
+    async fn pr_comment_create_reply_ok() {
+        let server = MockServer::start().await;
+        // A reply carries `in_reply_to` + `body` only.
+        Mock::given(method("POST"))
+            .and(path("/api/v1/repos/org/repo/pulls/42/comments/create/"))
+            .and(body_json(serde_json::json!({
+                "kind": "review",
+                "body": "good call",
+                "in_reply_to": 10
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": 11,
+                "in_reply_to_id": 10,
+                "body": "good call",
+                "user": { "login": "me" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let created = client
+            .pr_comment_create(
+                "stg_abc",
+                "org",
+                "repo",
+                42,
+                serde_json::json!({ "kind": "review", "body": "good call", "in_reply_to": 10 }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created["in_reply_to_id"], 10);
+    }
+
+    #[tokio::test]
+    async fn pr_comment_create_409_frozen() {
+        // Frozen workspace: the backend rejects the write 409. We surface it
+        // rather than pretending the comment posted (fail-loud).
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/repos/org/repo/pulls/42/comments/create/"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "message": "This PR is closed — reopen on GitHub to review.",
+                "extra": { "code": "workspace_frozen" }
+            })))
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let err = client
+            .pr_comment_create(
+                "stg_abc",
+                "org",
+                "repo",
+                42,
+                serde_json::json!({ "kind": "issue", "body": "hi" }),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Unexpected { status, .. } if status == 409));
+    }
+
+    #[tokio::test]
+    async fn pr_review_create_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/repos/org/repo/pulls/42/review/create/"))
+            .and(header_exists("authorization"))
+            .and(body_json(serde_json::json!({
+                "body": "needs a timeout",
+                "event": "REQUEST_CHANGES"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 100,
+                "state": "CHANGES_REQUESTED",
+                "body": "needs a timeout",
+                "user": { "login": "me" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let review = client
+            .pr_review_create(
+                "stg_abc",
+                "org",
+                "repo",
+                42,
+                "needs a timeout",
+                "REQUEST_CHANGES",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(review["state"], "CHANGES_REQUESTED");
+    }
+
+    #[tokio::test]
+    async fn pr_review_create_with_comments_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/repos/org/repo/pulls/42/review/create/"))
+            .and(body_json(serde_json::json!({
+                "body": "see inline",
+                "event": "COMMENT",
+                "comments": [{ "path": "a.rs", "line": 3, "side": "RIGHT", "body": "nit" }]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 101,
+                "state": "COMMENTED"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let review = client
+            .pr_review_create(
+                "stg_abc",
+                "org",
+                "repo",
+                42,
+                "see inline",
+                "COMMENT",
+                Some(serde_json::json!([
+                    { "path": "a.rs", "line": 3, "side": "RIGHT", "body": "nit" }
+                ])),
+            )
+            .await
+            .unwrap();
+        assert_eq!(review["state"], "COMMENTED");
+    }
+
+    #[tokio::test]
+    async fn pr_review_create_401_unauthenticated() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/repos/org/repo/pulls/42/review/create/"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "message": "unauthenticated",
+                "extra": {}
+            })))
+            .mount(&server)
+            .await;
+        let client = Client::new(server.uri()).unwrap();
+        let err = client
+            .pr_review_create("stg_bad", "org", "repo", 42, "x", "APPROVE", None)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Unauthenticated));

@@ -22,6 +22,7 @@ import {
   gitDiffStats,
   gitFetch,
   gitLocalBranches,
+  gitRemoteBranches,
   onWorktreesChanged,
   openUrl,
   repoOverview,
@@ -121,6 +122,8 @@ export function Workspaces({
   const [ghRepo, setGhRepo] = useState<{ owner: string; repo: string } | null>(null);
   const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
+  // Remote branches (origin/*) — the valid PR base targets for a new workspace.
+  const [remoteBranches, setRemoteBranches] = useState<BranchInfo[]>([]);
   const [worktrees, setWorktrees] = useState<WorktreeInfo[]>([]);
   const [rows, setRows] = useState<OverviewRow[]>([]);
   const [overviewError, setOverviewError] = useState<string | null>(null);
@@ -154,6 +157,13 @@ export function Workspaces({
   const loadBranches = useCallback(async () => {
     try {
       setBranches(await gitLocalBranches());
+      try {
+        // Remote branches feed the New Workspace base picker. Additive, like
+        // worktrees: a failure must not blank the local branch list above.
+        setRemoteBranches(await gitRemoteBranches());
+      } catch (e) {
+        console.warn('workspaces_remote_branches_failed', e);
+      }
       try {
         setWorktrees(await repoWorktrees());
       } catch (e) {
@@ -838,6 +848,7 @@ export function Workspaces({
         {newWsOpen && ghRepo && (
           <NewWorkspaceModal
             branches={selfReviewBranches}
+            remoteBranches={remoteBranches}
             defaultBranch={defaultBranch}
             ghRepo={ghRepo}
             prefillBranch={newWsBranch}
@@ -1448,6 +1459,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function NewWorkspaceModal({
   branches,
+  remoteBranches,
   defaultBranch,
   ghRepo,
   prefillBranch,
@@ -1455,6 +1467,7 @@ function NewWorkspaceModal({
   onCreated,
 }: {
   branches: BranchInfo[];
+  remoteBranches: BranchInfo[];
   defaultBranch: string | null;
   ghRepo: { owner: string; repo: string };
   prefillBranch?: string;
@@ -1462,6 +1475,9 @@ function NewWorkspaceModal({
   onCreated: (created: WorkspaceCreated) => void | Promise<void>;
 }) {
   const [headRef, setHeadRef] = useState(prefillBranch ?? branches[0]?.name ?? '');
+  // Base is the PR merge target — a remote branch, stored as its bare name
+  // (`main`, not `origin/main`): that is GitHub's vocabulary and what the diff
+  // resolves back to `origin/<base>`. The picker offers origin/* only.
   const [baseRef, setBaseRef] = useState(defaultBranch ?? 'main');
   const [title, setTitle] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -1554,13 +1570,33 @@ function NewWorkspaceModal({
         </Field>
 
         <Field label="Base">
-          <input
+          <select
             className="input"
             value={baseRef}
             onChange={(e) => setBaseRef(e.target.value)}
-            placeholder="main"
             style={{ width: '100%' }}
-          />
+          >
+            {(() => {
+              // origin/* only — a base that isn't on the remote can't be a PR
+              // target. Values are the bare branch name (what we store + open the
+              // PR against); labels show the origin/ prefix for clarity.
+              const seen = new Set<string>();
+              const opts: Array<{ value: string; label: string }> = [];
+              const push = (value: string, label: string) => {
+                if (!value || seen.has(value)) return;
+                seen.add(value);
+                opts.push({ value, label });
+              };
+              for (const b of remoteBranches) push(b.name.replace(/^origin\//, ''), b.name);
+              // Keep the default selectable even before remote branches load.
+              push(baseRef, `origin/${baseRef}`);
+              return opts.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ));
+            })()}
+          </select>
         </Field>
 
         <Field label="Title (optional)">

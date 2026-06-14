@@ -1,6 +1,9 @@
+import { useState } from 'react';
 import { Avatar } from '../../components/Avatar';
+import { Icon } from '../../components/Icon';
 import { Markdown } from '../../components/Markdown';
 import type { GithubReviewComment } from '../../tauri';
+import { Composer } from '../selfReview/Composer';
 import { type GithubCommentThread, threadAnchor } from './githubReview';
 
 /** One comment row: avatar + login, then the body as Markdown. Shared by the
@@ -23,20 +26,26 @@ function CommentRow({ c }: { c: GithubReviewComment }) {
 }
 
 /**
- * A GitHub review-comment thread rendered read-only (posting/replies are Step
- * 4). The root comment plus its replies as one card. `offDiff` flags a thread
- * whose anchored line is no longer in the rendered diff — surfaced (never
- * dropped) in the off-diff band with the original line it pointed at, so review
- * activity is always visible (fail loud, CLAUDE.md).
+ * A GitHub review-comment thread: the root comment plus its replies as one card.
+ * `offDiff` flags a thread whose anchored line is no longer in the rendered diff
+ * — surfaced (never dropped) in the off-diff band with the original line it
+ * pointed at, so review activity is always visible (fail loud, CLAUDE.md).
+ *
+ * When `onReply` is supplied (Step 4 — the PR isn't frozen), a Reply affordance
+ * opens an inline `Composer` that posts a threaded reply write-through to GitHub.
+ * Omit it for a read-only/frozen thread.
  */
 export function GithubThread({
   thread,
   offDiff = false,
+  onReply,
 }: {
   thread: GithubCommentThread;
   offDiff?: boolean;
+  onReply?: (rootId: number, body: string) => Promise<void>;
 }) {
   const anchor = threadAnchor(thread);
+  const [replying, setReplying] = useState(false);
   return (
     <div
       style={{
@@ -99,6 +108,40 @@ export function GithubThread({
           <CommentRow c={r} />
         </div>
       ))}
+
+      {onReply && (
+        <div style={{ borderTop: '1px solid var(--hairline-2)', marginTop: 2, paddingTop: 4 }}>
+          {replying ? (
+            <Composer
+              placeholder="Reply…"
+              autoFocus
+              onSave={(body) => {
+                const trimmed = body.trim();
+                if (!trimmed) {
+                  setReplying(false);
+                  return;
+                }
+                onReply(thread.root.id, trimmed)
+                  .then(() => setReplying(false))
+                  .catch(() => {
+                    // Error surfaced in the screen's banner; keep the composer
+                    // open so the reply text isn't lost (fail loud, CLAUDE.md).
+                  });
+              }}
+              onCancel={() => setReplying(false)}
+            />
+          ) : (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setReplying(true)}
+              style={{ color: 'var(--blue)', padding: '0 4px', height: 22 }}
+            >
+              <Icon name="comment-fill" size={10} color="var(--blue)" /> Reply
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
