@@ -17,21 +17,49 @@ export function Composer({
   initialBody?: string;
   /** Small header above the textarea — e.g. `L8` or `L8–L19`. Optional. */
   label?: string;
-  onSave: (body: string) => void;
+  /** Save the body. Return the in-flight Promise so the composer can lock the
+   *  Save button until it settles (prevents a fast double-click / repeated
+   *  ⌘-Enter from posting twice); on rejection it re-enables for a retry. A
+   *  `void`-returning handler still works — it just isn't lock-guarded (it has
+   *  no async window to double-submit through). */
+  onSave: (body: string) => void | Promise<void>;
   onCancel: () => void;
   autoFocus?: boolean;
 }) {
   const [body, setBody] = useState(initialBody ?? '');
+  // Locked while a save is in flight. The lock is the double-submit guard;
+  // it releases when onSave settles (success unmounts us; failure re-enables).
+  const [saving, setSaving] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // Avoid a setState after the host unmounts us on a successful save.
+  const mounted = useRef(true);
+  useEffect(() => {
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (autoFocus) taRef.current?.focus();
   }, [autoFocus]);
 
+  const empty = body.trim().length === 0;
+
+  const submit = () => {
+    if (saving || empty) return;
+    const result = onSave(body);
+    if (result instanceof Promise) {
+      setSaving(true);
+      result.finally(() => {
+        if (mounted.current) setSaving(false);
+      });
+    }
+  };
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      onSave(body);
+      submit();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       onCancel();
@@ -84,18 +112,18 @@ export function Composer({
         }}
       />
       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 4 }}>
-        <button type="button" className="btn" onClick={onCancel} title="Esc">
+        <button type="button" className="btn" onClick={onCancel} disabled={saving} title="Esc">
           Cancel
         </button>
         <button
           type="button"
           className="btn btn-primary"
-          onClick={() => onSave(body)}
-          disabled={body.trim().length === 0}
-          style={{ opacity: body.trim().length === 0 ? 0.5 : 1 }}
+          onClick={submit}
+          disabled={empty || saving}
+          style={{ opacity: empty || saving ? 0.5 : 1 }}
           title="⌘-Enter"
         >
-          Save
+          {saving ? 'Saving…' : 'Save'}
         </button>
       </div>
     </div>

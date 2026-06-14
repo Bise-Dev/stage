@@ -165,7 +165,9 @@ export function CommentableFileDiff({
                 onClose();
                 return;
               }
-              onCreate({ side: ourSide, lineStart: start, lineEnd: end }, trimmed)
+              // Return the promise so the composer locks Save until it settles
+              // (a fast double-click would otherwise post the comment twice).
+              return onCreate({ side: ourSide, lineStart: start, lineEnd: end }, trimmed)
                 .then(() => {
                   pendingRangeRef.current = null;
                   onClose();

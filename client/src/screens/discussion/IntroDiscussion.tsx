@@ -18,8 +18,16 @@ import { Composer } from '../selfReview/Composer';
 /** Purple is Stage's accent for IntroComments — deliberately *not* the gray
  *  "GitHub" badge of `GithubThread`, so a reader can tell narrative discussion
  *  (Stage-only, never written to GitHub) from code review (on GitHub) at a
- *  glance. See the glossary: IntroComment vs Comment. */
-const STAGE_TINT = 'rgba(175, 82, 222, 0.06)';
+ *  glance. See the glossary: IntroComment vs Comment.
+ *
+ *  The background is **opaque** (not a translucent tint): in the reviewer view
+ *  this panel shares a scroll container with the diff below it, whose library
+ *  renders `position: sticky` header/gutter layers — a translucent panel would
+ *  let those green diff layers bleed through when scrolled. The opaque fill
+ *  plus a `position: relative; zIndex` stacking context (on the root) keeps the
+ *  panel visually self-contained. `#faf5fd` is the opaque equivalent of the old
+ *  6%-purple tint over white. */
+const STAGE_TINT = '#faf5fd';
 const STAGE_BORDER = 'rgba(175, 82, 222, 0.28)';
 
 function msgOf(e: unknown): string {
@@ -178,6 +186,10 @@ export function IntroDiscussion({
         background: STAGE_TINT,
         marginBottom: 12,
         overflow: 'hidden',
+        // Own stacking context above the diff's sticky layers (which share the
+        // reviewer view's scroll container), so they never paint over the panel.
+        position: 'relative',
+        zIndex: 1,
       }}
     >
       {/* Disclosure header — a "Stage" badge marks this as the native layer. */}
@@ -308,7 +320,7 @@ export function IntroDiscussion({
                     setComposingRoot(false);
                     return;
                   }
-                  postRoot(trimmed)
+                  return postRoot(trimmed)
                     .then(() => setComposingRoot(false))
                     .catch(() => {
                       // Error surfaced above; keep the composer open so the
@@ -423,7 +435,7 @@ function RootThread({
                   setReplying(false);
                   return;
                 }
-                onReply(root.id, trimmed)
+                return onReply(root.id, trimmed)
                   .then(() => setReplying(false))
                   .catch(() => {
                     // Surfaced in the discussion banner; keep composer open.
@@ -495,7 +507,7 @@ function CommentRow({
               setEditing(false);
               return;
             }
-            onEdit(comment.id, trimmed)
+            return onEdit(comment.id, trimmed)
               .then(() => setEditing(false))
               .catch(() => {
                 // Surfaced in the discussion banner; keep the editor open.
