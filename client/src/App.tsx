@@ -281,10 +281,10 @@ export function App() {
     return null;
   }
   if (view === 'storyline' && storylineCtx) {
-    return <Storyline ctx={storylineCtx} onBack={backToWorkspaces} />;
+    return <Storyline ctx={storylineCtx} user={user} onBack={backToWorkspaces} />;
   }
   if (view === 'review' && reviewCtx) {
-    return <ReviewStoryline ctx={reviewCtx} onBack={backFromReview} />;
+    return <ReviewStoryline ctx={reviewCtx} user={user} onBack={backFromReview} />;
   }
   return (
     <Workspaces

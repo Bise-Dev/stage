@@ -1,5 +1,6 @@
 import { Icon } from '../../components/Icon';
 import type { SelfReviewFileChange } from '../../tauri';
+import { IntroDiscussion } from '../discussion/IntroDiscussion';
 import { DiffPreview } from './DiffPreview';
 import type { Step } from './reconcile';
 
@@ -111,6 +112,9 @@ export function IntroStep({
   onSelectPath,
   onSetIntro,
   getFile,
+  getFileId,
+  workspaceId,
+  currentUserId,
   diffLoading,
   diffError,
 }: {
@@ -119,12 +123,18 @@ export function IntroStep({
   onSelectPath: (path: string) => void;
   onSetIntro: (path: string, text: string) => void;
   getFile: (path: string) => SelfReviewFileChange | null;
+  /** StorylineFile UUID for a step's path, or null when it isn't persisted yet
+   *  (a freshly added step has no thread to anchor a discussion to). */
+  getFileId: (path: string) => string | null;
+  workspaceId: string;
+  currentUserId: number;
   diffLoading: boolean;
   diffError: string | null;
 }) {
   const withIntro = steps.filter((s) => s.introText.trim().length > 0).length;
   const idx = steps.findIndex((s) => s.path === selectedPath);
   const selected = idx === -1 ? null : steps[idx];
+  const selectedFileId = selected ? getFileId(selected.path) : null;
 
   const goto = (i: number) => {
     if (i >= 0 && i < steps.length) onSelectPath(steps[i].path);
@@ -295,12 +305,38 @@ export function IntroStep({
               </div>
             </div>
 
-            {/* Diff preview */}
+            {/* Diff preview — with the Stage-native discussion for this step
+                below the intro card. The author is the workspace creator, so
+                resolve/unresolve is available; the backend blocks writes on a
+                frozen (closed-PR) workspace and that 409 surfaces verbatim. */}
             <DiffPreview
               introText={selected.introText}
               file={getFile(selected.path)}
               loading={diffLoading}
               error={diffError}
+              discussion={
+                selectedFileId ? (
+                  <IntroDiscussion
+                    key={selectedFileId}
+                    workspaceId={workspaceId}
+                    fileId={selectedFileId}
+                    currentUserId={currentUserId}
+                    isCreator
+                    canWrite
+                  />
+                ) : (
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      color: 'var(--gray-500)',
+                      padding: '8px 0 2px',
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    Save the storyline to start a discussion on this step.
+                  </div>
+                )
+              }
             />
           </>
         )}
