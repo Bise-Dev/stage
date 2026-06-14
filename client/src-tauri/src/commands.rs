@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use stage_core::diff::{default_base, DiffLineIndex};
 use stage_core::{
@@ -382,7 +382,10 @@ pub fn open_url(url: String) -> Result<(), AppError> {
 // per invocation with its duration (debug builds only). `skip_all` keeps the
 // non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn auth_sign_in(state: tauri::State<'_, AppState>) -> Result<api::User, AppError> {
+pub async fn auth_sign_in(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<api::User, AppError> {
     // Reject a second concurrent sign-in.
     {
         let in_flight = state.auth_in_flight.lock();
@@ -422,6 +425,15 @@ pub async fn auth_sign_in(state: tauri::State<'_, AppState>) -> Result<api::User
         Err(join_err) if join_err.is_cancelled() => return Err(AppError::Cancelled),
         Err(other) => return Err(AppError::Backend(format!("oauth_join_error: {other}"))),
     };
+
+    // The OAuth callback landed, so the user is done in the browser. Pull our
+    // window back to the foreground — browsers won't reliably let the loopback
+    // success page close its own tab (it wasn't opened by script), so refocusing
+    // Stage is what actually returns the user here. Mirrors lib.rs single-instance.
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
 
     let session = state
         .api
