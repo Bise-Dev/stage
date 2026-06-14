@@ -212,7 +212,7 @@ export type WorkspaceState =
   | 'in_review'
   | 'changes_requested'
   | 'approved'
-  | 'frozen';
+  | 'archived';
 
 export type OverviewWorkspaceRow = {
   kind: 'workspace';
@@ -413,7 +413,7 @@ export type PrCommentCreateInput = {
 
 /** Post a comment on a PR, write-through to GitHub as the signed-in user
  *  (ADR-0003). Resolves to the created `GithubReviewComment` (or issue comment).
- *  Rejects with the backend message verbatim — incl. `409` for a frozen
+ *  Rejects with the backend message verbatim — incl. `409` for an archived
  *  (closed/merged) workspace — which the caller renders in a red banner. */
 export const prCommentCreate = (
   owner: string,

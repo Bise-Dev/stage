@@ -52,7 +52,7 @@ def intro_comment_thread(
     return roots
 
 
-def workspace_is_frozen(*, workspace: Workspace, gateway) -> bool:
+def workspace_is_archived(*, workspace: Workspace, gateway) -> bool:
     if workspace.pr_number is None:
         return False
     pr = gateway.get_pr(workspace.repo_owner, workspace.repo_name, workspace.pr_number)
@@ -169,7 +169,7 @@ def _workspace_state(
 ) -> str:
     if workspace.pr_number is None:
         return "ready_to_publish" if ready else "draft"
-    # Published workspace: we need PR detail to tell merged/closed (→ Frozen)
+    # Published workspace: we need PR detail to tell merged/closed (→ Archived)
     # apart from open (→ review decision). If either piece is missing, refuse
     # to guess — returning a default would silently misreport (e.g. a merged
     # PR shown as "In review"). The screen fails with a clear 502 instead.
@@ -180,7 +180,7 @@ def _workspace_state(
             status=502,
         )
     if pr.get("merged") or pr.get("state") == "closed":
-        return "frozen"
+        return "archived"
     if reviews is None:
         raise ApplicationError(
             "Couldn't load PR reviews from GitHub — workspace state unavailable.",

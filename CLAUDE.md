@@ -81,7 +81,7 @@ if item.status == ItemStatus.ARCHIVED:
     )
 ```
 
-**`message` is human, `extra["code"]` is the machine handle.** `message` is a complete, user-facing sentence the client renders verbatim in its error banner (see the [Error handling](#error-handling) fail-loud rule). The stable programmatic identifier goes in `extra["code"]` (snake_case) — that's what client logic branches on, never the message text. Do **not** put a bare code token in `message` (e.g. `ApplicationError("workspace_frozen", ...)`): the user would see `workspace_frozen` in the banner.
+**`message` is human, `extra["code"]` is the machine handle.** `message` is a complete, user-facing sentence the client renders verbatim in its error banner (see the [Error handling](#error-handling) fail-loud rule). The stable programmatic identifier goes in `extra["code"]` (snake_case) — that's what client logic branches on, never the message text. Do **not** put a bare code token in `message` (e.g. `ApplicationError("workspace_archived", ...)`): the user would see `workspace_archived` in the banner.
 
 Some pre-existing call sites still use the old code-as-message shape; migrate them to this convention whenever you touch them.
 

@@ -749,7 +749,7 @@ pub async fn pr_reviews(
 /// comment body the reviewer screen builds: `{ kind, body, path?, line?, side?,
 /// commit_id?, in_reply_to? }`. A fresh review line comment carries
 /// `path`+`line`+`side`+`commit_id`; a reply carries `in_reply_to`+`body`. A
-/// frozen workspace (closed/merged PR) comes back as the backend's `409`,
+/// archived workspace (closed/merged PR) comes back as the backend's `409`,
 /// surfaced verbatim for the client banner.
 #[tauri::command]
 // `pill = "cmd"` tags this span so the dev Activity-log layer records one row

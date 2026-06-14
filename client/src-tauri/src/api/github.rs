@@ -107,7 +107,7 @@ impl Client {
     /// in_reply_to? }` (a fresh review line comment needs `path`+`line`+`side`+
     /// `commit_id`; a reply needs `in_reply_to`+`body`; an issue comment just
     /// `kind:"issue"`+`body`). The backend validates the shape and surfaces a
-    /// frozen workspace as `409` / GitHub's own error verbatim through
+    /// archived workspace as `409` / GitHub's own error verbatim through
     /// `map_error`.
     pub async fn pr_comment_create(
         &self,
@@ -492,15 +492,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pr_comment_create_409_frozen() {
-        // Frozen workspace: the backend rejects the write 409. We surface it
+    async fn pr_comment_create_409_archived() {
+        // Archived workspace: the backend rejects the write 409. We surface it
         // rather than pretending the comment posted (fail-loud).
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/v1/repos/org/repo/pulls/42/comments/create/"))
             .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
                 "message": "This PR is closed — reopen on GitHub to review.",
-                "extra": { "code": "workspace_frozen" }
+                "extra": { "code": "workspace_archived" }
             })))
             .mount(&server)
             .await;

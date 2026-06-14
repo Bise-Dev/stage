@@ -127,7 +127,7 @@ Device-flow login + opaque Bearer session tokens. Implementation in `apps.identi
 
 **v1 tech debt** (see § 12): the backend uses a single admin PAT for *all* github API calls (the user's own github token is only used during the device-flow exchange and then discarded). This is fine for the POC but means rate-limit and audit footprint are shared. Per-user OAuth is on the roadmap.
 
-## 8 · Computed states + frozen workspaces
+## 8 · Computed states + archived workspaces
 
 The Workspace passes through phases that are **never stored**. They are computed on every read from `(Workspace row, live github PR state)`:
 
@@ -145,18 +145,18 @@ def _storyline_complete(workspace):
     return len(files) >= 1 and all(f.intro_text.strip() for f in files)
 ```
 
-A Workspace is **frozen** when its github PR is closed (whether merged or not). Every write endpoint in the workspace surface calls a tiny gate at its start:
+A Workspace is **archived** when its github PR is closed (whether merged or not). Every write endpoint in the workspace surface calls a tiny gate at its start:
 
 ```python
-def workspace_is_frozen(*, workspace, gateway) -> bool:
+def workspace_is_archived(*, workspace, gateway) -> bool:
     if workspace.pr_number is None:
         return False
     return gateway.get_pr(...)["state"] == "closed"
 ```
 
-A frozen workspace rejects every write with `409 {"message": "workspace_frozen"}`. Reads still work — the storyline + intro comments + review history remain available indefinitely.
+An archived workspace rejects every write with `409 {"extra": {"code": "workspace_archived"}}`. Reads still work — the storyline + intro comments + review history remain available indefinitely.
 
-Reopening the PR on github (via `POST /api/v1/workspaces/<uuid>/reopen-pr/` or directly on github) automatically thaws the workspace; no Stage state change is required.
+Reopening the PR on github (via `POST /api/v1/workspaces/<uuid>/reopen-pr/` or directly on github) automatically restores the workspace; no Stage state change is required.
 
 One github `GET /pulls/{n}` per workspace write is accepted POC cost. A per-route conditional ETag cache is on the roadmap.
 
@@ -164,14 +164,14 @@ One github `GET /pulls/{n}` per workspace write is accepted POC cost. A per-rout
 
 The authz matrix is creator-centric. The Workspace's `created_by_id` is the only privileged identity Stage tracks. The matrix is **phase-qualified**: pre-publish (no github PR yet) is strictly creator-only — work-in-progress drafts must not leak to other Stage users. Once the workspace is published as a github PR, reads become permissive (any authed Stage user can view) until per-repo gating lands.
 
-| Action | Local phase (no PR yet) | Published (PR open) | Frozen (PR closed / merged) |
+| Action | Local phase (no PR yet) | Published (PR open) | Archived (PR closed / merged) |
 |---|---|---|---|
 | Create Workspace | any authed user | n/a | n/a |
 | List Workspaces (`GET /workspaces/`) | own drafts only | own + any published | own + any closed/merged |
 | Read Workspace (`GET /workspaces/<uuid>/`) | creator only — **404 to others** | any authed user | any authed user |
-| PATCH Workspace metadata (`PATCH /workspaces/<uuid>/`) | creator only | rejected (head_ref/base_ref frozen once PR open) | rejected (workspace frozen) |
+| PATCH Workspace metadata (`PATCH /workspaces/<uuid>/`) | creator only | rejected (head_ref/base_ref frozen once PR open) | rejected (workspace archived) |
 | Read Storyline (`GET /workspaces/<uuid>/storyline/`) | creator only — **404 to others** | any authed user | any authed user |
-| Edit Storyline (`PUT .../storyline/`) | creator only | creator only | nobody (409 workspace_frozen) |
+| Edit Storyline (`PUT .../storyline/`) | creator only | creator only | nobody (409 workspace_archived) |
 | Post / reply IntroComment | creator only (author's prep notes alongside the storyline they're composing) | any authed user | nobody |
 | Edit IntroComment | comment author only | comment author only | nobody |
 | Delete IntroComment (soft) | comment author only | comment author only | nobody |
@@ -221,7 +221,7 @@ The gateway is the **only** module in the codebase that talks to github. All oth
 
 Three layers, all green at v0.1.0-poc-backend (168 tests, 96% line coverage):
 
-1. **Service / selector unit tests** — pure Python; mock the gateway with `MagicMock`. Cover authz branches, etag logic, depth-1 thread invariant, frozen rejection, computed-state edge cases.
+1. **Service / selector unit tests** — pure Python; mock the gateway with `MagicMock`. Cover authz branches, etag logic, depth-1 thread invariant, archived rejection, computed-state edge cases.
 2. **API integration tests** — `APIClient` + mocked gateway; one happy + 1-2 error paths per `APIView` class.
 3. **Gateway contract tests** — `respx` mocks the actual github HTTP shapes; cover status-code mapping, header forwarding (ETag, pagination), `with-as` lifetime.
 
@@ -254,7 +254,7 @@ These were proposed during brainstorming and *intentionally* not built. Each is 
 
 - **Comment / DraftReview / DraftComment backend tables** — see ADR-0003. The POC is write-through.
 - **Workspace import** — there is no "import this PR into Stage" action. A Workspace is created by the author via "Ready to share". A reviewer arriving at a PR with no Workspace reviews through PR-anchored endpoints; they do not create one on the author's behalf.
-- **Archive concept** — no manual archive. Mutability follows the github PR state strictly. PR-close → frozen workspace; PR-reopen → thawed. No separate "archived" state.
+- **Manual archive** — there is no manual archive action and no stored archive flag. The **Archived** state is derived strictly from the github PR state. PR-close → archived workspace; PR-reopen → restored.
 - **Repo / branch listing endpoints** — the backend offers exactly one github-search endpoint (`/api/v1/github/prs/?role=author|reviewer`). All other repo/branch enumeration goes directly to github through the client's local git or is fetched as needed via PR-anchored read endpoints.
 - **AI-assisted storyline generation** — proposed and explored; dropped from v1 scope. Re-evaluate post-POC.
 - **Per-user github OAuth** — see § 14 tech debt.

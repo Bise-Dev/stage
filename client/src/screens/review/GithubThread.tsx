@@ -31,9 +31,9 @@ function CommentRow({ c }: { c: GithubReviewComment }) {
  * — surfaced (never dropped) in the off-diff band with the original line it
  * pointed at, so review activity is always visible (fail loud, CLAUDE.md).
  *
- * When `onReply` is supplied (Step 4 — the PR isn't frozen), a Reply affordance
+ * When `onReply` is supplied (Step 4 — the PR isn't archived), a Reply affordance
  * opens an inline `Composer` that posts a threaded reply write-through to GitHub.
- * Omit it for a read-only/frozen thread.
+ * Omit it for a read-only/archived thread.
  */
 export function GithubThread({
   thread,

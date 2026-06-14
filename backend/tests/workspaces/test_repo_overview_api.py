@@ -137,13 +137,13 @@ def test_published_changes_requested(authed_client) -> None:
 
 
 @pytest.mark.django_db
-def test_published_frozen_when_pr_closed(authed_client) -> None:
+def test_published_archived_when_pr_closed(authed_client) -> None:
     client, user = authed_client
     ws = cast(Workspace, WorkspaceFactory(created_by=user, pr_number=478))
     gw = _gw(owner=ws.repo_owner, repo=ws.repo_name, pr={**_PR_OPEN, "state": "closed"})
     with patch("apps.workspaces.apis.make_user_gateway", return_value=gw):
         rows = _overview(client, ws)
-    assert rows[0]["state"] == "frozen"
+    assert rows[0]["state"] == "archived"
 
 
 @pytest.mark.django_db

@@ -81,7 +81,7 @@ def test_intro_comment_create_depth_exceeded(setup) -> None:
 
 
 @pytest.mark.django_db
-def test_intro_comment_create_frozen_workspace(setup) -> None:
+def test_intro_comment_create_archived_workspace(setup) -> None:
     ws, sf, creator = setup
     ws.pr_number = 42
     ws.save(update_fields=["pr_number"])
@@ -89,7 +89,7 @@ def test_intro_comment_create_frozen_workspace(setup) -> None:
     with pytest.raises(ApplicationError) as exc:
         intro_comment_create(storyline_file=sf, user=creator, body="hi", gateway=gw)
     assert exc.value.status == 409
-    assert exc.value.extra["code"] == "workspace_frozen"
+    assert exc.value.extra["code"] == "workspace_archived"
 
 
 @pytest.mark.django_db

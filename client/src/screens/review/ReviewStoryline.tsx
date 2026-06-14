@@ -46,7 +46,7 @@ const STATES: Record<WorkspaceState, { label: string; cls: string }> = {
   in_review: { label: 'In review', cls: 'badge-blue' },
   changes_requested: { label: 'Changes requested', cls: 'badge-orange' },
   approved: { label: 'Approved', cls: 'badge-green' },
-  frozen: { label: 'Frozen', cls: '' },
+  archived: { label: 'Archived', cls: '' },
 };
 
 const STATUS_BADGE: Record<FileStatus, { label: string; cls: string }> = {
@@ -126,7 +126,7 @@ function toFileChange(f: GithubPrFile): SelfReviewFileChange {
  * surface as self-review (`CommentableFileDiff`) — drag a line range to leave a
  * review comment, reply to a thread, or submit a verdict (Approve / Request
  * changes / Comment). All post to GitHub as the signed-in user, so non-Stage
- * participants on the PR see them. A **frozen** workspace (closed/merged PR)
+ * participants on the PR see them. An **archived** workspace (closed/merged PR)
  * disables every write affordance and shows why. The author's composer
  * (ordering, intro editing, Save, Publish) is never reachable here.
  */
@@ -231,11 +231,11 @@ export function ReviewStoryline({
   const issueComments = comments?.issue ?? [];
   const conversationCount = issueComments.length + reviewNotes.length;
 
-  // Write affordances (ADR-0003). A frozen workspace = the PR is closed/merged;
+  // Write affordances (ADR-0003). An archived workspace = the PR is closed/merged;
   // the backend rejects writes 409, so we disable them up front and explain why.
   // Line comments additionally need the PR head sha as their `commit_id`.
-  const frozen = ctx.state === 'frozen';
-  const canComment = !frozen && headSha != null;
+  const archived = ctx.state === 'archived';
+  const canComment = !archived && headSha != null;
 
   // Post a fresh review (line) comment over the dragged range, write-through to
   // GitHub. GitHub anchors a single line + side; we use the range's end line
@@ -569,14 +569,14 @@ export function ReviewStoryline({
                       error={diffErrors.get(step.diff_file_path) ?? null}
                       threads={fileThreads}
                       onCreate={canComment ? postLineComment : undefined}
-                      onReply={frozen ? undefined : postReply}
+                      onReply={archived ? undefined : postReply}
                     />
                   )}
                 </div>
 
                 {/* Verdict composer (Approve / Request changes / Comment) —
-                    write-through to GitHub. Hidden when frozen. */}
-                {verdictOpen && !frozen && (
+                    write-through to GitHub. Hidden when archived. */}
+                {verdictOpen && !archived && (
                   <VerdictPanel
                     submitting={submittingVerdict}
                     onSubmit={submitVerdict}
@@ -631,7 +631,7 @@ export function ReviewStoryline({
                       />
                     ))}
                   </div>
-                  {frozen ? (
+                  {archived ? (
                     <span
                       style={{
                         fontSize: 11.5,
@@ -641,7 +641,7 @@ export function ReviewStoryline({
                         alignItems: 'center',
                         gap: 4,
                       }}
-                      title="The workspace is frozen because its PR is closed or merged"
+                      title="The workspace is archived because its PR is closed or merged"
                     >
                       <Icon name="eye" size={11} color="var(--gray-500)" /> This PR is closed —
                       reopen on GitHub to review.
@@ -980,7 +980,7 @@ function StepHeader({
  *  a range opens a composer that posts a comment write-through to GitHub, and a
  *  thread can be replied to. Comments whose line is no longer in the current
  *  diff are surfaced in an off-diff band rather than dropped (fail loud,
- *  CLAUDE.md). `onCreate`/`onReply` omitted ⇒ read-only (frozen / no head sha). */
+ *  CLAUDE.md). `onCreate`/`onReply` omitted ⇒ read-only (archived / no head sha). */
 function StepDiff({
   file,
   loading,
