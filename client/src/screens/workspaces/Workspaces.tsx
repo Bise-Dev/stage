@@ -1124,36 +1124,38 @@ function BranchRowCompact({
     <div className="group" style={rowShell()}>
       <Icon name="branch" size={12} color="var(--gray-500)" />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span
-            className="mono"
-            title={b.name}
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {b.name}
-          </span>
-          {b.isHead && (
-            <span className="badge badge-green" style={{ flex: '0 0 auto' }}>
-              current
-            </span>
-          )}
-          {worktree &&
-            (worktree.isRoot ? (
-              <span className="badge" style={{ flex: '0 0 auto' }}>
-                root
-              </span>
-            ) : (
-              <span className="badge badge-purple" style={{ flex: '0 0 auto' }}>
-                ⌥ worktree
-              </span>
-            ))}
+        <div
+          className="mono"
+          title={b.name}
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {b.name}
         </div>
+        {(b.isHead || worktree) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+            {b.isHead && (
+              <span className="badge badge-green" style={{ flex: '0 0 auto' }}>
+                current
+              </span>
+            )}
+            {worktree &&
+              (worktree.isRoot ? (
+                <span className="badge" style={{ flex: '0 0 auto' }}>
+                  root
+                </span>
+              ) : (
+                <span className="badge badge-purple" style={{ flex: '0 0 auto' }}>
+                  ⌥ worktree
+                </span>
+              ))}
+          </div>
+        )}
         <div
           style={{
             fontSize: 11,
@@ -1236,26 +1238,26 @@ function WorkspaceRowCompact({
       {reviewing && <Avatar name={w.created_by.github_login} size="sm" />}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
+          title={w.title || w.head_ref}
+          style={{
+            fontSize: 12.5,
+            fontWeight: 600,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            marginBottom: 4,
+          }}
+        >
+          {w.title || w.head_ref}
+        </div>
+        <div
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: 6,
-            marginBottom: 1,
+            marginBottom: 4,
           }}
         >
-          <span
-            title={w.title || w.head_ref}
-            style={{
-              fontSize: 12.5,
-              fontWeight: 600,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              flex: '0 1 auto',
-            }}
-          >
-            {w.title || w.head_ref}
-          </span>
           {w.pr_number !== null && (
             <span className="badge" style={{ background: 'rgba(0,0,0,0.06)', flex: '0 0 auto' }}>
               #{w.pr_number}
@@ -1265,6 +1267,34 @@ function WorkspaceRowCompact({
             {st.label}
           </span>
         </div>
+        {/* Branch on its own row — but only when it isn't already the heading.
+            The title falls back to head_ref (see the title span above), so an
+            untitled workspace would otherwise show the branch name twice. */}
+        {w.title && w.title !== w.head_ref && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              marginBottom: 2,
+              minWidth: 0,
+            }}
+          >
+            <Icon name="branch" size={11} color="var(--gray-400)" />
+            <span
+              className="mono"
+              title={w.head_ref}
+              style={{
+                fontSize: 11,
+                color: 'var(--gray-500)',
+                minWidth: 0,
+                overflowWrap: 'anywhere',
+              }}
+            >
+              {w.head_ref}
+            </span>
+          </div>
+        )}
         <div
           style={{
             fontSize: 11,
@@ -1275,18 +1305,6 @@ function WorkspaceRowCompact({
             overflow: 'hidden',
           }}
         >
-          <span
-            className="mono"
-            title={w.head_ref}
-            style={{
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              maxWidth: '40%',
-            }}
-          >
-            {w.head_ref}
-          </span>
           <DiffStat added={stats.added} removed={stats.removed} />
           {w.storyline_count > 0 && (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
@@ -1356,25 +1374,26 @@ function OpenPrRowCompact({
       )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
+          title={p.title}
+          style={{
+            fontSize: 12.5,
+            fontWeight: 600,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            marginBottom: 4,
+          }}
+        >
+          {p.title}
+        </div>
+        <div
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: 6,
-            marginBottom: 1,
+            marginBottom: 4,
           }}
         >
-          <span
-            title={p.title}
-            style={{
-              fontSize: 12.5,
-              fontWeight: 600,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {p.title}
-          </span>
           <span
             className="badge"
             style={{
@@ -1388,6 +1407,31 @@ function OpenPrRowCompact({
             <Icon name="gh" size={9} color="var(--gray-700)" /> #{p.number}
           </span>
         </div>
+        {p.head_ref && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              marginBottom: 2,
+              minWidth: 0,
+            }}
+          >
+            <Icon name="branch" size={11} color="var(--gray-400)" />
+            <span
+              className="mono"
+              title={p.head_ref}
+              style={{
+                fontSize: 11,
+                color: 'var(--gray-500)',
+                minWidth: 0,
+                overflowWrap: 'anywhere',
+              }}
+            >
+              {p.head_ref}
+            </span>
+          </div>
+        )}
         <div
           style={{
             fontSize: 11,
@@ -1398,19 +1442,6 @@ function OpenPrRowCompact({
             overflow: 'hidden',
           }}
         >
-          {p.head_ref && (
-            <span
-              className="mono"
-              style={{
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                maxWidth: '40%',
-              }}
-            >
-              {p.head_ref}
-            </span>
-          )}
           <DiffStat added={p.added} removed={p.removed} />
           {p.updated_at && <span>{relativeTime(p.updated_at)}</span>}
         </div>
