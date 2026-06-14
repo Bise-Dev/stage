@@ -9,23 +9,31 @@ You just changed code on a branch. This skill produces a **Debrief**: an ordered
 
 It is **local and auth-free**: no network, no tokens. You write through the `stage` CLI into a SQLite store the desktop app shares. The author never sees raw JSON — they see your intros and notes in the app.
 
-## The `stage` binary
+## Locating the `stage` binary
 
-The CLI lives at `client/target/debug/stage` — **not on `PATH`**. **Assume it's already built** and just point at it; do **not** rebuild on every invocation:
+The CLI is built inside the **Stage repo** at `client/target/debug/stage` — **not on `PATH`**. It is **not** bound to the repo you're reviewing: the binary lives in your Stage clone, but it discovers the repo + branch under review from your **current working directory** and keys the Debrief by `(repo, branch)`. So you resolve the binary once, then run it from wherever you're working.
 
-```sh
-BIN=client/target/debug/stage
-```
-
-Only if it's missing (first use, or you've changed `stage-cli` / `stage-core`) build it once — **from inside `client/`**, not the repo root:
+Resolve it at the start, in this order — `$STAGE_REPO` (set when the skill is installed globally), then an in-repo relative path (when your CWD already *is* the Stage clone), then `$PATH`:
 
 ```sh
-(cd client && cargo build -p stage-cli)
+if [ -n "$STAGE_REPO" ]; then ROOT="$STAGE_REPO"
+elif [ -e client/stage-cli/Cargo.toml ]; then ROOT="$PWD"; fi
+
+if [ -n "$ROOT" ]; then
+  BIN="$ROOT/client/target/debug/stage"
+  # Build once if missing, or after stage-cli / stage-core changes — from inside client/.
+  [ -x "$BIN" ] || (cd "$ROOT/client" && cargo build -p stage-cli)
+elif command -v stage >/dev/null 2>&1; then
+  BIN="$(command -v stage)"   # on PATH; note it can't self-build from here
+else
+  echo "stage CLI not found: set STAGE_REPO to your Stage repo root, or put 'stage' on PATH." >&2
+  exit 1
+fi
 ```
 
-(The toolchain is pinned in `client/rust-toolchain.toml` and `rustup` selects it by *current directory*, not `--manifest-path` — building from the repo root silently uses the default toolchain and can fail to compile `libsqlite3-sys`.)
+(The toolchain is pinned in `client/rust-toolchain.toml` and `rustup` selects it by *current directory*, not `--manifest-path` — building from the repo root silently uses the default toolchain and can fail to compile `libsqlite3-sys`. That is why `STAGE_REPO` points at the **repo root**: it serves both the binary path and the build.)
 
-Run the binary from the **repo root** as `"$BIN" self-review …`. The CLI discovers the repo and current branch itself; it keys the Debrief by `(repo, branch)`, so just be on the right branch.
+**Assume the binary is already built** and just point at it; do **not** rebuild on every invocation. Run every command as `"$BIN" self-review …` **from the directory of the repo you're reviewing** — do **not** `cd` into `$STAGE_REPO` to run it. The CLI discovers the repo and current branch itself, so just be on the right branch.
 
 ## Step 1 — pick the mode
 
