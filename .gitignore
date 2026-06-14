@@ -13,6 +13,8 @@ client/src-tauri/gen/
 .zed/
 TODOS.md
 
+.claude/worktrees
+
 
 # Created by https://www.toptal.com/developers/gitignore/api/macos,linux,windows,rust,react,django,python,visualstudiocode
 # Edit at https://www.toptal.com/developers/gitignore?templates=macos,linux,windows,rust,react,django,python,visualstudiocode
