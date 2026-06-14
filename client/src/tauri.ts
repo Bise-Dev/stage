@@ -434,6 +434,55 @@ export const prReviewCreate = (
   comments?: PrCommentCreateInput[],
 ) => invoke<GithubReview>('pr_review_create', { owner, repo, prNumber, body, event, comments });
 
+// --- IntroComments (Stage-native storyline-intro discussion; ADR-0001) ---
+// A threaded discussion on a storyline step's *intro* — Stage's value-add
+// narrative layer. Unlike PR comments, these have NO GitHub counterpart and
+// never write through. `replies` nests one level only (backend enforces
+// depth ≤ 2). `user`/`resolved_by` carry the backend user id (number) +
+// GitHub login; `resolved_*` are non-null only on a resolved root.
+export type IntroComment = {
+  id: string;
+  user: { id: number; github_login: string };
+  body: string;
+  parent_id: string | null;
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by: { id: number; github_login: string } | null;
+  replies: IntroComment[];
+};
+
+/** List a storyline step's intro-comment thread (roots, each with nested
+ *  `replies`). `includeResolved` (default false) reveals resolved roots. The
+ *  `fileId` is the StorylineFile UUID (`Storyline.files[].id`), not the path. */
+export const introCommentsList = (workspaceId: string, fileId: string, includeResolved: boolean) =>
+  invoke<IntroComment[]>('intro_comments_list', { workspaceId, fileId, includeResolved });
+
+/** Post an intro-comment — a root, or a reply when `parentId` is set (depth ≤ 2,
+ *  backend-enforced). Rejects with the backend message verbatim (incl. `409`
+ *  for a frozen workspace), which the caller renders in a red banner. */
+export const introCommentCreate = (
+  workspaceId: string,
+  fileId: string,
+  body: string,
+  parentId: string | null,
+) => invoke<IntroComment>('intro_comment_create', { workspaceId, fileId, body, parentId });
+
+/** Edit an intro-comment's body (author only — backend 403s otherwise). */
+export const introCommentUpdate = (commentId: string, body: string) =>
+  invoke<IntroComment>('intro_comment_update', { commentId, body });
+
+/** Soft-delete an intro-comment (author only). Resolves to void (backend 204). */
+export const introCommentDelete = (commentId: string) =>
+  invoke<void>('intro_comment_delete', { commentId });
+
+/** Resolve a root intro-comment (workspace creator only; roots only). */
+export const introCommentResolve = (commentId: string) =>
+  invoke<IntroComment>('intro_comment_resolve', { commentId });
+
+/** Unresolve a previously-resolved root intro-comment (workspace creator only). */
+export const introCommentUnresolve = (commentId: string) =>
+  invoke<IntroComment>('intro_comment_unresolve', { commentId });
+
 /** Context for opening a published workspace in the read-only reviewer viewer
  *  (Step 2 of the reviewer flow). Built from an `OverviewWorkspaceRow` whose
  *  `pr_number` is non-null (only published workspaces are reviewable). Carries

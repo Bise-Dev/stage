@@ -798,6 +798,105 @@ pub async fn pr_review_create(
     Ok(review)
 }
 
+// --- IntroComments (Stage-native storyline-intro discussion; ADR-0001) ---
+//
+// Unlike the PR-anchored `pr_*` commands above, these never touch GitHub — an
+// IntroComment is Stage's value-add narrative layer with no GitHub counterpart.
+// The backend enforces the rules (creator-only pre-publish, depth ≤ 2, creator
+// resolves roots, frozen → 409); these thin wrappers forward the verbatim
+// message through `AppError` for the client's banner (fail loud, CLAUDE.md).
+
+/// The intro-comment thread for one storyline step (roots, each with nested
+/// `replies`). `include_resolved=false` hides resolved roots.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn intro_comments_list(
+    state: tauri::State<'_, AppState>,
+    workspace_id: String,
+    file_id: String,
+    include_resolved: bool,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let thread = state
+        .api
+        .intro_comments_list(&token, &workspace_id, &file_id, include_resolved)
+        .await?;
+    Ok(thread)
+}
+
+/// Post an intro-comment (root, or a reply when `parent_id` is set).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn intro_comment_create(
+    state: tauri::State<'_, AppState>,
+    workspace_id: String,
+    file_id: String,
+    body: String,
+    parent_id: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let created = state
+        .api
+        .intro_comment_create(&token, &workspace_id, &file_id, &body, parent_id.as_deref())
+        .await?;
+    Ok(created)
+}
+
+/// Edit an intro-comment's body (author only — backend 403s otherwise).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn intro_comment_update(
+    state: tauri::State<'_, AppState>,
+    comment_id: String,
+    body: String,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let updated = state
+        .api
+        .intro_comment_update(&token, &comment_id, &body)
+        .await?;
+    Ok(updated)
+}
+
+/// Soft-delete an intro-comment (author only). Returns () — backend replies 204.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn intro_comment_delete(
+    state: tauri::State<'_, AppState>,
+    comment_id: String,
+) -> Result<(), AppError> {
+    let token = state.require_token()?;
+    state.api.intro_comment_delete(&token, &comment_id).await?;
+    Ok(())
+}
+
+/// Resolve a root intro-comment (workspace creator only; roots only).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn intro_comment_resolve(
+    state: tauri::State<'_, AppState>,
+    comment_id: String,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let resolved = state.api.intro_comment_resolve(&token, &comment_id).await?;
+    Ok(resolved)
+}
+
+/// Unresolve a previously-resolved root intro-comment (workspace creator only).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn intro_comment_unresolve(
+    state: tauri::State<'_, AppState>,
+    comment_id: String,
+) -> Result<serde_json::Value, AppError> {
+    let token = state.require_token()?;
+    let unresolved = state
+        .api
+        .intro_comment_unresolve(&token, &comment_id)
+        .await?;
+    Ok(unresolved)
+}
+
 // --- Self-Review Debrief (cycle 1: local agent↔author loop; ADR-0011) ---
 //
 // These read/write the shared SQLite store the `stage` CLI authors into, keyed

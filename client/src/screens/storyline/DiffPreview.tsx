@@ -22,11 +22,16 @@ export function DiffPreview({
   file,
   loading,
   error,
+  discussion,
 }: {
   introText: string;
   file: SelfReviewFileChange | null;
   loading: boolean;
   error: string | null;
+  /** Stage-native intro discussion for this step, rendered between the intro
+   *  card and the diff (mirrors the reviewer view's placement). Optional so the
+   *  preview stays usable without it. */
+  discussion?: React.ReactNode;
 }) {
   const data = useMemo(() => {
     if (!file || !file.patch) return null;
@@ -95,6 +100,7 @@ export function DiffPreview({
               )}
             </div>
           </div>
+          {discussion && <div style={{ marginTop: 12 }}>{discussion}</div>}
         </div>
 
         {/* Diff body */}

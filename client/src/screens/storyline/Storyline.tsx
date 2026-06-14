@@ -7,6 +7,7 @@ import {
   type BranchInfo,
   type ChangedFile,
   type SelfReviewFileChange,
+  type User,
   gitDiffFiles,
   gitRemoteBranches,
   storylineDiff,
@@ -101,9 +102,11 @@ function PublishGate({ reason, children }: { reason: string | null; children: Re
 
 export function Storyline({
   ctx,
+  user,
   onBack,
 }: {
   ctx: StorylineCtx;
+  user: User;
   onBack: () => void;
 }) {
   // Fresh workspaces start on ordering; an already-published one opens straight
@@ -121,6 +124,12 @@ export function Storyline({
   const [steps, setSteps] = useState<Step[]>([]);
   const [pool, setPool] = useState<ChangedFile[]>([]);
   const [etag, setEtag] = useState<string | null>(null);
+  // path → StorylineFile UUID, from the last load/save. The IntroComment thread
+  // hangs off that id (not the path); a step with no entry here isn't persisted
+  // yet, so it has no thread to anchor to. Note: a storyline PUT re-mints these
+  // ids (and cascade-deletes their IntroComments) — so this is refreshed from
+  // every save's response, never cached across one.
+  const [fileIdByPath, setFileIdByPath] = useState<Map<string, string>>(new Map());
   const [selected, setSelected] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -155,6 +164,7 @@ export function Storyline({
       setSteps(s);
       setPool(p);
       setEtag(storyline.etag);
+      setFileIdByPath(new Map(storyline.files.map((f) => [f.diff_file_path, f.id])));
       setSelected((cur) => cur ?? s[0]?.path ?? null);
       setDirty(false);
     } catch (e) {
@@ -295,6 +305,10 @@ export function Storyline({
         })),
       );
       setEtag(result.etag);
+      // The PUT re-minted the StorylineFile ids — refresh the path→id map so the
+      // per-step discussion anchors to the live ids (the prior ids, and their
+      // IntroComments, no longer exist).
+      setFileIdByPath(new Map(result.files.map((f) => [f.diff_file_path, f.id])));
       setDirty(false);
     } catch (e) {
       // Fail loud: surface the backend message verbatim; keep the author's edits
@@ -363,6 +377,7 @@ export function Storyline({
           })),
         );
         setEtag(saved.etag);
+        setFileIdByPath(new Map(saved.files.map((f) => [f.diff_file_path, f.id])));
         setDirty(false);
       }
       await workspacePublish({
@@ -590,6 +605,9 @@ export function Storyline({
               onSelectPath={setSelected}
               onSetIntro={setIntro}
               getFile={(path) => diffByPath.get(path) ?? null}
+              getFileId={(path) => fileIdByPath.get(path) ?? null}
+              workspaceId={ctx.workspaceId}
+              currentUserId={user.id}
               diffLoading={diffLoading}
               diffError={diffError}
             />

@@ -5,6 +5,7 @@ mod auth;
 mod client;
 mod error;
 mod github;
+mod intro_comments;
 mod overview;
 mod types;
 mod workspaces;

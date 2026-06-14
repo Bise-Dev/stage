@@ -121,7 +121,9 @@ export function GithubThread({
                   setReplying(false);
                   return;
                 }
-                onReply(thread.root.id, trimmed)
+                // Return the promise so the composer locks Save until it settles
+                // (guards against a double-click posting the reply twice).
+                return onReply(thread.root.id, trimmed)
                   .then(() => setReplying(false))
                   .catch(() => {
                     // Error surfaced in the screen's banner; keep the composer
