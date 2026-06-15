@@ -4,11 +4,11 @@ Forward-looking goals that we are deliberately *not* building yet, but are aimin
 
 ## Stage Backend (POC implemented; hardening to follow)
 
-**Today (POC):** The Stage Backend exists as a Django 5.2 + DRF service (see `docs/design.md`). It holds GitHub credentials (single admin PAT for v1), brokers GitHub API calls, and persists Workspace + Storyline + IntroComment state in Postgres. The client integration is not wired yet on the Rust side; the contract is published in `docs/api.md` + `docs/data-model.md`.
+**Today (POC):** The Stage Backend is a Django 5.2 + DRF service (see `docs/ARCHITECTURE.md`). It brokers GitHub API calls and persists Workspace + Storyline + IntroComment state in Postgres. Auth is **per-user GitHub App user-to-server tokens** — each action is attributed to the signed-in user, not a shared bot (ADR-0007 + ADR-0008 superseded the earlier device-flow + single-`GITHUB_ADMIN_PAT` design). The contract is the backend code itself (`apps/*/apis.py` + serializers); `just generate-schema` emits an OpenAPI dump.
 
 **Next hardening goals (phase 2):**
-- **2a — GitHub App installation token** (small, ~80 lines + one-time github app setup). Replace the admin PAT with a token minted from a GitHub App's private key. Actions appear as `stage-bot[bot]` on github (clean machine attribution); same security posture, same code paths. Env vars switch from `GITHUB_ADMIN_PAT` to `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` + `GITHUB_APP_INSTALLATION_ID`. `GithubGateway` constructor refactors `token=...` → `token_getter=...` w/ a JWT-mint + installation-token-exchange + 5-min-pre-expiry refresh cache. This is **not** the same as the existing OAuth App (which is for user device-flow identity and stays as-is).
-- **2b — Per-user GitHub OAuth on-behalf-of** (larger, multi-week). Each action attributed to the actual Stage user on github. Extends the existing OAuth-App device-flow scaffold: scope upgrade (`read:user` → `read:user` + `repo`), encrypted token storage, refresh handling. ADR-required when undertaken.
+- **Bot / machine attribution (optional, not yet built).** Per-user user-to-server tokens already give correct attribution for user-initiated actions. *If* we later want certain backend actions to appear as a `stage-bot[bot]` machine identity (e.g. background reconciliation), that needs a GitHub App **installation token** minted from the app's private key (JWT-mint + installation-token-exchange + pre-expiry refresh cache). `GithubGateway` already takes a `token_getter`, so this slots in without touching call sites. ADR-required when undertaken. (`mint_installation_token` is currently `NotImplementedError` — see ADR-0017.)
+- **Broader per-user scopes (not yet built).** Today's scopes cover the implemented flows; widening them (e.g. for new write surfaces) means a scope upgrade + re-consent. ADR-required when undertaken.
 - Realtime push (SSE per workspace) to surface storyline edits / new IntroComments / github changes without client polling.
 - GitHub webhook ingress (smee.io for dev; public URL for prod) so PR-side state changes propagate without a client refresh.
 - Per-route conditional ETag cache on github read endpoints to reduce rate-limit pressure.
@@ -25,7 +25,7 @@ Forward-looking goals that we are deliberately *not* building yet, but are aimin
 
 ## Transactional outbox for github-coupled writes
 
-**Today (POC):** `pull_request_open` will land an **idempotent open** patch (look up by `head_ref` before creating, adopt an existing PR if found) — this closes the only currently-known stuck-state where a github write succeeds but the DB write fails afterward. See `docs/design.md` § 6 + § 14.
+**Today (POC):** `pull_request_open` will land an **idempotent open** patch (look up by `head_ref` before creating, adopt an existing PR if found) — this closes the only currently-known stuck-state where a github write succeeds but the DB write fails afterward. See ADR-0019 (publish) and the Transactional-outbox entry below.
 
 **Goal:** Move to a proper **two-phase / outbox** pattern for any operation that combines a github side-effect with Stage DB state. Pattern: write the *intent* to a Stage-owned outbox row inside the DB transaction, then attempt the github call from a worker; on success mark the outbox row done and apply downstream state; on failure retry with backoff. This eliminates the "github committed, DB rolled back" hazard for every coupled write, not just `open_pr`.
 

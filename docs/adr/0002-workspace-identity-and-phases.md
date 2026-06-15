@@ -16,7 +16,7 @@ The Workspace passes through several **descriptive** phases — not enum values,
 - **ready-to-share** — `pr_number IS NULL`, storyline incomplete.
 - **ready-to-publish** — `pr_number IS NULL`, storyline complete (≥1 step, every intro non-empty).
 - **published** — `pr_number IS NOT NULL`, github PR is open.
-- **closed / merged** — `pr_number IS NOT NULL`, github PR is closed (the "frozen" state — see `docs/design.md`).
+- **closed / merged** — `pr_number IS NOT NULL`, github PR is closed (the **archived** state — see ADR-0019 and CONTEXT.md).
 
 Self-Review is a *client-side only* state and never reaches the backend; the Workspace is created at the "Ready to share" gesture.
 

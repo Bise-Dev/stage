@@ -1,6 +1,6 @@
-# Diff rendering stack for the Self-Review screen
+# ADR-0010 · Diff rendering stack for the Self-Review screen
 
-Status: accepted
+**Status:** accepted
 
 The Self-Review screen ports an existing POC (`~/Projects/personal/local_pr_preview`) whose diff pane is built on `diff2html` + `highlight.js`, with comments grafted on by imperative DOM mutation (per-file Comment button injection, mousedown handlers on line-number cells, portals into diff2html's rendered HTML). The Stage v2 design's own technical recommendation went the other way — `@git-diff-view/react` + `shiki`, with comments as React widgets. We adopt the **React-first half** of the design's recommendation: the diff pane is `@git-diff-view/react`'s `DiffViewWithMultiSelect`, comments — inline (line/range) and file-level — render as widgets via the library's `renderExtendLine` / `renderWidgetLine` slots, and drag-to-select ranges flow through the library's built-in multi-select (`onAddWidgetClick` with `fromLineNumber`). Syntax highlighting stays on the library's bundled `lowlight` (highlight.js) for v1; the shiki integration the design suggested needs a custom `DiffHighlighter` adapter and is deferred to a follow-up PR.
 

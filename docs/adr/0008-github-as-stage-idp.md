@@ -55,6 +55,6 @@ The Stage `User` row's primary identifier is the GitHub `id` (numeric, immutable
 
 ## Reference
 
-- Spec: `docs/superpowers/specs/2026-05-26-github-app-auth-redesign-design.md` §3.7 (two-layer model and failure modes).
+- The GitHub-App auth redesign spec (§ two-layer model and failure modes) — preserved in git history.
 - ADR-0001 three-tier topology.
 - ADR-0007 GitHub App + loopback + PKCE.

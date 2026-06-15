@@ -18,7 +18,7 @@ DELETE /items/{id}/delete/           # ItemDeleteApi
 
 This works well for the boilerplate's reference `Item` app but collides with our context:
 
-1. The published canonical contract (`docs/api.md`, merged before backend implementation began) used flat REST URLs (`POST /workspaces/`, `PATCH /workspaces/<uuid>/`) — the shape client developers and reviewers committed to.
+1. The canonical contract at the time (then a hand-maintained contract doc, since retired — the backend code is now the contract; merged before backend implementation began) used flat REST URLs (`POST /workspaces/`, `PATCH /workspaces/<uuid>/`) — the shape client developers and reviewers committed to.
 2. During the T11 execution (Workspace CRUD APIs), the subagent emitted both per-verb and flat URLs simultaneously, producing dead code (`WorkspaceCreateApi`, `WorkspaceUpdateApi` were unreachable because tests hit the flat URLs). The cleanup commit `656eec2` removed the dead views.
 
 ## Decision
@@ -44,7 +44,7 @@ The rule of thumb: if two operations on the same resource are *interchangeable f
 ## Considered alternatives
 
 - **Strict per-verb (boilerplate style)**. Rejected because:
-  - The canonical contract was already published in `docs/api.md` using flat URLs; flipping the contract late in the cycle would invalidate work in flight on the client.
+  - The canonical contract was already published (then a hand-maintained doc, since retired) using flat URLs; flipping the contract late in the cycle would invalidate work in flight on the client.
   - REST has a 25-year norm of "POST on a collection creates; PATCH on a resource updates"; following the styleguide here would surprise every external reviewer of the API.
   - HackSoft itself describes the "one APIView per operation" rule as an *internal* code-organization heuristic, not a public-URL prescription. Splitting an APIView is cheap inside the codebase; splitting URLs is a contract change.
 
@@ -55,4 +55,4 @@ The rule of thumb: if two operations on the same resource are *interchangeable f
 - We deviate from the boilerplate styleguide on URL shape. Inside the code, we retain its preference for thin views — but a single APIView class may now expose two methods (e.g. `WorkspaceListApi.get` + `.post`).
 - Action sub-paths (`/delete/`, `/resolve/`, `/open-pr/`) are kept *because they carry semantic meaning*, not because of styleguide pressure. They aid contract readability.
 - Future contributors writing new Stage endpoints should follow flat REST by default; they can fork into action sub-paths when an operation has a name worth keeping in the URL.
-- `docs/api.md` and `docs/data-model.md` were reconciled with this style in the T24 commit (`7fa4e96`).
+- The contract and data-model docs (since retired; see git history) were reconciled with this style in the T24 commit (`7fa4e96`).

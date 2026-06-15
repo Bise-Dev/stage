@@ -365,7 +365,7 @@ export function Workspaces({
   // Split overview rows into buckets.
   const workspaceRows = rows.filter((r): r is OverviewWorkspaceRow => r.kind === 'workspace');
   const openPrRows = rows.filter((r): r is OverviewOpenPrRow => r.kind === 'open_pr');
-  // Self-Review = "branch, no workspace" (see docs/NOT-IMPLEMENTED.md). Drop
+  // Self-Review = "branch, no workspace". Drop
   // any branch that already has a Workspace — otherwise it would render in
   // both Self-Review and Ready-to-share/In-review. Also drop the default branch:
   // you don't self-review it against itself, and sharing it would create a

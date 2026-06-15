@@ -1,4 +1,4 @@
-# ADR-0010 · Workspace creation does no GitHub work; Publish owns the branch push and the existence check
+# ADR-0019 · Workspace creation does no GitHub work; Publish owns the branch push and the existence check
 
 **Status:** accepted
 **Date:** 2026-05-29
@@ -19,7 +19,7 @@ We want the author to be able to work **fully locally** — Self-Review, Ready-t
 
 ## Considered alternatives
 
-- **Validate branch existence at create (the old precondition).** Rejected: couples creation to remote state, breaks local-first (`design.md §4`, trust-the-client), and adds a GitHub round-trip to a DB-only operation. The check would also be racy — a branch can be deleted between create and publish, so Publish must re-check regardless, making the create-time check redundant.
+- **Validate branch existence at create (the old precondition).** Rejected: couples creation to remote state, breaks local-first (trust-the-client; see ARCHITECTURE.md), and adds a GitHub round-trip to a DB-only operation. The check would also be racy — a branch can be deleted between create and publish, so Publish must re-check regardless, making the create-time check redundant.
 - **Keep branch push as a separate step before Publish.** Rejected: forces a push before the author has decided to share, and splits "get my work onto GitHub" across two gestures. Folding the push into Publish gives one "go public" action.
 
 ## Consequences

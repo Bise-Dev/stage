@@ -15,7 +15,7 @@ pub struct User {
 /// `SessionData` is intentionally move-only (no `Clone`): callers destructure once
 /// into `session_token: String` + `user: User` and own each piece — one heap copy
 /// of the token at a time.
-/// Per `docs/design.md` (see "Authentication" section) the token is long-lived until user-initiated logout.
+/// Per ADR-0008 / ADR-0006 the token is long-lived until user-initiated logout.
 #[derive(serde::Deserialize)]
 pub struct SessionData {
     pub session_token: String,

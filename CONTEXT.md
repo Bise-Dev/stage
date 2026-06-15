@@ -25,7 +25,7 @@ Local Client  ⇄  Stage Backend  ⇄  GitHub
 ## Language
 
 **Workspace**:
-A Stage-owned object that sits on top of a local branch and holds the information about that branch's review that does not belong in git or GitHub — primarily the storyline. Identified by a Stage-generated UUID; `(repo, branch)` is a unique but mutable lookup index. Created eagerly the moment the author decides to make their in-progress review shareable (a Self-Review on its own does not need a Workspace). Optionally linked to a GitHub PR via a `pr_number` field; the Workspace's identity does **not** shift to the PR, and it outlives the PR being merged or closed.
+A Stage-owned object that sits on top of a local branch and holds the information about that branch's review that does not belong in git or GitHub — primarily the storyline. Identified by a Stage-generated UUID; `(repo, branch)` is a unique but mutable lookup index. The branch (`head_ref`) is mutable while pre-publish, but once a PR is open it is frozen on the backend — GitHub then owns the authoritative branch name and post-publish lookups go through `(repo, pr_number)`. Created eagerly the moment the author decides to make their in-progress review shareable (a Self-Review on its own does not need a Workspace). Optionally linked to a GitHub PR via a `pr_number` field; the Workspace's identity does **not** shift to the PR, and it outlives the PR being merged or closed.
 _Avoid_: Review session, branch context, PR draft.
 
 **Workspace title**:
@@ -69,13 +69,13 @@ The action that gets this workspace's branch + PR onto github. **There is no Git
 _Avoid_: "submit" (used inside publish for the github Review event), "send".
 
 **Workspace lifetime**:
-A Workspace outlives the github PR it points to. PR close / merge does not delete the Workspace — reads stay available and the author can resume Self-Review on the same branch, edit the Storyline, and re-publish (re-opening a PR if needed). Archiving is **not** a manual action and is **never stored**: it follows the github PR state strictly (closed/merged PR → archived workspace; reopened PR → restored). See `docs/design.md` § 8.
+A Workspace outlives the github PR it points to. PR close / merge does not delete the Workspace — reads stay available and the author can resume Self-Review on the same branch, edit the Storyline, and re-publish (re-opening a PR if needed). Archiving is **not** a manual action and is **never stored**: it follows the github PR state strictly (closed/merged PR → archived workspace; reopened PR → restored). See ADR-0002.
 
 **Comment** (POC stance — no backend entity):
 For the POC, Stage backend does **not** store a Comment entity. Pre-publish drafts are a Local Client concern; the client posts to the backend, which writes through to github in the same request cycle. The local-first offline-drafts sync model is a roadmap goal, not POC scope. See `docs/adr/0003-write-through-comments-poc.md`.
 
 **IntroComment** (still backend-native):
-Discussions on Storyline intros remain a backend entity — github has no equivalent surface.
+Discussions on Storyline intros remain a backend entity — github has no equivalent surface. Threads are **depth-1**: a reply cannot itself have replies, and only root comments are resolvable. A DB invariant enforces this. See ADR-0020 for the surrounding authorization rules.
 
 **Stale step**:
 A Storyline step whose `diff_file_path` is no longer part of the change set the author is composing against (file removed, renamed, or never existed in that change set). One concept, two detection sites depending on lifecycle phase: **pre-publish** the client detects it against the **local branch diff** during storyline composition (no PR exists yet); **post-publish** the backend detects it against the **current PR head** on storyline read. Either way it is surfaced as a flag per step; nothing auto-fixes it — the author edits the storyline to resolve. The two detectors can disagree (the local diff and the eventual PR diff need not match — see *Publish*), which is expected: each reports staleness relative to the change set in view at that phase.
