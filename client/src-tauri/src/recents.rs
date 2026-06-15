@@ -8,10 +8,12 @@ use crate::errors::AppError;
 
 const MAX_ENTRIES: usize = 20;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct RecentRepo {
     pub path: PathBuf,
     #[serde(rename = "lastOpenedAt")]
+    #[ts(type = "number")] // u64 epoch millis; JSON number on the wire
     pub last_opened_at: u64,
 }
 

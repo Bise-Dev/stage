@@ -35,8 +35,9 @@ pub struct AppState {
 
 /// What `stage open` asks the GUI to do. Only the repo root is carried — the
 /// branch is rediscovered from that working tree (ADR-0014).
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct OpenIntent {
     pub repo: PathBuf,
     pub mode: OpenMode,
@@ -44,8 +45,9 @@ pub struct OpenIntent {
 
 /// The screen `stage open` lands on. Self-Review only today; an enum so adding
 /// a mode later is a non-breaking change. Serializes as `"selfReview"`.
-#[derive(Clone, Copy, serde::Serialize)]
+#[derive(Clone, Copy, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub enum OpenMode {
     SelfReview,
 }

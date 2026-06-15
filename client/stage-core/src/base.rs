@@ -11,11 +11,13 @@ use std::time::UNIX_EPOCH;
 
 use git2::Repository;
 use serde::Serialize;
+use ts_rs::TS;
 
 use crate::error::StageError;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct LocalDefault {
     /// Local default branch shorthand (e.g. `"main"`).
     pub name: String,
@@ -24,8 +26,9 @@ pub struct LocalDefault {
     pub behind: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct BaseOptions {
     /// The always-resolvable ref to default the Base diff to: the remote default
     /// (`"origin/main"`) when fetched, else the local default name, else `"main"`.
@@ -36,6 +39,10 @@ pub struct BaseOptions {
     /// The local default branch and how far behind the remote default it is.
     pub local_default: Option<LocalDefault>,
     /// Last `git fetch` time (FETCH_HEAD mtime), epoch seconds; `None` if never.
+    // `Option<i64>` → JSON number-or-null → JS `number | null`. The `type`
+    // override replaces the whole type, so the `| null` must be spelled out
+    // (ts-rs would otherwise emit `bigint | null`).
+    #[ts(type = "number | null")]
     pub last_fetch_secs: Option<i64>,
 }
 

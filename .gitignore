@@ -408,6 +408,12 @@ client/src-tauri/gen/
 # OpenAPI schema generated from Django app on server start
 backend/generated/
 
+# ts-rs default output dir, created only when `cargo test` runs without
+# TS_RS_EXPORT_DIR (a raw `cargo test`, not `just test`/`just gen-types`). The
+# committed IPC types live in client/src/generated/ instead — these are scratch.
+client/stage-core/bindings/
+client/src-tauri/bindings/
+
 # The client cargo workspace ships an app binary — keep its lockfile.
 !client/Cargo.lock
 

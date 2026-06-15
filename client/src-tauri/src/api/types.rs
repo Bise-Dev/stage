@@ -1,8 +1,13 @@
 /// Stage user identity returned by `auth_me`.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+// `id`/`github_user_id` are `i64` but cross the JSON IPC boundary as JS
+// `number`s, so the generated TS overrides them (ts-rs defaults to `bigint`).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct User {
+    #[ts(type = "number")]
     pub id: i64,
     pub github_login: String,
+    #[ts(type = "number")]
     pub github_user_id: i64,
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
@@ -23,15 +28,18 @@ pub struct SessionData {
 }
 
 /// GitHub user reference embedded in search result items.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct GithubUserRef {
     pub login: String,
     pub avatar_url: Option<String>,
 }
 
 /// A single PR item returned by `GET /api/v1/github/prs/`.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct GithubPrSearchItem {
+    #[ts(type = "number")]
     pub number: i64,
     pub title: String,
     pub html_url: String,
@@ -41,10 +49,14 @@ pub struct GithubPrSearchItem {
 }
 
 /// One storyline step as returned by GET/PUT `/workspaces/{id}/storyline/`.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+// The TS type keeps its historical name `StorylineFile` (the Rust struct is the
+// `…Dto`); the webview imports it under that name.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, ts_rs::TS)]
+#[ts(export, rename = "StorylineFile", export_to = "StorylineFile.ts")]
 pub struct StorylineFileDto {
     pub id: String,
     pub diff_file_path: String,
+    #[ts(type = "number")]
     pub order_index: i64,
     pub intro_text: String,
     pub stale: bool,
@@ -53,7 +65,9 @@ pub struct StorylineFileDto {
 
 /// The full storyline payload (`storyline_read` shape). `etag` drives optimistic
 /// concurrency on PUT; `head_sha` is null pre-publish.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+// The TS type keeps its historical name `Storyline` (the Rust struct is `…Dto`).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, ts_rs::TS)]
+#[ts(export, rename = "Storyline", export_to = "Storyline.ts")]
 pub struct StorylineDto {
     pub etag: String,
     pub head_sha: Option<String>,
@@ -63,10 +77,12 @@ pub struct StorylineDto {
 /// One step as sent from the webview into the `storyline_update` command.
 /// camelCase on the wire (webview convention); the SDK maps it to the backend's
 /// snake_case body explicitly (see `Client::storyline_update`).
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct StorylineFileWrite {
     pub diff_file_path: String,
+    #[ts(type = "number")]
     pub order_index: i64,
     pub intro_text: String,
 }

@@ -13,12 +13,14 @@ use std::process::Command;
 
 use git2::Repository;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::error::StageError;
 
 /// One worktree git reports for a repo — a single checked-out working directory.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct WorktreeInfo {
     /// Absolute path of the worktree's working directory, as git reports it.
     pub path: PathBuf,

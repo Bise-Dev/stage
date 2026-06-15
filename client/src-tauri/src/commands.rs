@@ -30,7 +30,8 @@ fn active_repo_path(state: &State<'_, AppState>) -> Result<PathBuf, AppError> {
         .ok_or(AppError::NoActiveRepo)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct RepoInfo {
     pub path: PathBuf,
 }

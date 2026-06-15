@@ -5,10 +5,12 @@
 //! formatting.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// One step of a [`Debrief`]: an agent-authored intro anchored to a single
 /// file in the Base-scope diff.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct DebriefStep {
     /// Repo-relative path of a file present in the Base-scope diff.
     pub file: String,
@@ -20,16 +22,21 @@ pub struct DebriefStep {
 
 /// A stored Debrief: the agent's ordered, annotated account of its own
 /// Base-scope changes, produced for the author to review locally.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct Debrief {
     /// Base branch the diff was composed against (e.g. `"main"`).
     pub base: String,
     /// Steps in presentation order.
     pub steps: Vec<DebriefStep>,
+    // `i64` epoch seconds cross the JSON IPC boundary as a JS `number`, so the
+    // generated TS must say `number` (ts-rs defaults 64-bit ints to `bigint`).
     /// First-written time, epoch seconds. Preserved across regenerations.
+    #[ts(type = "number")]
     pub created_at: i64,
     /// Last-written time, epoch seconds.
+    #[ts(type = "number")]
     pub updated_at: i64,
 }
 
@@ -71,8 +78,9 @@ impl DebriefInput {
 /// replied) → `resolved` (author closed it, terminal). An author reply on an
 /// addressed note re-raises it to `open`; the author may also reopen explicitly
 /// (ADR-0012).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum NoteStatus {
     Open,
     Addressed,
@@ -103,8 +111,9 @@ impl NoteStatus {
 /// Which side of the diff a line anchor targets: `left` = a deleted line (old
 /// file), `right` = an added/context line (new file). Mirrors the webview's
 /// `Side` and `@git-diff-view`'s `SplitSide`. Only meaningful with a line range.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum Side {
     Left,
     Right,
@@ -133,8 +142,9 @@ impl Side {
 /// line range on a given [`Side`]. Anchored to the *diff location*, not a
 /// Debrief step, so it survives the agent regenerating the Debrief. A note may
 /// have no anchor at all (general feedback) — see [`ReviewNote::anchor`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct NoteAnchor {
     pub file: String,
     #[serde(default)]
@@ -147,8 +157,9 @@ pub struct NoteAnchor {
 }
 
 /// Who authored a thread entry on a [`ReviewNote`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum ReplyAuthor {
     Author,
     Agent,
@@ -176,13 +187,15 @@ impl ReplyAuthor {
 /// A follow-up entry on a [`ReviewNote`]'s thread, after the opening `body`.
 /// Either party can append: an agent reply marks the note `addressed`; an
 /// author reply on an addressed note re-raises it to `open` (see ADR-0012).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct NoteReply {
     /// App-minted UUID.
     pub id: String,
     pub author: ReplyAuthor,
     pub body: String,
+    #[ts(type = "number")] // epoch seconds; JSON number on the wire (see Debrief)
     pub created_at: i64,
 }
 
@@ -190,8 +203,9 @@ pub struct NoteReply {
 /// threaded conversation: the opening author `body` plus `replies` from either
 /// party. The agent reads outstanding notes, revises, and replies — closing the
 /// local author↔agent loop (ADR-0012).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct ReviewNote {
     /// App-minted UUID.
     pub id: String,
@@ -204,7 +218,9 @@ pub struct ReviewNote {
     /// Follow-up thread entries, oldest first.
     #[serde(default)]
     pub replies: Vec<NoteReply>,
+    #[ts(type = "number")] // epoch seconds; JSON number on the wire (see Debrief)
     pub created_at: i64,
+    #[ts(type = "number")]
     pub updated_at: i64,
 }
 
@@ -223,10 +239,12 @@ impl ReviewNote {
 /// current Base diff: file gone, or (line-anchored) its line range on its side
 /// is gone. Anchorless notes are never outdated. The **Stale step** pattern,
 /// at line granularity (ADR-0012); see [`crate::diff::DiffLineIndex`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct ReviewNoteView {
     #[serde(flatten)]
+    #[ts(flatten)]
     pub note: ReviewNote,
     pub outdated: bool,
 }

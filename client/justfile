@@ -37,11 +37,37 @@ fmt:
     bun run format
     cargo fmt --all
 
-# Typecheck (TS) + cargo check (whole cargo workspace)
+# Regenerate the committed TypeScript IPC types from the Rust structs (ts-rs).
+# The `#[ts(export)]` bindings are emitted by a `cargo test` pass and written to
+# `src/generated/`. The dir is wiped first so a removed type drops its file
+# (then surfaced as a deletion by `just check`'s drift guard).
+gen-types:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf src/generated
+    export TS_RS_EXPORT_DIR="$(pwd)/src/generated"
+    cargo test --workspace --quiet export_bindings_
+
+# Typecheck (TS) + cargo check (whole cargo workspace). Regenerates the IPC
+# types first and fails loud if they drifted from what's committed — the Rust
+# structs are the single source of truth, so a stale binding is a build error.
 check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just gen-types
+    if ! git diff --quiet -- src/generated; then
+        echo "error: generated TS types are stale — run 'just gen-types' and commit src/generated/" >&2
+        git --no-pager diff --stat -- src/generated >&2
+        exit 1
+    fi
     bun run typecheck
     cargo check --workspace --all-targets
 
-# Tests
+# Tests. Sets the ts-rs export dir so the `#[ts(export)]` tests refresh the
+# committed bindings in place (src/generated) rather than dropping a scratch
+# `bindings/` dir in each crate; identical output means no working-tree churn.
 test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export TS_RS_EXPORT_DIR="$(pwd)/src/generated"
     cargo test --workspace
