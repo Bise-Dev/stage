@@ -540,14 +540,14 @@ export function ReviewStoryline({
                 <div style={{ flex: 1, overflow: 'auto', padding: '12px 22px' }}>
                   {/* Stage-native discussion on this step's intro (ADR-0001) —
                       published workspaces let anyone comment, so writes are
-                      gated only by the frozen guard. */}
+                      gated only by the archived guard. */}
                   <IntroDiscussion
                     key={step.id}
                     workspaceId={ctx.workspaceId}
                     fileId={step.id}
                     currentUserId={user.id}
                     isCreator={user.github_login === ctx.author}
-                    canWrite={!frozen}
+                    canWrite={!archived}
                   />
                   {step.stale ? (
                     <div
