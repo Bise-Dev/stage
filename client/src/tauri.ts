@@ -1,15 +1,93 @@
 import { invoke } from '@tauri-apps/api/core';
 import { type UnlistenFn, listen } from '@tauri-apps/api/event';
 
-export type RepoInfo = { path: string };
+// --- Generated IPC types (ts-rs) ---------------------------------------------
+// These types are GENERATED from the Rust structs in `src-tauri` / `stage-core`
+// (`just gen-types`, committed under `src/generated/`) — the single source of
+// truth for the Tauri command boundary. Do not hand-edit them. We import them
+// here and re-export below so existing call sites keep importing the IPC types
+// from `./tauri` (the boundary's one import surface). Tier-2 commands that still
+// proxy a raw `serde_json::Value` from the backend keep their hand-written types
+// further down — there is no Rust struct to generate those from yet (ADR-0001).
+import type { ActivityLogEntry } from './generated/ActivityLogEntry';
+import type { ActivityLogLevel } from './generated/ActivityLogLevel';
+import type { ActivityLogPill } from './generated/ActivityLogPill';
+import type { BaseOptions } from './generated/BaseOptions';
+import type { BranchInfo } from './generated/BranchInfo';
+import type { ChangedFile } from './generated/ChangedFile';
+import type { CommittedDiff } from './generated/CommittedDiff';
+import type { Debrief } from './generated/Debrief';
+import type { DebriefStep } from './generated/DebriefStep';
+import type { DiffStats } from './generated/DiffStats';
+import type { FetchOutcome } from './generated/FetchOutcome';
+import type { FileStatus } from './generated/FileStatus';
+import type { GithubPrSearchItem } from './generated/GithubPrSearchItem';
+import type { GithubUserRef } from './generated/GithubUserRef';
+import type { LocalDefault } from './generated/LocalDefault';
+import type { NoteAnchor } from './generated/NoteAnchor';
+import type { NoteReply } from './generated/NoteReply';
+import type { NoteStatus } from './generated/NoteStatus';
+import type { OpenIntent } from './generated/OpenIntent';
+import type { OpenMode } from './generated/OpenMode';
+import type { PushOutcome } from './generated/PushOutcome';
+import type { RecentRepo } from './generated/RecentRepo';
+import type { ReplyAuthor } from './generated/ReplyAuthor';
+import type { RepoInfo } from './generated/RepoInfo';
+import type { RepoSummary } from './generated/RepoSummary';
+import type { ReviewNote } from './generated/ReviewNote';
+import type { ReviewNoteView } from './generated/ReviewNoteView';
+import type { SelfReviewDiff } from './generated/SelfReviewDiff';
+import type { SelfReviewFileChange } from './generated/SelfReviewFileChange';
+import type { SelfReviewScope } from './generated/SelfReviewScope';
+import type { SelfReviewStats } from './generated/SelfReviewStats';
+import type { Side } from './generated/Side';
+import type { Storyline } from './generated/Storyline';
+import type { StorylineFile } from './generated/StorylineFile';
+import type { StorylineFileWrite } from './generated/StorylineFileWrite';
+import type { User } from './generated/User';
+import type { WorktreeInfo } from './generated/WorktreeInfo';
+
+export type {
+  ActivityLogEntry,
+  ActivityLogLevel,
+  ActivityLogPill,
+  BaseOptions,
+  BranchInfo,
+  ChangedFile,
+  CommittedDiff,
+  Debrief,
+  DebriefStep,
+  DiffStats,
+  FetchOutcome,
+  FileStatus,
+  GithubPrSearchItem,
+  GithubUserRef,
+  LocalDefault,
+  NoteAnchor,
+  NoteReply,
+  NoteStatus,
+  OpenIntent,
+  OpenMode,
+  PushOutcome,
+  RecentRepo,
+  ReplyAuthor,
+  RepoInfo,
+  RepoSummary,
+  ReviewNote,
+  ReviewNoteView,
+  SelfReviewDiff,
+  SelfReviewFileChange,
+  SelfReviewScope,
+  SelfReviewStats,
+  Side,
+  Storyline,
+  StorylineFile,
+  StorylineFileWrite,
+  User,
+  WorktreeInfo,
+};
 
 // --- `stage open` boot intent (ADR-0014) ---
-/** The screen a `stage open` lands on. Self-Review only today. */
-export type OpenMode = 'selfReview';
-/** A pending `stage open` request: open the GUI in `mode` for `repo` (the
- *  canonical repo root; the branch is rediscovered from that working tree). */
-export type OpenIntent = { repo: string; mode: OpenMode };
-
 /**
  * Cold start: drain this launch's pending `stage open` intent, consumed once
  * (cleared on the Rust side). Resolves to `null` for a plain dock/Finder
@@ -30,48 +108,6 @@ export const onOpenIntent = (cb: (intent: OpenIntent) => void): Promise<Unlisten
  */
 export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> =>
   listen('open-settings', () => cb());
-
-export type RecentRepo = { path: string; lastOpenedAt: number };
-export type RepoSummary = {
-  defaultBranch: string | null;
-  branchesCount: number;
-  remoteUrl: string | null;
-};
-export type BranchInfo = {
-  name: string;
-  isHead: boolean;
-  /** Last-commit time, epoch seconds (UTC). */
-  updatedAt: number;
-  lastCommit: string | null;
-};
-export type FetchOutcome = {
-  remote: string;
-};
-export type PushOutcome = {
-  remote: string;
-  branch: string;
-};
-
-/** One worktree git reports for the active Repo (ADR-0016). Mirrors
- *  `stage_core::worktree::WorktreeInfo` (serde camelCase). */
-export type WorktreeInfo = {
-  /** Absolute working-directory path as git reports it. */
-  path: string;
-  /** Checked-out branch shorthand; null when detached or bare. */
-  branch: string | null;
-  /** HEAD commit id (40-hex); null for a bare entry. */
-  head: string | null;
-  /** The repo's root (main) worktree. */
-  isRoot: boolean;
-  /** HEAD is detached (no branch). */
-  detached: boolean;
-  /** A bare entry (no working directory). */
-  bare: boolean;
-  /** git reports it locked; the (possibly empty) reason, else null. */
-  locked: string | null;
-  /** git reports it prunable (dir gone/invalid); the reason, else null. */
-  prunable: string | null;
-};
 
 /** The worktrees git reports for the active Repo, root first. Re-enumerated
  *  from git on every call (Stage holds no registry). */
@@ -112,54 +148,13 @@ export const gitLocalBranches = () => invoke<BranchInfo[]>('git_local_branches')
  *  The only valid PR base targets — sourced by the New Workspace base picker. */
 export const gitRemoteBranches = () => invoke<BranchInfo[]>('git_remote_branches');
 
-export type DiffStats = { added: number; removed: number };
 export const gitDiffStats = (baseRef: string, headRef: string) =>
   invoke<DiffStats>('git_diff_stats', { baseRef, headRef });
 
-export type ChangedFile = {
-  path: string;
-  /** "A" added · "M" modified · "D" deleted · "?" other. Rename detection is off,
-   * so a rename surfaces as a "D" + "A" pair (see `diff_files` in git.rs). */
-  status: string;
-  added: number;
-  removed: number;
-};
 export const gitDiffFiles = (baseRef: string, headRef: string) =>
   invoke<ChangedFile[]>('git_diff_files', { baseRef, headRef });
 
 // --- Self-Review diff (see docs/adr/0010, CONTEXT.md "Self-Review") ---
-export type SelfReviewScope = 'workdir' | 'base';
-export type FileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
-
-export type SelfReviewFileChange = {
-  path: string;
-  oldPath: string | null;
-  status: FileStatus;
-  additions: number;
-  deletions: number;
-  /** Unified-diff text. Empty when `isBinary`. Clipped at 256 KB when `isTruncated`. */
-  patch: string;
-  isBinary: boolean;
-  isTruncated: boolean;
-};
-
-export type SelfReviewStats = {
-  added: number;
-  removed: number;
-  filesChanged: number;
-};
-
-export type SelfReviewDiff = {
-  currentBranch: string;
-  scope: SelfReviewScope;
-  /** Only set when `scope === 'base'`. */
-  baseRef: string | null;
-  /** Short HEAD sha (8 chars). Used by the frontend for stale-anchor detection. */
-  headSha: string;
-  files: SelfReviewFileChange[];
-  stats: SelfReviewStats;
-};
-
 /**
  * Compute the diff the Self-Review screen renders. `baseRef` is required when
  * `scope === 'base'` and ignored otherwise; the active repo is resolved on
@@ -170,18 +165,7 @@ export const selfReviewDiff = (scope: SelfReviewScope, baseRef: string | null) =
 
 /** The committed diff a storyline composes over and the PR will contain:
  *  `merge_base(base, head) → head`. Reuses the Self-Review file-change shape but
- *  reads no working tree, so it is independent of what is checked out. `baseRef`
- *  is the resolved ref it compared against (prefers `origin/<base>`); `headSha`
- *  is the PR head commit (and the `commit_id` for line comments). Mirrors
- *  `stage_core::diff::CommittedDiff`. */
-export type CommittedDiff = {
-  baseRef: string;
-  headRef: string;
-  headSha: string;
-  files: SelfReviewFileChange[];
-  stats: SelfReviewStats;
-};
-
+ *  reads no working tree, so it is independent of what is checked out. */
 export const storylineDiff = (baseRef: string, headRef: string) =>
   invoke<CommittedDiff>('storyline_diff', { baseRef, headRef });
 
@@ -192,20 +176,11 @@ export const gitFetch = () => invoke<FetchOutcome>('git_fetch');
  *  (no write access, protected branch, …). */
 export const gitPush = (branch: string) => invoke<PushOutcome>('git_push', { branch });
 
-/** Base-branch options for Self-Review (ADR-0016). `recommended` is always a
- *  resolvable ref -- the remote default (`"origin/main"`) when fetched, else the
- *  local default. Mirrors `stage_core::base::BaseOptions`. */
-export type BaseOptions = {
-  recommended: string;
-  remoteDefault: string | null;
-  localDefault: { name: string; behind: number } | null;
-  /** Last fetch time, epoch seconds; null if never fetched. */
-  lastFetchSecs: number | null;
-};
-
 export const selfReviewBaseOptions = () => invoke<BaseOptions>('self_review_base_options');
 
 // --- Repo overview (Stage + GitHub aggregation; see docs/adr/0009) ---
+// Tier 2: `repo_overview` proxies a raw `serde_json::Value` from the backend, so
+// these rows have no Rust struct to generate from and stay hand-written here.
 export type WorkspaceState =
   | 'draft'
   | 'ready_to_publish'
@@ -266,29 +241,6 @@ export const openInFinder = (path: string) => invoke<void>('open_in_finder', { p
 
 export const openUrl = (url: string) => invoke<void>('open_url', { url });
 
-// --- Auth types ---
-export type User = {
-  id: number;
-  github_login: string;
-  display_name: string;
-  avatar_url: string;
-};
-
-// --- GitHub PR types ---
-export type GithubUserRef = {
-  login: string;
-  avatar_url: string | null;
-};
-
-export type GithubPrSearchItem = {
-  number: number;
-  title: string;
-  html_url: string;
-  repository_url: string;
-  updated_at: string;
-  user: GithubUserRef;
-};
-
 // --- Auth wrappers ---
 export const authSignIn = () => invoke<User>('auth_sign_in');
 export const authSignInCancel = () => invoke<void>('auth_sign_in_cancel');
@@ -309,7 +261,8 @@ export const githubPrs = (role: 'author' | 'reviewer') =>
 /** The GitHub file object for one path in a PR, as the backend proxies it
  *  (raw GitHub shape; only the fields the reviewer viewer maps are typed).
  *  `status` is GitHub's vocabulary (`removed`, not `deleted`); `patch` is
- *  absent for binary files and oversize diffs. */
+ *  absent for binary files and oversize diffs.
+ *  Tier 2: backend `serde_json::Value` passthrough — hand-written. */
 export type GithubPrFile = {
   filename: string;
   previous_filename?: string;
@@ -366,6 +319,15 @@ export type PrComments = {
   review: GithubReviewComment[];
 };
 
+/** All comments on a PR (issue + review), via the backend (ADR-0001). Includes
+ *  activity left by non-Stage participants on github.com (ADR-0003). */
+export const prComments = (owner: string, repo: string, prNumber: number) =>
+  invoke<PrComments>('pr_comments', { owner, repo, prNumber });
+
+/** All submitted reviews on a PR, via the backend (ADR-0001). */
+export const prReviews = (owner: string, repo: string, prNumber: number) =>
+  invoke<GithubReview[]>('pr_reviews', { owner, repo, prNumber });
+
 export type GithubReviewState =
   | 'APPROVED'
   | 'CHANGES_REQUESTED'
@@ -383,15 +345,6 @@ export type GithubReview = {
   submitted_at: string | null;
   html_url?: string;
 };
-
-/** All comments on a PR (issue + review), via the backend (ADR-0001). Includes
- *  activity left by non-Stage participants on github.com (ADR-0003). */
-export const prComments = (owner: string, repo: string, prNumber: number) =>
-  invoke<PrComments>('pr_comments', { owner, repo, prNumber });
-
-/** All submitted reviews on a PR, via the backend (ADR-0001). */
-export const prReviews = (owner: string, repo: string, prNumber: number) =>
-  invoke<GithubReview[]>('pr_reviews', { owner, repo, prNumber });
 
 /** A review verdict the reviewer can submit (Step 4). GitHub's create-review
  *  `event` vocabulary; maps to the workspace states the overview shows. */
@@ -440,6 +393,7 @@ export const prReviewCreate = (
 // never write through. `replies` nests one level only (backend enforces
 // depth ≤ 2). `user`/`resolved_by` carry the backend user id (number) +
 // GitHub login; `resolved_*` are non-null only on a resolved root.
+// Tier 2: backend `serde_json::Value` passthrough — hand-written.
 export type IntroComment = {
   id: string;
   user: { id: number; github_login: string };
@@ -487,7 +441,7 @@ export const introCommentUnresolve = (commentId: string) =>
  *  (Step 2 of the reviewer flow). Built from an `OverviewWorkspaceRow` whose
  *  `pr_number` is non-null (only published workspaces are reviewable). Carries
  *  the overview row's display fields so the viewer's PR-context subheader
- *  renders without a second fetch. */
+ *  renders without a second fetch. Client-only (assembled in the webview). */
 export type ReviewCtx = {
   workspaceId: string;
   owner: string;
@@ -505,6 +459,7 @@ export type ReviewCtx = {
 };
 
 // --- Workspaces ---
+// Tier 2: `workspace_*` proxy the backend's `serde_json::Value` — hand-written.
 export type WorkspaceCreateInput = {
   repoOwner: string;
   repoName: string;
@@ -558,27 +513,6 @@ export const workspacePublish = (input: {
 }) => invoke<unknown>('workspace_publish', input);
 
 // --- Storyline ---
-// Returned by GET/PUT .../storyline/ (snake_case — matches OverviewRow convention).
-export type StorylineFile = {
-  id: string;
-  diff_file_path: string;
-  order_index: number;
-  intro_text: string;
-  stale: boolean;
-  stale_reason: string | null;
-};
-export type Storyline = {
-  etag: string;
-  head_sha: string | null;
-  files: StorylineFile[];
-};
-// One step sent into storyline_update (camelCase — invoke arg convention).
-export type StorylineFileWrite = {
-  diffFilePath: string;
-  orderIndex: number;
-  introText: string;
-};
-
 export const storylineGet = (workspaceId: string) =>
   invoke<Storyline>('storyline_get', { workspaceId });
 
@@ -587,72 +521,6 @@ export const storylineUpdate = (workspaceId: string, etag: string, files: Storyl
 
 // --- Self-Review Debrief (cycle 1: local agent↔author loop; see ADR-0011,
 // CONTEXT.md "Debrief" / "Review note"). All local + auth-free. ---
-
-/** One step of a Debrief: an agent-authored markdown intro for a single file. */
-export type DebriefStep = {
-  file: string;
-  /** Agent-authored markdown — its own commentary on what it did to this file. */
-  intro: string;
-  /** Presentation order, ascending. */
-  order: number;
-};
-
-/** The agent's ordered, annotated account of its own Base-scope changes. */
-export type Debrief = {
-  /** Base branch the diff was composed against (e.g. `"main"`). */
-  base: string;
-  steps: DebriefStep[];
-  /** Epoch seconds, preserved across regenerations. */
-  createdAt: number;
-  /** Epoch seconds. */
-  updatedAt: number;
-};
-
-export type NoteStatus = 'open' | 'addressed' | 'resolved';
-
-/** Which diff side a line anchor targets: `left` = a deleted line (old file),
- *  `right` = an added/context line (new file). Maps to @git-diff-view's
- *  SplitSide. Only meaningful with a line range. */
-export type Side = 'left' | 'right';
-
-/** Where a Review note is anchored: a file path, optionally a line range on a
- *  given side. */
-export type NoteAnchor = {
-  file: string;
-  lineStart: number | null;
-  lineEnd: number | null;
-  side: Side | null;
-};
-
-/** Who authored a thread entry on a Review note. */
-export type ReplyAuthor = 'author' | 'agent';
-
-/** A follow-up entry on a Review note's thread, after the opening `body`. */
-export type NoteReply = {
-  id: string;
-  author: ReplyAuthor;
-  body: string;
-  createdAt: number;
-};
-
-/** The author's annotation on a diff location — a threaded conversation
- *  (ADR-0012). `anchor` is null for general (un-anchored) feedback. */
-export type ReviewNote = {
-  id: string;
-  anchor: NoteAnchor | null;
-  body: string;
-  status: NoteStatus;
-  /** Follow-up thread entries, oldest first (author and/or agent). */
-  replies: NoteReply[];
-  createdAt: number;
-  updatedAt: number;
-};
-
-/** A ReviewNote plus the app-computed `outdated` flag: its anchor no longer
- *  matches the current Base diff (file gone, or its line range on its side is
- *  gone). Anchorless notes are never outdated. The Stale-step pattern, at line
- *  granularity (ADR-0012). */
-export type ReviewNoteView = ReviewNote & { outdated: boolean };
 
 /** The stored Debrief for the active repo + branch, or `null` if none. */
 export const selfReviewDebriefGet = () => invoke<Debrief | null>('self_review_debrief_get');
@@ -690,31 +558,16 @@ export const selfReviewNoteDelete = (id: string) => invoke<void>('self_review_no
 // The backing commands exist only in debug builds (gated `#[cfg(debug_assertions)]`
 // on the Rust side); the webview only ever calls these from dev-gated code
 // (`import.meta.env.DEV`), so a release build never invokes a missing command.
-// Mirror of `activity_log::ActivityLogEntry` (Rust serializes; this is the TS
-// shape). ---
-
-export type ActivityLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
-export type ActivityLogPill = 'http' | 'git' | 'cmd' | 'webview' | 'rust';
-
-export type ActivityLogEntry = {
-  /** Monotonic, assigned in Rust. Used to de-dup snapshot vs. live stream. */
-  id: number;
-  /** Unix epoch milliseconds. */
-  ts_ms: number;
-  level: ActivityLogLevel;
-  pill: ActivityLogPill;
-  /** Rust module path, or `'console'` for webview rows. */
-  target: string;
-  message: string;
-  fields: Record<string, string>;
-  duration_ms: number | null;
-  error: string | null;
-};
+// `ActivityLogEntry` + the `ActivityLogLevel`/`ActivityLogPill` unions are
+// generated from Rust (see imports above). ---
 
 /** Full ring, oldest first — pulled when the drawer opens. */
 export const activityLogSnapshot = () => invoke<ActivityLogEntry[]>('activity_log_snapshot');
 
-/** A webview-sourced row (forwarded `console.*` or an `ErrorBoundary` catch). */
+/** A webview-sourced row (forwarded `console.*` or an `ErrorBoundary` catch).
+ *  The input shape for `activity_log_push`; its Rust counterpart (`WebviewEntry`)
+ *  deserializes `fields`/`error` via `#[serde(default)]`, so both are optional
+ *  here. `level` reuses the generated `ActivityLogLevel` union. */
 export type ActivityLogPushInput = {
   level: ActivityLogLevel;
   message: string;

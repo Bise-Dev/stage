@@ -3,6 +3,7 @@ use std::process::Command;
 
 use git2::{BranchType, Repository};
 use serde::Serialize;
+use ts_rs::TS;
 
 // Base-scope diffing lives in `stage-core::diff` so the `stage` CLI can reuse
 // it without compiling Tauri (ADR-0011). Re-exported here under the same
@@ -22,7 +23,8 @@ pub fn current_branch(repo_path: &Path) -> Result<String, AppError> {
     Ok(branch)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 pub struct RepoSummary {
     #[serde(rename = "defaultBranch")]
     pub default_branch: Option<String>,
@@ -72,13 +74,15 @@ pub fn summary(repo_path: &Path) -> Result<RepoSummary, AppError> {
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 pub struct BranchInfo {
     pub name: String,
     #[serde(rename = "isHead")]
     pub is_head: bool,
     /// Last-commit time, epoch seconds (UTC). Formatted on the client.
     #[serde(rename = "updatedAt")]
+    #[ts(type = "number")] // epoch seconds; JSON number on the wire
     pub updated_at: i64,
     #[serde(rename = "lastCommit")]
     pub last_commit: Option<String>,
@@ -242,7 +246,8 @@ pub fn self_review_diff(
     Ok(diff)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 pub struct FetchOutcome {
     pub remote: String,
 }
@@ -282,7 +287,8 @@ pub fn fetch(repo_path: &Path) -> Result<FetchOutcome, AppError> {
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 pub struct PushOutcome {
     pub remote: String,
     pub branch: String,

@@ -24,6 +24,7 @@ use tracing::Subscriber;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Layer;
+use ts_rs::TS;
 
 /// Max retained entries. Oldest is dropped once full (decision #6).
 const CAPACITY: usize = 2000;
@@ -31,19 +32,47 @@ const CAPACITY: usize = 2000;
 /// Event channel the Rust side emits each new entry on while a panel is open.
 pub const EVENT_NAME: &str = "activity_log:event";
 
-/// One structured row. Serialized to the webview verbatim; the TS mirror lives
-/// in `client/src/tauri.ts` (`ActivityLogEntry`).
-#[derive(Clone, Debug, Serialize)]
+/// Severity of an [`ActivityLogEntry`]. Serializes lowercase (`"info"`, …) and
+/// is the source of the webview's `ActivityLogLevel` union. `Deserialize` is
+/// needed because webview-pushed rows carry their level over the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum ActivityLogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+/// Source classification pill for an [`ActivityLogEntry`]. Serializes lowercase
+/// and is the source of the webview's `ActivityLogPill` union.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum ActivityLogPill {
+    Http,
+    Git,
+    Cmd,
+    Webview,
+    Rust,
+}
+
+/// One structured row. Serialized to the webview verbatim; the TS type is
+/// generated from this struct (`client/src/generated/ActivityLogEntry.ts`).
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
 pub struct ActivityLogEntry {
     /// Monotonic, assigned in [`ActivityLog::record`]. The webview uses it to
     /// de-dup between a snapshot and the live stream.
+    #[ts(type = "number")]
     pub id: u64,
     /// Unix epoch milliseconds.
+    #[ts(type = "number")]
     pub ts_ms: u64,
-    /// `trace` | `debug` | `info` | `warn` | `error`.
-    pub level: String,
-    /// `http` | `git` | `cmd` | `webview` | `rust`.
-    pub pill: String,
+    pub level: ActivityLogLevel,
+    pub pill: ActivityLogPill,
     /// Rust module path (the tracing target), or `"console"` for webview rows.
     pub target: String,
     /// The tracing event name / short message.
@@ -51,6 +80,7 @@ pub struct ActivityLogEntry {
     /// Remaining structured fields, stringified.
     pub fields: BTreeMap<String, String>,
     /// Elapsed time for the operation, when the event/span carries one.
+    #[ts(type = "number | null")]
     pub duration_ms: Option<u64>,
     /// Error detail, when the event carries an `error` / `err` field.
     pub error: Option<String>,
@@ -205,31 +235,31 @@ struct CmdSpan {
 
 /// Classify the source pill (decision #10) from the explicit `pill` field, then
 /// the target module path, falling back to the `rust` catch-all.
-fn classify_pill(explicit: Option<&str>, target: &str) -> &'static str {
+fn classify_pill(explicit: Option<&str>, target: &str) -> ActivityLogPill {
     match explicit {
-        Some("http") => return "http",
-        Some("git") => return "git",
-        Some("cmd") => return "cmd",
-        Some("webview") => return "webview",
-        Some("rust") => return "rust",
+        Some("http") => return ActivityLogPill::Http,
+        Some("git") => return ActivityLogPill::Git,
+        Some("cmd") => return ActivityLogPill::Cmd,
+        Some("webview") => return ActivityLogPill::Webview,
+        Some("rust") => return ActivityLogPill::Rust,
         _ => {}
     }
     if target.starts_with("stage_client_lib::api") {
-        "http"
+        ActivityLogPill::Http
     } else if target.starts_with("stage_client_lib::git") {
-        "git"
+        ActivityLogPill::Git
     } else {
-        "rust"
+        ActivityLogPill::Rust
     }
 }
 
-fn level_str(level: &tracing::Level) -> &'static str {
+fn level_of(level: &tracing::Level) -> ActivityLogLevel {
     match *level {
-        tracing::Level::TRACE => "trace",
-        tracing::Level::DEBUG => "debug",
-        tracing::Level::INFO => "info",
-        tracing::Level::WARN => "warn",
-        tracing::Level::ERROR => "error",
+        tracing::Level::TRACE => ActivityLogLevel::Trace,
+        tracing::Level::DEBUG => ActivityLogLevel::Debug,
+        tracing::Level::INFO => ActivityLogLevel::Info,
+        tracing::Level::WARN => ActivityLogLevel::Warn,
+        tracing::Level::ERROR => ActivityLogLevel::Error,
     }
 }
 
@@ -279,8 +309,8 @@ where
         self.log.record(ActivityLogEntry {
             id: 0,
             ts_ms: 0,
-            level: level_str(meta.level()).to_string(),
-            pill: pill.to_string(),
+            level: level_of(meta.level()),
+            pill,
             target: meta.target().to_string(),
             message: collector.message.unwrap_or_else(|| meta.name().to_string()),
             fields: collector.fields,
@@ -299,8 +329,8 @@ where
         self.log.record(ActivityLogEntry {
             id: 0,
             ts_ms: 0,
-            level: level_str(meta.level()).to_string(),
-            pill: "cmd".to_string(),
+            level: level_of(meta.level()),
+            pill: ActivityLogPill::Cmd,
             target: meta.target().to_string(),
             // Span name is the `#[instrument]`ed function name (e.g. `git_fetch`).
             message: meta.name().to_string(),
@@ -317,7 +347,7 @@ where
 /// `console.*` call or an `ErrorBoundary` catch).
 #[derive(Deserialize)]
 pub struct WebviewEntry {
-    pub level: String,
+    pub level: ActivityLogLevel,
     pub message: String,
     #[serde(default)]
     pub fields: BTreeMap<String, String>,
@@ -340,7 +370,7 @@ pub fn activity_log_push(state: tauri::State<'_, crate::state::AppState>, entry:
         id: 0,
         ts_ms: 0,
         level: entry.level,
-        pill: "webview".to_string(),
+        pill: ActivityLogPill::Webview,
         target: "console".to_string(),
         message: entry.message,
         fields: entry.fields,
@@ -363,7 +393,7 @@ mod tests {
     fn ring_drops_oldest_past_capacity() {
         let log = ActivityLog::new();
         for _ in 0..(CAPACITY + 5) {
-            log.record(make_entry("rust", "evt"));
+            log.record(make_entry(ActivityLogPill::Rust, "evt"));
         }
         let snap = log.snapshot();
         assert_eq!(snap.len(), CAPACITY);
@@ -375,11 +405,11 @@ mod tests {
     #[test]
     fn clear_empties_but_keeps_id_monotonic() {
         let log = ActivityLog::new();
-        log.record(make_entry("rust", "a"));
-        log.record(make_entry("rust", "b"));
+        log.record(make_entry(ActivityLogPill::Rust, "a"));
+        log.record(make_entry(ActivityLogPill::Rust, "b"));
         log.clear();
         assert!(log.snapshot().is_empty());
-        log.record(make_entry("rust", "c"));
+        log.record(make_entry(ActivityLogPill::Rust, "c"));
         // Next id continues from where it left off (2), never reused.
         assert_eq!(log.snapshot()[0].id, 2);
     }
@@ -397,18 +427,30 @@ mod tests {
 
     #[test]
     fn classify_prefers_explicit_then_target() {
-        assert_eq!(classify_pill(Some("cmd"), "stage_client_lib::git"), "cmd");
-        assert_eq!(classify_pill(None, "stage_client_lib::api::client"), "http");
-        assert_eq!(classify_pill(None, "stage_client_lib::git"), "git");
-        assert_eq!(classify_pill(None, "wgpu_core::device"), "rust");
+        assert_eq!(
+            classify_pill(Some("cmd"), "stage_client_lib::git"),
+            ActivityLogPill::Cmd
+        );
+        assert_eq!(
+            classify_pill(None, "stage_client_lib::api::client"),
+            ActivityLogPill::Http
+        );
+        assert_eq!(
+            classify_pill(None, "stage_client_lib::git"),
+            ActivityLogPill::Git
+        );
+        assert_eq!(
+            classify_pill(None, "wgpu_core::device"),
+            ActivityLogPill::Rust
+        );
     }
 
-    fn make_entry(pill: &str, msg: &str) -> ActivityLogEntry {
+    fn make_entry(pill: ActivityLogPill, msg: &str) -> ActivityLogEntry {
         ActivityLogEntry {
             id: 0,
             ts_ms: 0,
-            level: "info".to_string(),
-            pill: pill.to_string(),
+            level: ActivityLogLevel::Info,
+            pill,
             target: "stage_client_lib".to_string(),
             message: msg.to_string(),
             fields: BTreeMap::new(),

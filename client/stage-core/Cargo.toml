@@ -12,6 +12,12 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 git2 = { version = "0.19", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Generates the TypeScript IPC types from these Rust structs (the single source
+# of truth for the Tauri boundary). serde-compat (default) honours
+# `#[serde(rename_all)]` / `#[serde(flatten)]`; the `#[ts(export)]` files are
+# written by `just client::gen-types` (a `cargo test` pass). Pinned to 10.x:
+# 12.x raises the MSRV above this crate's `rust-version = "1.77"`.
+ts-rs = "10"
 thiserror = "2"
 tracing = "0.1"
 # Resolves the store directory independently of Tauri (see store::default_store_path).

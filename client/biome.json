@@ -1,7 +1,16 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "files": {
-    "ignore": ["dist", "target", "src-tauri/target", "node_modules", "src-tauri/gen"]
+    "ignore": [
+      "dist",
+      "target",
+      "src-tauri/target",
+      "node_modules",
+      "src-tauri/gen",
+      "src/generated",
+      "stage-core/bindings",
+      "src-tauri/bindings"
+    ]
   },
   "formatter": {
     "enabled": true,

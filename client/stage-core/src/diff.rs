@@ -9,12 +9,14 @@ use std::path::Path;
 use git2::{Diff, DiffOptions, Repository};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
+use ts_rs::TS;
 
 use crate::domain::{NoteAnchor, Side};
 use crate::error::StageError;
 use crate::repo_key::current_branch;
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 pub struct DiffStats {
     pub added: usize,
     pub removed: usize,
@@ -69,7 +71,8 @@ pub fn diff_stats(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 pub struct ChangedFile {
     pub path: String,
     /// One of "A" added, "M" modified, "D" deleted, "R" renamed, "C" copied, "?" other.
@@ -151,8 +154,9 @@ pub fn diff_files(
 /// full patch.
 const PATCH_SIZE_CAP: usize = 256 * 1024;
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum SelfReviewScope {
     /// `HEAD → index → workdir + untracked` — only uncommitted edits.
     Workdir,
@@ -162,8 +166,9 @@ pub enum SelfReviewScope {
     Base,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum FileStatus {
     Added,
     Modified,
@@ -171,8 +176,16 @@ pub enum FileStatus {
     Renamed,
 }
 
-#[derive(Serialize)]
+// The TS type keeps its historical name `SelfReviewFileChange` (the Rust struct
+// is `FileChange`): it is the per-file shape both `SelfReviewDiff` and
+// `CommittedDiff` reuse, and the webview imports it under that name.
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(
+    export,
+    rename = "SelfReviewFileChange",
+    export_to = "SelfReviewFileChange.ts"
+)]
 pub struct FileChange {
     pub path: String,
     pub old_path: Option<String>,
@@ -186,16 +199,18 @@ pub struct FileChange {
     pub is_truncated: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SelfReviewStats {
     pub added: usize,
     pub removed: usize,
     pub files_changed: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SelfReviewDiff {
     pub current_branch: String,
     pub scope: SelfReviewScope,
@@ -331,8 +346,9 @@ pub fn self_review_diff(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CommittedDiff {
     /// The base ref the diff was actually computed against (e.g. `origin/main`),
     /// after the remote-tracking preference in [`resolve_base_commit`].
