@@ -22,10 +22,22 @@ pub enum StageError {
     /// Enumerating worktrees via the system `git` failed; carries git's stderr.
     #[error("git worktree: {0}")]
     Worktree(String),
-    /// A `git` CLI shell-out (e.g. the scoped `.stage` commit) exited non-zero;
-    /// carries git's stderr so the failure surfaces with its real cause.
+    /// A `git` CLI shell-out exited non-zero — the scoped `.stage` commit, or a
+    /// `push`/`fetch` transport op (ADR-0022 §5). Carries git's stderr so the
+    /// failure surfaces with its real cause.
     #[error("git: {0}")]
     GitCli(String),
+    /// `gh` is missing or unauthenticated — a hard requirement (ADR-0022 §5).
+    /// Carries a loud, one-time, actionable message ("install `gh` / run
+    /// `gh auth login`"); there is no broker fallback. The `{0}` Display is the
+    /// complete message the UI banner shows verbatim.
+    #[error("{0}")]
+    GhUnavailable(String),
+    /// A `gh` command exited non-zero. Carries GitHub's own message (gh's
+    /// stderr) verbatim so the banner shows the real cause — never swallowed,
+    /// never defaulted (CLAUDE.md fail-loud).
+    #[error("{0}")]
+    GhFailed(String),
     #[error("git: {0}")]
     Git(#[from] git2::Error),
     #[error("store: {0}")]
