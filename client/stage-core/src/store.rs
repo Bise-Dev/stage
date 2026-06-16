@@ -1,6 +1,13 @@
-//! The local Debrief store: one SQLite database shared by two writers (the
-//! `stage` CLI and the desktop app). SQLite — not a flat file — precisely
-//! because of that second writer.
+//! The local store: one SQLite database shared by two writers (the `stage` CLI
+//! and the desktop app). SQLite — not a flat file — precisely because of that
+//! second writer.
+//!
+//! It holds the **private, pre-publish** half of Stage's state (ADR-0019 §3, the
+//! two-stores split at "Ready to share"): the Debrief, the Self-Review notes,
+//! and the per-machine **draft Review** ([`Store::create_review_draft`]). The
+//! *published* storyline + metadata live elsewhere — committed under
+//! `.stage/<branch>/` (see [`crate::review_folder`], written at Publish in
+//! milestone D). Consequence: an unpublished draft is strictly per-machine.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -8,7 +15,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::{
-    Debrief, DebriefStep, NoteAnchor, NoteReply, NoteStatus, ReplyAuthor, ReviewNote, Side,
+    Debrief, DebriefStep, NoteAnchor, NoteReply, NoteStatus, ReplyAuthor, Review, SelfReviewNote,
+    Side,
 };
 use crate::error::StageError;
 use crate::repo_key::RepoKey;
@@ -156,7 +164,7 @@ impl Store {
         Ok(removed > 0)
     }
 
-    /// Create an `open` Review note with the given app-minted `id`. The desktop
+    /// Create an `open` Self-Review note with the given app-minted `id`. The desktop
     /// app mints the note UUID; the store does not, to avoid a uuid dependency
     /// here. `anchor` is `None` for general (un-anchored) feedback.
     pub fn create_note(
@@ -165,7 +173,7 @@ impl Store {
         id: &str,
         anchor: Option<&NoteAnchor>,
         body: &str,
-    ) -> Result<ReviewNote, StageError> {
+    ) -> Result<SelfReviewNote, StageError> {
         let now = now_epoch();
         let file = anchor.map(|a| a.file.as_str());
         let line_start = anchor.and_then(|a| a.line_start);
@@ -194,13 +202,13 @@ impl Store {
             .ok_or_else(|| StageError::Invalid(format!("note {id} vanished after insert")))
     }
 
-    /// Review notes for `key`, optionally filtered by `status`, newest first.
+    /// Self-Review notes for `key`, optionally filtered by `status`, newest first.
     /// Each note's thread (`replies`) is hydrated from `review_note_reply`.
     pub fn list_notes(
         &self,
         key: &RepoKey,
         status: Option<NoteStatus>,
-    ) -> Result<Vec<ReviewNote>, StageError> {
+    ) -> Result<Vec<SelfReviewNote>, StageError> {
         let mut sql = String::from(
             "SELECT id, file, line_start, line_end, side, body, status, \
                     created_at, updated_at FROM review_note \
@@ -230,9 +238,9 @@ impl Store {
         bare.into_iter().map(|n| self.hydrate(n)).collect()
     }
 
-    /// A single Review note by id (within `key`'s scope), or `None`. Thread
+    /// A single Self-Review note by id (within `key`'s scope), or `None`. Thread
     /// hydrated.
-    pub fn get_note(&self, key: &RepoKey, id: &str) -> Result<Option<ReviewNote>, StageError> {
+    pub fn get_note(&self, key: &RepoKey, id: &str) -> Result<Option<SelfReviewNote>, StageError> {
         let bare = self
             .conn
             .query_row(
@@ -251,7 +259,7 @@ impl Store {
 
     /// Attach a note's thread (`replies`, oldest first) loaded from the
     /// `review_note_reply` table.
-    fn hydrate(&self, mut note: ReviewNote) -> Result<ReviewNote, StageError> {
+    fn hydrate(&self, mut note: SelfReviewNote) -> Result<SelfReviewNote, StageError> {
         // Order by insertion (`rowid`), not `id`: reply ids are random, and
         // `created_at` is second-granularity, so two replies in the same second
         // would otherwise sort non-deterministically. `rowid` is monotonic with
@@ -275,7 +283,7 @@ impl Store {
         key: &RepoKey,
         id: &str,
         reply: &str,
-    ) -> Result<ReviewNote, StageError> {
+    ) -> Result<SelfReviewNote, StageError> {
         self.append_reply(key, id, ReplyAuthor::Agent, reply)
     }
 
@@ -287,7 +295,7 @@ impl Store {
         key: &RepoKey,
         id: &str,
         body: &str,
-    ) -> Result<ReviewNote, StageError> {
+    ) -> Result<SelfReviewNote, StageError> {
         self.append_reply(key, id, ReplyAuthor::Author, body)
     }
 
@@ -302,13 +310,13 @@ impl Store {
         id: &str,
         author: ReplyAuthor,
         body: &str,
-    ) -> Result<ReviewNote, StageError> {
+    ) -> Result<SelfReviewNote, StageError> {
         let note = self
             .get_note(key, id)?
-            .ok_or_else(|| StageError::Invalid(format!("no review note with id '{id}'")))?;
+            .ok_or_else(|| StageError::Invalid(format!("no self-review note with id '{id}'")))?;
         if author == ReplyAuthor::Agent && note.status == NoteStatus::Resolved {
             return Err(StageError::Invalid(format!(
-                "review note '{id}' is already resolved and cannot be addressed"
+                "self-review note '{id}' is already resolved and cannot be addressed"
             )));
         }
         let next_status = match author {
@@ -343,7 +351,7 @@ impl Store {
     /// MIGRATIONS).
     pub fn delete_note(&self, key: &RepoKey, id: &str) -> Result<(), StageError> {
         self.get_note(key, id)?
-            .ok_or_else(|| StageError::Invalid(format!("no review note with id '{id}'")))?;
+            .ok_or_else(|| StageError::Invalid(format!("no self-review note with id '{id}'")))?;
         self.conn.execute(
             "DELETE FROM review_note_reply WHERE note_id = ?1",
             params![id],
@@ -357,12 +365,12 @@ impl Store {
     }
 
     /// Author action: close a note (`resolved`). Fails loud on an unknown note.
-    pub fn resolve_note(&self, key: &RepoKey, id: &str) -> Result<ReviewNote, StageError> {
+    pub fn resolve_note(&self, key: &RepoKey, id: &str) -> Result<SelfReviewNote, StageError> {
         self.set_note_status(key, id, NoteStatus::Resolved)
     }
 
     /// Author action: reopen a note (`open`). Fails loud on an unknown note.
-    pub fn reopen_note(&self, key: &RepoKey, id: &str) -> Result<ReviewNote, StageError> {
+    pub fn reopen_note(&self, key: &RepoKey, id: &str) -> Result<SelfReviewNote, StageError> {
         self.set_note_status(key, id, NoteStatus::Open)
     }
 
@@ -371,9 +379,9 @@ impl Store {
         key: &RepoKey,
         id: &str,
         status: NoteStatus,
-    ) -> Result<ReviewNote, StageError> {
+    ) -> Result<SelfReviewNote, StageError> {
         self.get_note(key, id)?
-            .ok_or_else(|| StageError::Invalid(format!("no review note with id '{id}'")))?;
+            .ok_or_else(|| StageError::Invalid(format!("no self-review note with id '{id}'")))?;
         let now = now_epoch();
         self.conn.execute(
             "UPDATE review_note SET status = ?1, updated_at = ?2 \
@@ -390,13 +398,116 @@ impl Store {
         self.get_note(key, id)?
             .ok_or_else(|| StageError::Invalid(format!("note {id} vanished after update")))
     }
+
+    // --- Pre-publish draft Review (ADR-0019 §3) ----------------------------
+    //
+    // The "Ready to share" transition creates one per-machine draft row per
+    // (repo, branch); it is the private staging area before Publish serializes
+    // it into `.stage/<branch>/` (milestone D). No lifecycle `state` is stored —
+    // the row's existence *is* "draft", and post-publish state is derived
+    // (ADR-0019 §7 / WS-5).
+
+    /// The **Ready to share** transition (WS-2, #60): create the per-machine
+    /// draft Review for `key`. `head_ref` is the current branch (`key.branch`);
+    /// `pr_number` is unset until Publish.
+    ///
+    /// Fails loud if a draft already exists for `key` — "Ready to share" is a
+    /// one-time transition, not an upsert (the caller reads the existing draft
+    /// via [`Store::get_review_draft`] when re-entering the change).
+    pub fn create_review_draft(
+        &self,
+        key: &RepoKey,
+        title: &str,
+        base_ref: &str,
+    ) -> Result<Review, StageError> {
+        if self.get_review_draft(key)?.is_some() {
+            return Err(StageError::Invalid(format!(
+                "a review draft already exists for branch '{}'",
+                key.branch
+            )));
+        }
+        let now = now_epoch();
+        self.conn.execute(
+            "INSERT INTO review_draft \
+                (repo_owner, repo_name, branch, title, base_ref, head_ref, pr_number, \
+                 created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?3, NULL, ?6, ?6)",
+            params![
+                key.repo_owner,
+                key.repo_name,
+                key.branch,
+                title,
+                base_ref,
+                now,
+            ],
+        )?;
+        self.get_review_draft(key)?
+            .ok_or_else(|| StageError::Invalid("review draft vanished after insert".into()))
+    }
+
+    /// The draft Review for `key`, or `None` if "Ready to share" hasn't been
+    /// triggered on this machine for this branch.
+    pub fn get_review_draft(&self, key: &RepoKey) -> Result<Option<Review>, StageError> {
+        let review = self
+            .conn
+            .query_row(
+                "SELECT title, base_ref, head_ref, pr_number, created_at, updated_at \
+                 FROM review_draft \
+                 WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
+                params![key.repo_owner, key.repo_name, key.branch],
+                |r| {
+                    Ok(Review {
+                        title: r.get(0)?,
+                        base_ref: r.get(1)?,
+                        head_ref: r.get(2)?,
+                        pr_number: r.get(3)?,
+                        created_at: r.get(4)?,
+                        updated_at: r.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(review)
+    }
+
+    /// Rename the draft Review (WS-3, #61) — the human-readable title only;
+    /// independent of the branch and of any future PR title. Fails loud if no
+    /// draft exists for `key`.
+    pub fn set_review_title(&self, key: &RepoKey, title: &str) -> Result<Review, StageError> {
+        let now = now_epoch();
+        let changed = self.conn.execute(
+            "UPDATE review_draft SET title = ?1, updated_at = ?2 \
+             WHERE repo_owner = ?3 AND repo_name = ?4 AND branch = ?5",
+            params![title, now, key.repo_owner, key.repo_name, key.branch],
+        )?;
+        if changed == 0 {
+            return Err(StageError::Invalid(format!(
+                "no review draft for branch '{}'",
+                key.branch
+            )));
+        }
+        self.get_review_draft(key)?
+            .ok_or_else(|| StageError::Invalid("review draft vanished after update".into()))
+    }
+
+    /// Discard the draft Review (GAP-1, #91): pre-publish only — a draft is just
+    /// a store row, so discarding deletes it. Returns whether a row was removed
+    /// (idempotent, like [`Store::clear_debrief`]). An *open PR* is closed/merged
+    /// on GitHub, never "discarded".
+    pub fn discard_review_draft(&self, key: &RepoKey) -> Result<bool, StageError> {
+        let removed = self.conn.execute(
+            "DELETE FROM review_draft WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
+            params![key.repo_owner, key.repo_name, key.branch],
+        )?;
+        Ok(removed > 0)
+    }
 }
 
-/// Map a `review_note` row to a [`ReviewNote`] **without** its thread — callers
+/// Map a `review_note` row to a [`SelfReviewNote`] **without** its thread — callers
 /// hydrate `replies` via [`Store::hydrate`]. Column order:
 /// `id, file, line_start, line_end, side, body, status, created_at, updated_at`.
 /// A bad `status`/`side` string is a loud failure, never a silent default.
-fn bare_note_from_row(r: &rusqlite::Row) -> rusqlite::Result<ReviewNote> {
+fn bare_note_from_row(r: &rusqlite::Row) -> rusqlite::Result<SelfReviewNote> {
     let file: Option<String> = r.get(1)?;
     let line_start: Option<u32> = r.get(2)?;
     let line_end: Option<u32> = r.get(3)?;
@@ -426,7 +537,7 @@ fn bare_note_from_row(r: &rusqlite::Row) -> rusqlite::Result<ReviewNote> {
             format!("unknown review_note.status '{status_str}'").into(),
         )
     })?;
-    Ok(ReviewNote {
+    Ok(SelfReviewNote {
         id: r.get(0)?,
         anchor,
         body: r.get(5)?,
@@ -481,7 +592,7 @@ const MIGRATIONS: &[&str] = &[
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (repo_owner, repo_name, branch)
     ) WITHOUT ROWID;",
-    // v2 — Review notes, keyed by app-minted UUID, scoped to a repo+branch.
+    // v2 — Self-Review notes, keyed by app-minted UUID, scoped to a repo+branch.
     // Anchored to a diff location (file + optional line range), NOT a Debrief
     // step, so they survive Debrief regeneration. `outdated` is computed at read
     // time, never stored.
@@ -501,7 +612,7 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX IF NOT EXISTS review_note_scope
         ON review_note (repo_owner, repo_name, branch, status);",
-    // v3 — Unify diff annotations into the Review note (ADR-0012):
+    // v3 — Unify diff annotations into the Self-Review note (ADR-0012):
     //   * threads: a `review_note_reply` table replaces the single `agent_reply`
     //     column (existing replies backfilled as one `agent` entry each);
     //   * optional anchor: `file` becomes nullable (general feedback);
@@ -548,6 +659,23 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE review_note_v3 RENAME TO review_note;
     CREATE INDEX IF NOT EXISTS review_note_scope
         ON review_note (repo_owner, repo_name, branch, status);",
+    // v4 — Pre-publish draft Review (ADR-0019 §3, the renamed Workspace per §8).
+    // One per-machine draft per (repo_owner, repo_name, branch), created at the
+    // explicit "Ready to share" transition. `head_ref` mirrors `branch` (the
+    // authoritative identity, WS-1); `pr_number` is NULL until Publish. No
+    // lifecycle `state` column — Review state is derived, never stored (§7/WS-5).
+    "CREATE TABLE IF NOT EXISTS review_draft (
+        repo_owner TEXT    NOT NULL,
+        repo_name  TEXT    NOT NULL,
+        branch     TEXT    NOT NULL,
+        title      TEXT    NOT NULL,
+        base_ref   TEXT    NOT NULL,
+        head_ref   TEXT    NOT NULL,
+        pr_number  INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (repo_owner, repo_name, branch)
+    ) WITHOUT ROWID;",
 ];
 
 fn migrate(conn: &Connection) -> Result<(), StageError> {
@@ -852,5 +980,100 @@ mod tests {
         let mut other = key();
         other.branch = "main".into();
         assert!(store.list_notes(&other, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn review_draft_create_get_rename_discard() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.sqlite3")).unwrap();
+        let k = key();
+
+        // Nothing before "Ready to share".
+        assert!(store.get_review_draft(&k).unwrap().is_none());
+
+        // Ready to share (WS-2): creates the per-machine draft.
+        let draft = store
+            .create_review_draft(&k, "Ship the thing", "origin/main")
+            .unwrap();
+        assert_eq!(draft.title, "Ship the thing");
+        assert_eq!(draft.base_ref, "origin/main");
+        assert_eq!(draft.head_ref, k.branch); // head_ref mirrors the branch
+        assert_eq!(draft.pr_number, None); // no PR pre-publish
+        assert_eq!(draft.created_at, draft.updated_at);
+
+        // Re-entering surfaces the same draft.
+        let got = store.get_review_draft(&k).unwrap().expect("draft present");
+        assert_eq!(got, draft);
+
+        // "Ready to share" is one-time, not an upsert — a second create is loud.
+        let err = store
+            .create_review_draft(&k, "again", "origin/main")
+            .unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
+
+        // Rename the title (WS-3); base_ref and timestamps-of-creation persist.
+        let renamed = store.set_review_title(&k, "Ship it properly").unwrap();
+        assert_eq!(renamed.title, "Ship it properly");
+        assert_eq!(renamed.created_at, draft.created_at);
+
+        // Discard (GAP-1): deletes the row; idempotent second discard is false.
+        assert!(store.discard_review_draft(&k).unwrap());
+        assert!(!store.discard_review_draft(&k).unwrap());
+        assert!(store.get_review_draft(&k).unwrap().is_none());
+
+        // Renaming a discarded (absent) draft fails loud.
+        assert!(store.set_review_title(&k, "ghost").is_err());
+    }
+
+    #[test]
+    fn review_drafts_are_scoped_per_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.sqlite3")).unwrap();
+        let k = key(); // branch feat/x
+        let mut other = key();
+        other.branch = "main".into();
+
+        store
+            .create_review_draft(&k, "on feat/x", "origin/main")
+            .unwrap();
+        // A different branch has its own (absent) draft, and can create one.
+        assert!(store.get_review_draft(&other).unwrap().is_none());
+        store
+            .create_review_draft(&other, "on main", "origin/main")
+            .unwrap();
+        assert_eq!(
+            store.get_review_draft(&k).unwrap().unwrap().title,
+            "on feat/x"
+        );
+        assert_eq!(
+            store.get_review_draft(&other).unwrap().unwrap().title,
+            "on main"
+        );
+        // Discarding one leaves the other.
+        store.discard_review_draft(&k).unwrap();
+        assert!(store.get_review_draft(&k).unwrap().is_none());
+        assert!(store.get_review_draft(&other).unwrap().is_some());
+    }
+
+    #[test]
+    fn review_draft_table_is_added_to_a_pre_v4_store() {
+        // A store migrated only through v3 (no review_draft table) must gain it
+        // on the next open, without disturbing existing data.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.sqlite3");
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &MIGRATIONS[..3] {
+                conn.execute_batch(m).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 3i64).unwrap();
+        }
+        // Re-open through Store: migrate() applies v4 (review_draft).
+        let store = Store::open(&path).unwrap();
+        let k = key();
+        let draft = store
+            .create_review_draft(&k, "post-migration", "origin/main")
+            .unwrap();
+        assert_eq!(draft.title, "post-migration");
     }
 }

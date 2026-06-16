@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   type Debrief,
   type NoteAnchor,
-  type ReviewNoteView,
+  type SelfReviewNoteView,
   selfReviewDebriefGet,
   selfReviewNoteCreate,
   selfReviewNoteDelete,
@@ -17,7 +17,7 @@ export type UseSelfReviewDebrief = {
   /** The agent-authored Debrief, or null if none has been written. */
   debrief: Debrief | null;
   /** All Review notes for the active repo+branch, with computed `outdated`. */
-  notes: ReviewNoteView[];
+  notes: SelfReviewNoteView[];
   loading: boolean;
   error: string | null;
   /** Create an `open` Review note; `anchor` is null for general feedback. */
@@ -55,7 +55,7 @@ function errMessage(e: unknown): string {
  */
 export function useSelfReviewDebrief(repoPath: string | null): UseSelfReviewDebrief {
   const [debrief, setDebrief] = useState<Debrief | null>(null);
-  const [notes, setNotes] = useState<ReviewNoteView[]>([]);
+  const [notes, setNotes] = useState<SelfReviewNoteView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 

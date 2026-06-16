@@ -22,6 +22,10 @@ pub enum StageError {
     /// Enumerating worktrees via the system `git` failed; carries git's stderr.
     #[error("git worktree: {0}")]
     Worktree(String),
+    /// A `git` CLI shell-out (e.g. the scoped `.stage` commit) exited non-zero;
+    /// carries git's stderr so the failure surfaces with its real cause.
+    #[error("git: {0}")]
+    GitCli(String),
     #[error("git: {0}")]
     Git(#[from] git2::Error),
     #[error("store: {0}")]

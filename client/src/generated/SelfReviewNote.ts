@@ -4,13 +4,14 @@ import type { NoteReply } from "./NoteReply";
 import type { NoteStatus } from "./NoteStatus";
 
 /**
- * A [`ReviewNote`] plus its computed `outdated` flag. `outdated` is never
- * stored — it's derived from whether the note's anchor still matches the
- * current Base diff: file gone, or (line-anchored) its line range on its side
- * is gone. Anchorless notes are never outdated. The **Stale step** pattern,
- * at line granularity (ADR-0012); see [`crate::diff::DiffLineIndex`].
+ * A **Self-Review note**: the author's annotation on a diff location, made
+ * during Self-Review — before any shareable Review artifact exists (ADR-0019
+ * §8; the bare noun "Review" is reserved for that artifact). A threaded
+ * conversation: the opening author `body` plus `replies` from either party. The
+ * agent reads outstanding notes, revises, and replies — closing the local
+ * author↔agent loop (ADR-0012).
  */
-export type ReviewNoteView = { outdated: boolean, 
+export type SelfReviewNote = { 
 /**
  * App-minted UUID.
  */

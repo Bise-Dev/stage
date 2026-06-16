@@ -9,7 +9,7 @@ import {
   useState,
 } from 'react';
 import { Icon } from '../../components/Icon';
-import type { NoteAnchor, ReviewNoteView, SelfReviewFileChange, Side } from '../../tauri';
+import type { NoteAnchor, SelfReviewFileChange, SelfReviewNoteView, Side } from '../../tauri';
 import { type CommentRange, CommentableFileDiff, type ViewMode } from './CommentableFileDiff';
 import { Composer } from './Composer';
 import { Thread } from './Thread';
@@ -24,12 +24,12 @@ const STATUS_BADGE = {
 // Shared empty slice so files with no notes get a *stable* reference — keeps
 // React.memo on FileBlock from re-rendering them when an unrelated file's
 // notes change.
-const EMPTY_NOTES: ReviewNoteView[] = [];
+const EMPTY_NOTES: SelfReviewNoteView[] = [];
 
 // A line note anchors inline at the *end* of its range (the widget sits below
 // the last selected line). Module-scope (pure) so the render callbacks that use
 // it aren't forced to list it as a dependency.
-const lineEndOf = (n: ReviewNoteView): number => n.anchor?.lineEnd ?? n.anchor?.lineStart ?? 0;
+const lineEndOf = (n: SelfReviewNoteView): number => n.anchor?.lineEnd ?? n.anchor?.lineStart ?? 0;
 
 // `ViewMode` lives with the shared diff surface (CommentableFileDiff); re-export
 // it here so existing importers (SelfReview.tsx) are unaffected.
@@ -61,7 +61,7 @@ type DiffPaneProps = NoteOps & {
   viewed: Set<string>;
   onToggleViewed(path: string): void;
   /** All Review notes for the branch; DiffPane buckets them by file/anchor. */
-  notes: ReviewNoteView[];
+  notes: SelfReviewNoteView[];
   /** React 19 ref-as-prop. Parent supplies a `useRef<DiffPaneHandle>(null)`. */
   ref?: Ref<DiffPaneHandle>;
 };
@@ -134,10 +134,10 @@ export function DiffPane({
   // is unchanged: a note mutation replaces the whole `notes` array with fresh
   // objects, so without this every block would re-render on any note change.
   // With it, only the file whose notes actually changed gets a new slice.
-  const prevSlicesRef = useRef<Map<string, ReviewNoteView[]>>(new Map());
+  const prevSlicesRef = useRef<Map<string, SelfReviewNoteView[]>>(new Map());
   const prevSigsRef = useRef<Map<string, string>>(new Map());
   const notesByFile = useMemo(() => {
-    const grouped = new Map<string, ReviewNoteView[]>();
+    const grouped = new Map<string, SelfReviewNoteView[]>();
     for (const n of notes) {
       const file = n.anchor?.file;
       if (!file) continue;
@@ -147,7 +147,7 @@ export function DiffPane({
     }
     const prevSlices = prevSlicesRef.current;
     const prevSigs = prevSigsRef.current;
-    const nextSlices = new Map<string, ReviewNoteView[]>();
+    const nextSlices = new Map<string, SelfReviewNoteView[]>();
     const nextSigs = new Map<string, string>();
     for (const [path, arr] of grouped) {
       const sig = JSON.stringify(arr);
@@ -345,7 +345,7 @@ type FileBlockProps = NoteOps & {
   /** Stable parent callback; the block calls it with its own `file.path`. */
   onToggleViewed(path: string): void;
   /** Notes anchored to this file (line- or file-level). */
-  notes: ReviewNoteView[];
+  notes: SelfReviewNoteView[];
 };
 
 const FileBlock = memo(function FileBlock({

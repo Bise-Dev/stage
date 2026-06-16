@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Icon } from '../../components/Icon';
-import type { Debrief, NoteAnchor, ReviewNoteView, SelfReviewFileChange } from '../../tauri';
+import type { Debrief, NoteAnchor, SelfReviewFileChange, SelfReviewNoteView } from '../../tauri';
 import { Composer } from './Composer';
 import { Thread } from './Thread';
 
@@ -47,7 +47,7 @@ export function DebriefRail({
   ...noteOps
 }: NoteOps & {
   debrief: Debrief | null;
-  notes: ReviewNoteView[];
+  notes: SelfReviewNoteView[];
   files: SelfReviewFileChange[];
   selectedPath: string | null;
   /** The shared mark-viewed set (same store the file list + diff use). */
@@ -60,7 +60,7 @@ export function DebriefRail({
 }) {
   // Path → anchored notes, in store order (newest first from the backend).
   const notesByFile = useMemo(() => {
-    const m = new Map<string, ReviewNoteView[]>();
+    const m = new Map<string, SelfReviewNoteView[]>();
     for (const n of notes) {
       const file = n.anchor?.file;
       if (!file) continue;
@@ -209,7 +209,7 @@ function GeneralNotes({
   onResolveNote,
   onReopenNote,
   onDeleteNote,
-}: NoteOps & { notes: ReviewNoteView[] }) {
+}: NoteOps & { notes: SelfReviewNoteView[] }) {
   const [adding, setAdding] = useState(false);
 
   return (
@@ -290,7 +290,7 @@ function StepCard({
   inDiff: boolean;
   active: boolean;
   isViewed: boolean;
-  notes: ReviewNoteView[];
+  notes: SelfReviewNoteView[];
   onSelect: () => void;
   onToggleViewed: () => void;
 }) {
