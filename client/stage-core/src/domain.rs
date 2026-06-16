@@ -74,7 +74,7 @@ impl DebriefInput {
     }
 }
 
-/// Lifecycle of a [`ReviewNote`]: `open` (author left it) → `addressed` (agent
+/// Lifecycle of a [`SelfReviewNote`]: `open` (author left it) → `addressed` (agent
 /// replied) → `resolved` (author closed it, terminal). An author reply on an
 /// addressed note re-raises it to `open`; the author may also reopen explicitly
 /// (ADR-0012).
@@ -138,10 +138,10 @@ impl Side {
     }
 }
 
-/// Where a [`ReviewNote`] is anchored in the diff: a file path, optionally a
+/// Where a [`SelfReviewNote`] is anchored in the diff: a file path, optionally a
 /// line range on a given [`Side`]. Anchored to the *diff location*, not a
 /// Debrief step, so it survives the agent regenerating the Debrief. A note may
-/// have no anchor at all (general feedback) — see [`ReviewNote::anchor`].
+/// have no anchor at all (general feedback) — see [`SelfReviewNote::anchor`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -156,7 +156,7 @@ pub struct NoteAnchor {
     pub side: Option<Side>,
 }
 
-/// Who authored a thread entry on a [`ReviewNote`].
+/// Who authored a thread entry on a [`SelfReviewNote`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
@@ -184,7 +184,7 @@ impl ReplyAuthor {
     }
 }
 
-/// A follow-up entry on a [`ReviewNote`]'s thread, after the opening `body`.
+/// A follow-up entry on a [`SelfReviewNote`]'s thread, after the opening `body`.
 /// Either party can append: an agent reply marks the note `addressed`; an
 /// author reply on an addressed note re-raises it to `open` (see ADR-0012).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -199,14 +199,16 @@ pub struct NoteReply {
     pub created_at: i64,
 }
 
-/// The author's annotation on a diff location, made during Self-Review. A
-/// threaded conversation: the opening author `body` plus `replies` from either
-/// party. The agent reads outstanding notes, revises, and replies — closing the
-/// local author↔agent loop (ADR-0012).
+/// A **Self-Review note**: the author's annotation on a diff location, made
+/// during Self-Review — before any shareable Review artifact exists (ADR-0019
+/// §8; the bare noun "Review" is reserved for that artifact). A threaded
+/// conversation: the opening author `body` plus `replies` from either party. The
+/// agent reads outstanding notes, revises, and replies — closing the local
+/// author↔agent loop (ADR-0012).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct ReviewNote {
+pub struct SelfReviewNote {
     /// App-minted UUID.
     pub id: String,
     /// The diff location, or `None` for general (un-anchored) feedback.
@@ -224,17 +226,17 @@ pub struct ReviewNote {
     pub updated_at: i64,
 }
 
-impl ReviewNote {
+impl SelfReviewNote {
     /// Pair the note with a computed `outdated` flag for emission.
-    pub fn into_view(self, outdated: bool) -> ReviewNoteView {
-        ReviewNoteView {
+    pub fn into_view(self, outdated: bool) -> SelfReviewNoteView {
+        SelfReviewNoteView {
             outdated,
             note: self,
         }
     }
 }
 
-/// A [`ReviewNote`] plus its computed `outdated` flag. `outdated` is never
+/// A [`SelfReviewNote`] plus its computed `outdated` flag. `outdated` is never
 /// stored — it's derived from whether the note's anchor still matches the
 /// current Base diff: file gone, or (line-anchored) its line range on its side
 /// is gone. Anchorless notes are never outdated. The **Stale step** pattern,
@@ -242,9 +244,44 @@ impl ReviewNote {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct ReviewNoteView {
+pub struct SelfReviewNoteView {
     #[serde(flatten)]
     #[ts(flatten)]
-    pub note: ReviewNote,
+    pub note: SelfReviewNote,
     pub outdated: bool,
+}
+
+/// A **Review** — the per-change artifact (the renamed Workspace, ADR-0019 §8).
+///
+/// This is the *pre-publish draft* shape: the per-machine row created at the
+/// explicit "Ready to share" transition (WS-2, #60). It carries the metadata
+/// that is later serialized into `.stage/<branch>/review.toml` at Publish
+/// (milestone D) — see [`crate::review_folder::ReviewMeta`].
+///
+/// Deliberately stores **no** lifecycle `state`/`archived` field: per ADR-0019
+/// §7 (WS-5, #63) Review state, staleness and the dashboard signal are *computed
+/// in Rust at read time, never stored*. A row's mere presence in the draft table
+/// means "pre-publish draft"; everything else is derived.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Review {
+    /// Human-readable Review title (WS-3, #61). Independent of the branch name
+    /// and of the GitHub PR title — no auto-sync.
+    pub title: String,
+    /// Branch the change is composed against (GAP-2, #92), e.g. `"origin/main"`.
+    pub base_ref: String,
+    /// The Review's authoritative identity: the feature branch it rides on
+    /// (WS-1, #59). The folder name under `.stage/` is only a fast path.
+    pub head_ref: String,
+    /// The GitHub PR number once published; `None` for an unpublished draft
+    /// (no PR exists yet). Set at Publish (milestone D).
+    #[serde(default)]
+    pub pr_number: Option<u32>,
+    /// First-written time, epoch seconds. Preserved across edits.
+    #[ts(type = "number")] // epoch seconds; JSON number on the wire (see Debrief)
+    pub created_at: i64,
+    /// Last-written time, epoch seconds.
+    #[ts(type = "number")]
+    pub updated_at: i64,
 }

@@ -2,10 +2,10 @@
 import type { Side } from "./Side";
 
 /**
- * Where a [`ReviewNote`] is anchored in the diff: a file path, optionally a
+ * Where a [`SelfReviewNote`] is anchored in the diff: a file path, optionally a
  * line range on a given [`Side`]. Anchored to the *diff location*, not a
  * Debrief step, so it survives the agent regenerating the Debrief. A note may
- * have no anchor at all (general feedback) — see [`ReviewNote::anchor`].
+ * have no anchor at all (general feedback) — see [`SelfReviewNote::anchor`].
  */
 export type NoteAnchor = { file: string, lineStart: number | null, lineEnd: number | null, 
 /**

@@ -34,10 +34,10 @@ import type { RecentRepo } from './generated/RecentRepo';
 import type { ReplyAuthor } from './generated/ReplyAuthor';
 import type { RepoInfo } from './generated/RepoInfo';
 import type { RepoSummary } from './generated/RepoSummary';
-import type { ReviewNote } from './generated/ReviewNote';
-import type { ReviewNoteView } from './generated/ReviewNoteView';
 import type { SelfReviewDiff } from './generated/SelfReviewDiff';
 import type { SelfReviewFileChange } from './generated/SelfReviewFileChange';
+import type { SelfReviewNote } from './generated/SelfReviewNote';
+import type { SelfReviewNoteView } from './generated/SelfReviewNoteView';
 import type { SelfReviewScope } from './generated/SelfReviewScope';
 import type { SelfReviewStats } from './generated/SelfReviewStats';
 import type { Side } from './generated/Side';
@@ -73,8 +73,8 @@ export type {
   ReplyAuthor,
   RepoInfo,
   RepoSummary,
-  ReviewNote,
-  ReviewNoteView,
+  SelfReviewNote,
+  SelfReviewNoteView,
   SelfReviewDiff,
   SelfReviewFileChange,
   SelfReviewScope,
@@ -531,25 +531,25 @@ export const repoDebriefBranches = () => invoke<string[]>('repo_debrief_branches
 
 /** Review notes for the active repo + branch, optionally filtered by status. */
 export const selfReviewNotesList = (status?: NoteStatus) =>
-  invoke<ReviewNoteView[]>('self_review_notes_list', { status: status ?? null });
+  invoke<SelfReviewNoteView[]>('self_review_notes_list', { status: status ?? null });
 
 /** Create an `open` Review note. `anchor` is null for general feedback (UUID
  *  minted in Rust). */
 export const selfReviewNoteCreate = (anchor: NoteAnchor | null, body: string) =>
-  invoke<ReviewNote>('self_review_note_create', { anchor, body });
+  invoke<SelfReviewNote>('self_review_note_create', { anchor, body });
 
 /** Author action: append an author reply to a note's thread (re-raises an
  *  addressed/resolved note to `open`). */
 export const selfReviewNoteReply = (id: string, body: string) =>
-  invoke<ReviewNote>('self_review_note_reply', { id, body });
+  invoke<SelfReviewNote>('self_review_note_reply', { id, body });
 
 /** Author action: close a note (`resolved`). */
 export const selfReviewNoteResolve = (id: string) =>
-  invoke<ReviewNote>('self_review_note_resolve', { id });
+  invoke<SelfReviewNote>('self_review_note_resolve', { id });
 
 /** Author action: reopen a note (`open`). */
 export const selfReviewNoteReopen = (id: string) =>
-  invoke<ReviewNote>('self_review_note_reopen', { id });
+  invoke<SelfReviewNote>('self_review_note_reopen', { id });
 
 /** Author action: permanently delete a note and its thread. */
 export const selfReviewNoteDelete = (id: string) => invoke<void>('self_review_note_delete', { id });

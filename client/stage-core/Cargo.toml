@@ -12,6 +12,10 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 git2 = { version = "0.19", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `.stage/<branch>/review.toml` + step-file frontmatter are TOML, round-tripped
+# through serde. Already resolved in the workspace lock (a Tauri transitive), so
+# this adds no new build. Pinned to 0.8 to stay under this crate's MSRV.
+toml = "0.8"
 # Generates the TypeScript IPC types from these Rust structs (the single source
 # of truth for the Tauri boundary). serde-compat (default) honours
 # `#[serde(rename_all)]` / `#[serde(flatten)]`; the `#[ts(export)]` files are

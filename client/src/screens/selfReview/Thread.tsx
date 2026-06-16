@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Icon } from '../../components/Icon';
-import type { NoteAnchor, NoteStatus, ReviewNoteView } from '../../tauri';
+import type { NoteAnchor, NoteStatus, SelfReviewNoteView } from '../../tauri';
 import { Composer } from './Composer';
 
 const STATUS: Record<NoteStatus, { label: string; cls: string }> = {
@@ -32,7 +32,7 @@ export function Thread({
   onReopen,
   onDelete,
 }: {
-  note: ReviewNoteView;
+  note: SelfReviewNoteView;
   onReply: (id: string, body: string) => Promise<void>;
   onResolve: (id: string) => Promise<void>;
   onReopen: (id: string) => Promise<void>;

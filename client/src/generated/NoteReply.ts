@@ -2,7 +2,7 @@
 import type { ReplyAuthor } from "./ReplyAuthor";
 
 /**
- * A follow-up entry on a [`ReviewNote`]'s thread, after the opening `body`.
+ * A follow-up entry on a [`SelfReviewNote`]'s thread, after the opening `body`.
  * Either party can append: an agent reply marks the note `addressed`; an
  * author reply on an addressed note re-raises it to `open` (see ADR-0012).
  */

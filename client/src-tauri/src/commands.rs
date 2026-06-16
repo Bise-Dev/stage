@@ -6,7 +6,7 @@ use tauri::{AppHandle, Manager, State};
 
 use stage_core::diff::{default_base, DiffLineIndex};
 use stage_core::{
-    repo_key_from_cwd, Debrief, NoteAnchor, NoteStatus, ReviewNote, ReviewNoteView, Store,
+    repo_key_from_cwd, Debrief, NoteAnchor, NoteStatus, SelfReviewNote, SelfReviewNoteView, Store,
 };
 
 use crate::api;
@@ -950,7 +950,7 @@ pub fn repo_debrief_branches(state: State<'_, AppState>) -> Result<Vec<String>, 
 pub fn self_review_notes_list(
     state: State<'_, AppState>,
     status: Option<NoteStatus>,
-) -> Result<Vec<ReviewNoteView>, AppError> {
+) -> Result<Vec<SelfReviewNoteView>, AppError> {
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
@@ -981,7 +981,7 @@ pub fn self_review_note_create(
     state: State<'_, AppState>,
     anchor: Option<NoteAnchor>,
     body: String,
-) -> Result<ReviewNote, AppError> {
+) -> Result<SelfReviewNote, AppError> {
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
@@ -1000,7 +1000,7 @@ pub fn self_review_note_reply(
     state: State<'_, AppState>,
     id: String,
     body: String,
-) -> Result<ReviewNote, AppError> {
+) -> Result<SelfReviewNote, AppError> {
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
@@ -1016,7 +1016,7 @@ pub fn self_review_note_reply(
 pub fn self_review_note_resolve(
     state: State<'_, AppState>,
     id: String,
-) -> Result<ReviewNote, AppError> {
+) -> Result<SelfReviewNote, AppError> {
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
@@ -1032,7 +1032,7 @@ pub fn self_review_note_resolve(
 pub fn self_review_note_reopen(
     state: State<'_, AppState>,
     id: String,
-) -> Result<ReviewNote, AppError> {
+) -> Result<SelfReviewNote, AppError> {
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;

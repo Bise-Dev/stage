@@ -4,17 +4,17 @@
  * still serves agents/contexts not wired to the `stage` CLI. Renders *all*
  * notes (with status tags + threads); snippets capped at SNIPPET_LINE_CAP.
  */
-import type { ReviewNoteView, SelfReviewDiff, SelfReviewFileChange, Side } from '../../tauri';
+import type { SelfReviewDiff, SelfReviewFileChange, SelfReviewNoteView, Side } from '../../tauri';
 
 const SNIPPET_LINE_CAP = 20;
 
-const STATUS_TAG: Record<ReviewNoteView['status'], string> = {
+const STATUS_TAG: Record<SelfReviewNoteView['status'], string> = {
   open: 'open',
   addressed: 'addressed',
   resolved: 'resolved',
 };
 
-export function notesToMarkdown(diff: SelfReviewDiff, notes: ReviewNoteView[]): string {
+export function notesToMarkdown(diff: SelfReviewDiff, notes: SelfReviewNoteView[]): string {
   const scopeLabel = diff.scope === 'workdir' ? 'uncommitted' : `vs ${diff.baseRef ?? 'base'}`;
   const anchored = notes.filter((n) => n.anchor !== null);
   const general = notes.filter((n) => n.anchor === null);
@@ -35,7 +35,7 @@ export function notesToMarkdown(diff: SelfReviewDiff, notes: ReviewNoteView[]): 
   // scan of the markdown matches the screen scan.
   const fileOrder = new Map<string, number>();
   diff.files.forEach((f, i) => fileOrder.set(f.path, i));
-  const byFile = new Map<string, ReviewNoteView[]>();
+  const byFile = new Map<string, SelfReviewNoteView[]>();
   for (const n of anchored) {
     const file = n.anchor?.file;
     if (!file) continue;
@@ -68,7 +68,7 @@ export function notesToMarkdown(diff: SelfReviewDiff, notes: ReviewNoteView[]): 
   return `${out.join('\n').trimEnd()}\n`;
 }
 
-function renderNote(n: ReviewNoteView, file: SelfReviewFileChange | undefined): string[] {
+function renderNote(n: SelfReviewNoteView, file: SelfReviewFileChange | undefined): string[] {
   const lines: string[] = [];
   const a = n.anchor;
   const tags = `[${STATUS_TAG[n.status]}${n.outdated ? ', outdated' : ''}]`;
