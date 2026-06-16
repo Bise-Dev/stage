@@ -12,6 +12,7 @@ pub mod diff;
 pub mod domain;
 pub mod error;
 pub mod github;
+pub mod pr;
 pub mod repo_key;
 pub mod review_folder;
 pub mod store;
@@ -25,6 +26,10 @@ pub use domain::{
 };
 pub use error::StageError;
 pub use github::{GitHub, GitHubUser};
+pub use pr::{
+    CheckResult, CheckStatus, DraftLineComment, IssueComment, LineComment, MergeMethod, PrActivity,
+    ReviewSummary, SubmittedVerdict, Verdict,
+};
 pub use repo_key::{repo_key_from_cwd, repo_root_from_cwd, slug_from_remote, RepoKey};
 pub use review_folder::{
     find_review, read_review_at, resync_folder, review_dir, scoped_commit, stage_root,
