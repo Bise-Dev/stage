@@ -43,7 +43,7 @@
 
 use std::ffi::OsString;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
 
 use serde::de::DeserializeOwned;
@@ -130,24 +130,82 @@ impl GitHub {
         cmd
     }
 
-    /// Spawn `gh` and capture its output. A spawn failure means `gh` itself is
-    /// unavailable — the hard-requirement violation — so it maps to a loud,
-    /// actionable [`StageError::GhUnavailable`]. A non-zero *exit* is left for
-    /// the caller to classify (unauthenticated vs. a failed command).
+    /// A spawn failure means `gh` itself is unavailable — the hard-requirement
+    /// violation — so it maps to a loud, actionable [`StageError::GhUnavailable`]
+    /// naming the remedy. Shared by the plain and stdin-piped runners.
+    fn gh_spawn_error(&self, e: &std::io::Error) -> StageError {
+        let msg = if e.kind() == std::io::ErrorKind::NotFound {
+            tracing::error!(err = %e, bin = ?self.gh_bin, "gh_not_found");
+            format!(
+                "GitHub CLI (`gh`) was not found. Stage uses your local `gh` for every \
+                 GitHub action and stores no credentials of its own. {GH_INSTALL_HINT}"
+            )
+        } else {
+            tracing::error!(err = %e, bin = ?self.gh_bin, "gh_spawn_failed");
+            format!("Couldn't run GitHub CLI (`gh`): {e}. {GH_INSTALL_HINT}")
+        };
+        StageError::GhUnavailable(msg)
+    }
+
+    /// Spawn `gh` and capture its output. A spawn failure maps to
+    /// [`StageError::GhUnavailable`]; a non-zero *exit* is left for the caller to
+    /// classify (unauthenticated vs. a failed command).
     fn run_gh_raw(&self, args: &[&str], cwd: Option<&Path>) -> Result<Output, StageError> {
-        self.gh_command(args, cwd).output().map_err(|e| {
-            let msg = if e.kind() == std::io::ErrorKind::NotFound {
-                tracing::error!(err = %e, bin = ?self.gh_bin, "gh_not_found");
-                format!(
-                    "GitHub CLI (`gh`) was not found. Stage uses your local `gh` for every \
-                     GitHub action and stores no credentials of its own. {GH_INSTALL_HINT}"
-                )
-            } else {
-                tracing::error!(err = %e, bin = ?self.gh_bin, "gh_spawn_failed");
-                format!("Couldn't run GitHub CLI (`gh`): {e}. {GH_INSTALL_HINT}")
+        self.gh_command(args, cwd)
+            .output()
+            .map_err(|e| self.gh_spawn_error(&e))
+    }
+
+    /// Spawn `gh` with `body` piped to its stdin (for `gh api … --input -`) and
+    /// capture its output. The handle is closed after the write so `gh` sees
+    /// EOF. Spawn failure maps to [`StageError::GhUnavailable`]; a non-zero exit
+    /// is left for the caller to classify.
+    fn run_gh_raw_stdin(
+        &self,
+        args: &[&str],
+        cwd: Option<&Path>,
+        body: &str,
+    ) -> Result<Output, StageError> {
+        use std::io::Write;
+        let mut child = self
+            .gh_command(args, cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| self.gh_spawn_error(&e))?;
+        {
+            // Take + drop the handle in this scope so the pipe closes (EOF)
+            // before we wait, even if the write itself fails.
+            let mut stdin = child.stdin.take().ok_or_else(|| {
+                StageError::GhUnavailable("`gh` stdin pipe was unavailable".to_string())
+            })?;
+            stdin.write_all(body.as_bytes()).map_err(StageError::Io)?;
+        }
+        child.wait_with_output().map_err(StageError::Io)
+    }
+
+    /// Classify a finished `gh` invocation: success → its stdout; a non-zero exit
+    /// → GitHub's own stderr (else stdout) surfaced **verbatim** as
+    /// [`StageError::GhFailed`] (never swallowed, never defaulted — CLAUDE.md
+    /// fail-loud). Shared by [`GitHub::run_gh`] and [`GitHub::run_gh_stdin`].
+    fn classify_gh(&self, args: &[&str], out: Output) -> Result<String, StageError> {
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let msg = match first_nonempty(stderr.trim(), stdout.trim()) {
+                Some(s) => s.to_string(),
+                // gh failed but said nothing — still loud, with the exit status.
+                None => format!(
+                    "`gh {}` exited with {}",
+                    args.join(" "),
+                    describe_status(&out)
+                ),
             };
-            StageError::GhUnavailable(msg)
-        })
+            tracing::error!(args = ?args, status = ?out.status.code(), "gh_command_failed");
+            return Err(StageError::GhFailed(msg));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
     /// The hard-requirement gate (ADR-0022 §5): confirm `gh` is installed **and**
@@ -187,22 +245,23 @@ impl GitHub {
     pub fn run_gh(&self, args: &[&str], cwd: Option<&Path>) -> Result<String, StageError> {
         self.ensure_ready()?;
         let out = self.run_gh_raw(args, cwd)?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            let msg = match first_nonempty(stderr.trim(), stdout.trim()) {
-                Some(s) => s.to_string(),
-                // gh failed but said nothing — still loud, with the exit status.
-                None => format!(
-                    "`gh {}` exited with {}",
-                    args.join(" "),
-                    describe_status(&out),
-                ),
-            };
-            tracing::error!(args = ?args, status = ?out.status.code(), "gh_command_failed");
-            return Err(StageError::GhFailed(msg));
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        self.classify_gh(args, out)
+    }
+
+    /// Like [`GitHub::run_gh`] but pipes `body` to `gh`'s stdin — the primitive
+    /// for `gh api <endpoint> --input -`, where the request payload is a JSON
+    /// object on stdin (the only clean way to send a nested array, e.g. a review
+    /// with bundled line comments). Same gate and same verbatim fail-loud
+    /// classification as [`GitHub::run_gh`].
+    pub fn run_gh_stdin(
+        &self,
+        args: &[&str],
+        cwd: Option<&Path>,
+        body: &str,
+    ) -> Result<String, StageError> {
+        self.ensure_ready()?;
+        let out = self.run_gh_raw_stdin(args, cwd, body)?;
+        self.classify_gh(args, out)
     }
 
     /// Run a `gh` command and parse its stdout JSON into `T` (e.g. `gh api …`
@@ -213,13 +272,20 @@ impl GitHub {
         cwd: Option<&Path>,
     ) -> Result<T, StageError> {
         let stdout = self.run_gh(args, cwd)?;
-        serde_json::from_str(&stdout).map_err(|e| {
-            tracing::error!(err = %e, args = ?args, "gh_json_parse_failed");
-            StageError::Invalid(format!(
-                "Couldn't parse `gh {}` output as JSON: {e}",
-                args.join(" ")
-            ))
-        })
+        parse_gh_json(args, &stdout)
+    }
+
+    /// Like [`GitHub::run_gh_json`] but pipes `body` to `gh`'s stdin and parses
+    /// the response JSON into `T` — used for `gh api … --input -` POSTs that
+    /// return a resource (e.g. the created review). Fails loud on a parse error.
+    pub fn run_gh_json_stdin<T: DeserializeOwned>(
+        &self,
+        args: &[&str],
+        cwd: Option<&Path>,
+        body: &str,
+    ) -> Result<T, StageError> {
+        let stdout = self.run_gh_stdin(args, cwd, body)?;
+        parse_gh_json(args, &stdout)
     }
 
     /// Resolve the `gh` token owner via `gh api user`, cached for the adapter's
@@ -282,6 +348,19 @@ fn check_git(out: &Output, what: &str) -> Result<(), StageError> {
     };
     tracing::error!(what = %what, status = ?out.status.code(), "git_transport_failed");
     Err(StageError::GitCli(msg))
+}
+
+/// Parse `gh` stdout JSON into `T`, failing loud (never a silent default) when
+/// the output isn't the JSON `T` expects. Shared by the plain and stdin JSON
+/// runners.
+fn parse_gh_json<T: DeserializeOwned>(args: &[&str], stdout: &str) -> Result<T, StageError> {
+    serde_json::from_str(stdout).map_err(|e| {
+        tracing::error!(err = %e, args = ?args, "gh_json_parse_failed");
+        StageError::Invalid(format!(
+            "Couldn't parse `gh {}` output as JSON: {e}",
+            args.join(" ")
+        ))
+    })
 }
 
 /// The first of two trimmed strings that is non-empty (stderr preferred over
