@@ -93,11 +93,13 @@ function FilterRow({
  */
 export function RepoHome({
   onEnterSelfReview,
+  onEnterStoryline,
   onChangeRepo,
   onOpenSettings,
   onSignIn,
 }: {
   onEnterSelfReview: () => void;
+  onEnterStoryline: () => void;
   onChangeRepo: () => void;
   onOpenSettings: () => void;
   onSignIn: () => void;
@@ -327,6 +329,14 @@ export function RepoHome({
                   style={{ paddingLeft: 28, width: '100%' }}
                 />
               </div>
+              <button
+                type="button"
+                className="btn"
+                onClick={onEnterStoryline}
+                title="Compose a local storyline for the focused branch (no sign-in needed)"
+              >
+                <Icon name="doc-stack" size={12} color="var(--gray-700)" /> Storyline
+              </button>
               <FetchButton onFetch={onFetch} fetching={fetching} />
             </div>
 

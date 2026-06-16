@@ -34,6 +34,7 @@ import type { RecentRepo } from './generated/RecentRepo';
 import type { ReplyAuthor } from './generated/ReplyAuthor';
 import type { RepoInfo } from './generated/RepoInfo';
 import type { RepoSummary } from './generated/RepoSummary';
+import type { Review } from './generated/Review';
 import type { SelfReviewDiff } from './generated/SelfReviewDiff';
 import type { SelfReviewFileChange } from './generated/SelfReviewFileChange';
 import type { SelfReviewNote } from './generated/SelfReviewNote';
@@ -44,6 +45,9 @@ import type { Side } from './generated/Side';
 import type { Storyline } from './generated/Storyline';
 import type { StorylineFile } from './generated/StorylineFile';
 import type { StorylineFileWrite } from './generated/StorylineFileWrite';
+import type { StorylinePreview } from './generated/StorylinePreview';
+import type { StorylineStep } from './generated/StorylineStep';
+import type { StorylineStepView } from './generated/StorylineStepView';
 import type { User } from './generated/User';
 import type { WorktreeInfo } from './generated/WorktreeInfo';
 
@@ -73,6 +77,7 @@ export type {
   ReplyAuthor,
   RepoInfo,
   RepoSummary,
+  Review,
   SelfReviewNote,
   SelfReviewNoteView,
   SelfReviewDiff,
@@ -83,6 +88,9 @@ export type {
   Storyline,
   StorylineFile,
   StorylineFileWrite,
+  StorylinePreview,
+  StorylineStep,
+  StorylineStepView,
   User,
   WorktreeInfo,
 };
@@ -518,6 +526,53 @@ export const storylineGet = (workspaceId: string) =>
 
 export const storylineUpdate = (workspaceId: string, etag: string, files: StorylineFileWrite[]) =>
   invoke<Storyline>('storyline_update', { workspaceId, etag, files });
+
+// --- Local storyline (no auth/sign-in; ADR-0022 §1/§3, milestone B) ---
+// The author's pre-publish storyline lives in the local store, keyed by the
+// active repo + branch. No `gh`/network here — Publish (milestone D) is what
+// reaches GitHub. All derived state (the diff overlay, stale flags) is computed
+// in Rust; these calls only ferry view-ready DTOs to the screen (ADR-0022 §7).
+
+/** The draft Review for the active repo + branch, or null if "Ready to share"
+ *  hasn't been triggered on this machine for this branch (WS-2 #60). */
+export const reviewDraftGet = () => invoke<Review | null>('review_draft_get');
+
+/** "Ready to share" (WS-2 #60): create the per-machine draft Review. Fails loud
+ *  if one already exists — it's a one-time transition, not an upsert. */
+export const reviewDraftCreate = (title: string, baseRef: string) =>
+  invoke<Review>('review_draft_create', { title, baseRef });
+
+/** Rename the draft Review's human-readable title (WS-3 #61). */
+export const reviewDraftSetTitle = (title: string) =>
+  invoke<Review>('review_draft_set_title', { title });
+
+/** Discard the draft Review and its storyline steps (GAP-1 #91). Idempotent. */
+export const reviewDraftDiscard = () => invoke<boolean>('review_draft_discard');
+
+/** The draft storyline steps for the active repo + branch, in author order. */
+export const storylineSteps = () => invoke<StorylineStep[]>('storyline_steps');
+
+/** Compose a step (SL-1/SL-2): append one anchored to `anchor`. Fails loud if
+ *  `anchor` isn't in the committed diff or a step already anchors it. */
+export const storylineStepAdd = (anchor: string, title: string | null, intro: string) =>
+  invoke<StorylineStep>('storyline_step_add', { anchor, title, intro });
+
+/** Edit a step's title + intro (SL-2/SL-3). `title: null` clears the heading. */
+export const storylineStepEdit = (id: string, title: string | null, intro: string) =>
+  invoke<StorylineStep>('storyline_step_edit', { id, title, intro });
+
+/** Remove a step from the draft storyline (SL-3). */
+export const storylineStepRemove = (id: string) => invoke<void>('storyline_step_remove', { id });
+
+/** Reorder the draft storyline to exactly `orderedIds` (SL-3). Fails loud unless
+ *  the list is a permutation of the current step ids. */
+export const storylineStepsReorder = (orderedIds: string[]) =>
+  invoke<StorylineStep[]>('storyline_steps_reorder', { orderedIds });
+
+/** The author-side local storyline preview (SL-4 author side + GAP-4): the full
+ *  tree-to-tree diff, the ordered steps with `stale` flags, and the un-anchored
+ *  paths still reachable as an overlay. Fails loud if there's no draft. */
+export const storylinePreview = () => invoke<StorylinePreview>('storyline_preview');
 
 // --- Self-Review Debrief (cycle 1: local agent↔author loop; see ADR-0011,
 // CONTEXT.md "Debrief" / "Review note"). All local + auth-free. ---

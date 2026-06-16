@@ -6,6 +6,7 @@ import { RepoHome } from './screens/repo/RepoHome';
 import { ReviewStoryline } from './screens/review/ReviewStoryline';
 import { SelfReview } from './screens/selfReview/SelfReview';
 import { Settings } from './screens/settings/Settings';
+import { LocalStoryline } from './screens/storyline/LocalStoryline';
 import { Storyline, type StorylineCtx } from './screens/storyline/Storyline';
 import { Workspaces } from './screens/workspaces/Workspaces';
 import {
@@ -27,6 +28,7 @@ type View =
   | 'workspaces'
   | 'selfReview'
   | 'storyline'
+  | 'localStoryline'
   | 'review'
   | 'settings';
 
@@ -182,6 +184,12 @@ export function App() {
     [localOnly],
   );
 
+  // Local, no-auth storyline (ADR-0022 §1/§3, milestone B): compose + preview the
+  // active repo+branch's storyline. Reached from the local-only Repo-home; its
+  // own "Ready to share" gate creates the draft. Returns to Repo-home.
+  const enterLocalStoryline = useCallback(() => setView('localStoryline'), []);
+  const exitLocalStoryline = useCallback(() => setView('repoHome'), []);
+
   const openStoryline = useCallback((ctx: StorylineCtx) => {
     setStorylineCtx(ctx);
     setView('storyline');
@@ -266,6 +274,7 @@ export function App() {
     return (
       <RepoHome
         onEnterSelfReview={startSelfReview}
+        onEnterStoryline={enterLocalStoryline}
         onChangeRepo={changeRepo}
         onOpenSettings={openSettings}
         onSignIn={() => setView('signIn')}
@@ -274,6 +283,9 @@ export function App() {
   }
   if (view === 'selfReview') {
     return <SelfReview onExit={exitSelfReview} seedBaseFromDebrief={seedBase} />;
+  }
+  if (view === 'localStoryline') {
+    return <LocalStoryline onBack={exitLocalStoryline} />;
   }
   if (!user) {
     // Defensive: should be unreachable (storyline/workspaces are signed-in

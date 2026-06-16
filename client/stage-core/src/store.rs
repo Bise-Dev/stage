@@ -9,6 +9,7 @@
 //! `.stage/<branch>/` (see [`crate::review_folder`], written at Publish in
 //! milestone D). Consequence: an unpublished draft is strictly per-machine.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,6 +21,7 @@ use crate::domain::{
 };
 use crate::error::StageError;
 use crate::repo_key::RepoKey;
+use crate::storyline::StorylineStep;
 
 /// Env override for the store location — handy for tests and for pointing the
 /// CLI and app at the same dev DB. When unset, [`default_store_path`] is used.
@@ -495,11 +497,247 @@ impl Store {
     /// (idempotent, like [`Store::clear_debrief`]). An *open PR* is closed/merged
     /// on GitHub, never "discarded".
     pub fn discard_review_draft(&self, key: &RepoKey) -> Result<bool, StageError> {
+        // Cascade the draft's storyline steps (milestone B) — there's no SQL
+        // foreign key (the link is code-enforced, like note↔reply), so delete
+        // them explicitly. Without this, discard-then-recreate on the same
+        // (repo, branch) would resurrect the old, orphaned steps.
+        self.conn.execute(
+            "DELETE FROM review_draft_step \
+             WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
+            params![key.repo_owner, key.repo_name, key.branch],
+        )?;
         let removed = self.conn.execute(
             "DELETE FROM review_draft WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
             params![key.repo_owner, key.repo_name, key.branch],
         )?;
         Ok(removed > 0)
+    }
+
+    // --- Pre-publish draft storyline steps (ADR-0022 §1, milestone B) --------
+    //
+    // The draft's ordered steps (SL-1..3). They live here, beside the draft
+    // Review row, until Publish serializes them into `.stage/<branch>/steps/`
+    // (milestone D). Single-writer / single-machine (ADR-0022 §2): composing
+    // requires the Ready-to-share draft, and every op is scoped to one
+    // (repo, branch) — a step on one branch is invisible to another. Step ids
+    // are store-minted (`st_<hex>`) like reply ids: a step's id is an internal
+    // handle for reorder/edit/remove, not a public identity, so the store mints
+    // it via `randomblob` rather than taking a uuid dependency. Order semantics
+    // here are by `order_index`, not the committed `NNN_` filename prefix — that
+    // mapping happens only at Publish.
+
+    /// Append a step to the draft storyline (SL-1 #65 / SL-2 #66). `order` is the
+    /// next slot (current max + 1, or 0 when empty), so a fresh add lands last.
+    ///
+    /// Fails loud (CLAUDE.md) if there is no Ready-to-share draft for `key`
+    /// (composing requires the draft — there's no implicit draft creation) or if
+    /// a step already anchors `anchor` (v1 is one step per file). Diff-membership
+    /// of `anchor` is validated a layer up in [`crate::storyline::add_step`],
+    /// which has the repo path; the store enforces only what it can see.
+    pub fn add_storyline_step(
+        &self,
+        key: &RepoKey,
+        anchor: &str,
+        title: Option<&str>,
+        intro: &str,
+    ) -> Result<StorylineStep, StageError> {
+        if self.get_review_draft(key)?.is_none() {
+            return Err(StageError::Invalid(format!(
+                "no storyline draft for branch '{}' — mark the change Ready to share first",
+                key.branch
+            )));
+        }
+        if self.storyline_step_id_by_anchor(key, anchor)?.is_some() {
+            return Err(StageError::Invalid(format!(
+                "the storyline already has a step for '{anchor}'"
+            )));
+        }
+        let now = now_epoch();
+        let next_order: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(order_index) + 1, 0) FROM review_draft_step \
+             WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
+            params![key.repo_owner, key.repo_name, key.branch],
+            |r| r.get(0),
+        )?;
+        let id: String = self.conn.query_row(
+            "INSERT INTO review_draft_step \
+                (id, repo_owner, repo_name, branch, anchor, title, intro, order_index, \
+                 created_at, updated_at) \
+             VALUES ('st_' || lower(hex(randomblob(8))), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8) \
+             RETURNING id",
+            params![
+                key.repo_owner,
+                key.repo_name,
+                key.branch,
+                anchor,
+                title,
+                intro,
+                next_order,
+                now,
+            ],
+            |r| r.get(0),
+        )?;
+        self.get_storyline_step(key, &id)?
+            .ok_or_else(|| StageError::Invalid("storyline step vanished after insert".into()))
+    }
+
+    /// The draft storyline steps for `key`, ascending by `order_index` (id breaks
+    /// ties for a stable order). Empty when nothing has been composed yet.
+    pub fn list_storyline_steps(&self, key: &RepoKey) -> Result<Vec<StorylineStep>, StageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, anchor, title, intro, order_index, created_at, updated_at \
+             FROM review_draft_step \
+             WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3 \
+             ORDER BY order_index, id",
+        )?;
+        let steps = stmt
+            .query_map(
+                params![key.repo_owner, key.repo_name, key.branch],
+                storyline_step_from_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(steps)
+    }
+
+    /// A single draft step by id (within `key`'s scope), or `None`.
+    pub fn get_storyline_step(
+        &self,
+        key: &RepoKey,
+        id: &str,
+    ) -> Result<Option<StorylineStep>, StageError> {
+        let step = self
+            .conn
+            .query_row(
+                "SELECT id, anchor, title, intro, order_index, created_at, updated_at \
+                 FROM review_draft_step \
+                 WHERE id = ?1 AND repo_owner = ?2 AND repo_name = ?3 AND branch = ?4",
+                params![id, key.repo_owner, key.repo_name, key.branch],
+                storyline_step_from_row,
+            )
+            .optional()?;
+        Ok(step)
+    }
+
+    /// Edit a step's `title` and `intro` (SL-2 #66 / SL-3 #67). Replaces both
+    /// editable fields outright — `title = None` clears the heading. The `anchor`
+    /// and `order` are unchanged (reorder owns order). Fails loud on an unknown id.
+    pub fn edit_storyline_step(
+        &self,
+        key: &RepoKey,
+        id: &str,
+        title: Option<&str>,
+        intro: &str,
+    ) -> Result<StorylineStep, StageError> {
+        let now = now_epoch();
+        let changed = self.conn.execute(
+            "UPDATE review_draft_step SET title = ?1, intro = ?2, updated_at = ?3 \
+             WHERE id = ?4 AND repo_owner = ?5 AND repo_name = ?6 AND branch = ?7",
+            params![
+                title,
+                intro,
+                now,
+                id,
+                key.repo_owner,
+                key.repo_name,
+                key.branch,
+            ],
+        )?;
+        if changed == 0 {
+            return Err(StageError::Invalid(format!(
+                "no storyline step with id '{id}'"
+            )));
+        }
+        self.get_storyline_step(key, id)?
+            .ok_or_else(|| StageError::Invalid("storyline step vanished after update".into()))
+    }
+
+    /// Remove a step from the draft storyline (SL-3 #67). Fails loud on an unknown
+    /// id. Leaves a gap in `order_index` (harmless — `list` sorts); a later
+    /// [`Store::reorder_storyline_steps`] compacts the order.
+    pub fn remove_storyline_step(&self, key: &RepoKey, id: &str) -> Result<(), StageError> {
+        let removed = self.conn.execute(
+            "DELETE FROM review_draft_step \
+             WHERE id = ?1 AND repo_owner = ?2 AND repo_name = ?3 AND branch = ?4",
+            params![id, key.repo_owner, key.repo_name, key.branch],
+        )?;
+        if removed == 0 {
+            return Err(StageError::Invalid(format!(
+                "no storyline step with id '{id}'"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Reorder the draft storyline to exactly `ordered_ids` (SL-3 #67). Rewrites
+    /// each step's `order_index` to its position in the list (0-based, compact).
+    ///
+    /// Fails loud unless `ordered_ids` is a permutation of the draft's current
+    /// step ids — a partial or unknown set is rejected wholesale (no silent
+    /// drop/duplicate), per CLAUDE.md fail-loud. Runs in a transaction so a
+    /// rejected reorder leaves the existing order intact.
+    pub fn reorder_storyline_steps(
+        &self,
+        key: &RepoKey,
+        ordered_ids: &[String],
+    ) -> Result<Vec<StorylineStep>, StageError> {
+        let current: HashSet<String> = self
+            .list_storyline_steps(key)?
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        let requested: HashSet<&String> = ordered_ids.iter().collect();
+        if current.len() != ordered_ids.len() || requested.len() != ordered_ids.len() {
+            return Err(StageError::Invalid(format!(
+                "reorder must list each of the {} storyline step(s) exactly once (got {})",
+                current.len(),
+                ordered_ids.len()
+            )));
+        }
+        if ordered_ids.iter().any(|id| !current.contains(id)) {
+            return Err(StageError::Invalid(
+                "reorder lists a step id that isn't in this storyline".into(),
+            ));
+        }
+
+        let now = now_epoch();
+        // `unchecked_transaction` takes `&self` (every other Store method does
+        // too); safe here as we never hold two transactions on this connection.
+        let tx = self.conn.unchecked_transaction()?;
+        for (position, id) in ordered_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE review_draft_step SET order_index = ?1, updated_at = ?2 \
+                 WHERE id = ?3 AND repo_owner = ?4 AND repo_name = ?5 AND branch = ?6",
+                params![
+                    position as i64,
+                    now,
+                    id,
+                    key.repo_owner,
+                    key.repo_name,
+                    key.branch,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        self.list_storyline_steps(key)
+    }
+
+    /// The id of the step anchoring `anchor` in `key`'s draft, if any (the
+    /// one-step-per-file guard for [`Store::add_storyline_step`]).
+    fn storyline_step_id_by_anchor(
+        &self,
+        key: &RepoKey,
+        anchor: &str,
+    ) -> Result<Option<String>, StageError> {
+        let id = self
+            .conn
+            .query_row(
+                "SELECT id FROM review_draft_step \
+                 WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3 AND anchor = ?4",
+                params![key.repo_owner, key.repo_name, key.branch, anchor],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(id)
     }
 }
 
@@ -564,6 +802,20 @@ fn reply_from_row(r: &rusqlite::Row) -> rusqlite::Result<NoteReply> {
         author,
         body: r.get(2)?,
         created_at: r.get(3)?,
+    })
+}
+
+/// Map a `review_draft_step` row to a [`StorylineStep`]. Column order:
+/// `id, anchor, title, intro, order_index, created_at, updated_at`.
+fn storyline_step_from_row(r: &rusqlite::Row) -> rusqlite::Result<StorylineStep> {
+    Ok(StorylineStep {
+        id: r.get(0)?,
+        anchor: r.get(1)?,
+        title: r.get(2)?,
+        intro: r.get(3)?,
+        order: r.get(4)?,
+        created_at: r.get(5)?,
+        updated_at: r.get(6)?,
     })
 }
 
@@ -676,6 +928,30 @@ const MIGRATIONS: &[&str] = &[
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (repo_owner, repo_name, branch)
     ) WITHOUT ROWID;",
+    // v5 — Pre-publish draft storyline steps (ADR-0022 §1, milestone B). The
+    // draft Review's ordered steps (SL-1..3): one row per step, scoped to the
+    // same (repo_owner, repo_name, branch) as its draft. `anchor` is a repo-
+    // relative file in the change's diff; `title` is optional; `intro` is the
+    // markdown body; `order_index` is the ascending presentation order (mapped to
+    // the committed `NNN_` filename prefix only at Publish). Ids are store-minted
+    // (`st_<hex>`). No FK to review_draft — the link is code-enforced (scope
+    // columns + the draft-exists guard in `add_storyline_step`), matching the
+    // note↔reply convention above; `discard_review_draft` leaves orphan steps
+    // only if a draft is discarded, which the lifecycle handles at that layer.
+    "CREATE TABLE IF NOT EXISTS review_draft_step (
+        id          TEXT    NOT NULL PRIMARY KEY,
+        repo_owner  TEXT    NOT NULL,
+        repo_name   TEXT    NOT NULL,
+        branch      TEXT    NOT NULL,
+        anchor      TEXT    NOT NULL,
+        title       TEXT,
+        intro       TEXT    NOT NULL,
+        order_index INTEGER NOT NULL,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS review_draft_step_scope
+        ON review_draft_step (repo_owner, repo_name, branch, order_index);",
 ];
 
 fn migrate(conn: &Connection) -> Result<(), StageError> {
@@ -1075,5 +1351,212 @@ mod tests {
             .create_review_draft(&k, "post-migration", "origin/main")
             .unwrap();
         assert_eq!(draft.title, "post-migration");
+    }
+
+    // --- Draft storyline steps (milestone B) --------------------------------
+
+    /// A store with a Ready-to-share draft for `key`, ready for step composition.
+    fn store_with_draft() -> (tempfile::TempDir, Store, RepoKey) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.sqlite3")).unwrap();
+        let k = key();
+        store
+            .create_review_draft(&k, "Ship the thing", "origin/main")
+            .unwrap();
+        (dir, store, k)
+    }
+
+    #[test]
+    fn storyline_step_crud_and_append_order() {
+        let (_dir, store, k) = store_with_draft();
+        assert!(store.list_storyline_steps(&k).unwrap().is_empty());
+
+        // Add appends in call order; ids are store-minted and distinct.
+        let s1 = store
+            .add_storyline_step(&k, "a.rs", Some("Rename"), "did a")
+            .unwrap();
+        let s2 = store.add_storyline_step(&k, "b.rs", None, "did b").unwrap();
+        assert!(s1.id.starts_with("st_") && s2.id.starts_with("st_"));
+        assert_ne!(s1.id, s2.id);
+        assert_eq!(s1.title.as_deref(), Some("Rename"));
+        assert_eq!(s2.title, None);
+        assert!(s1.order < s2.order, "second add lands after the first");
+
+        // List is ascending by order.
+        let steps = store.list_storyline_steps(&k).unwrap();
+        assert_eq!(
+            steps.iter().map(|s| s.anchor.as_str()).collect::<Vec<_>>(),
+            vec!["a.rs", "b.rs"],
+        );
+
+        // Edit replaces title + intro; clearing the title with None works.
+        let edited = store
+            .edit_storyline_step(&k, &s1.id, None, "did a, better")
+            .unwrap();
+        assert_eq!(edited.title, None);
+        assert_eq!(edited.intro, "did a, better");
+        assert_eq!(edited.anchor, "a.rs", "edit leaves the anchor untouched");
+        assert!(edited.updated_at >= s1.updated_at);
+
+        // Remove drops the step.
+        store.remove_storyline_step(&k, &s2.id).unwrap();
+        let steps = store.list_storyline_steps(&k).unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].id, s1.id);
+    }
+
+    #[test]
+    fn storyline_reorder_rewrites_order_and_rejects_non_permutations() {
+        let (_dir, store, k) = store_with_draft();
+        let a = store.add_storyline_step(&k, "a.rs", None, "a").unwrap();
+        let b = store.add_storyline_step(&k, "b.rs", None, "b").unwrap();
+        let c = store.add_storyline_step(&k, "c.rs", None, "c").unwrap();
+
+        // Reverse the order; list reflects the new arrangement.
+        let reordered = store
+            .reorder_storyline_steps(&k, &[c.id.clone(), b.id.clone(), a.id.clone()])
+            .unwrap();
+        assert_eq!(
+            reordered
+                .iter()
+                .map(|s| s.anchor.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c.rs", "b.rs", "a.rs"],
+        );
+        // Order indices are compacted to 0,1,2.
+        assert_eq!(
+            reordered.iter().map(|s| s.order).collect::<Vec<_>>(),
+            vec![0, 1, 2],
+        );
+
+        // A partial list (missing a step) is rejected wholesale — no silent drop.
+        let err = store
+            .reorder_storyline_steps(&k, &[a.id.clone(), b.id.clone()])
+            .unwrap_err();
+        assert!(err.to_string().contains("exactly once"), "{err}");
+
+        // A duplicate id is rejected (would otherwise drop a step).
+        let err = store
+            .reorder_storyline_steps(&k, &[a.id.clone(), a.id.clone(), b.id.clone()])
+            .unwrap_err();
+        assert!(err.to_string().contains("exactly once"), "{err}");
+
+        // An unknown id is rejected.
+        let err = store
+            .reorder_storyline_steps(&k, &[a.id, b.id, "st_ghost".into()])
+            .unwrap_err();
+        assert!(err.to_string().contains("isn't in this storyline"), "{err}");
+
+        // The rejected reorders left the order intact (transaction rollback / no-op).
+        assert_eq!(
+            store
+                .list_storyline_steps(&k)
+                .unwrap()
+                .iter()
+                .map(|s| s.anchor.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c.rs", "b.rs", "a.rs"],
+        );
+    }
+
+    #[test]
+    fn composing_requires_a_ready_to_share_draft() {
+        // No draft for this branch → add fails loud (single-writer: the draft is
+        // the only home for a pre-publish storyline).
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.sqlite3")).unwrap();
+        let k = key();
+        assert!(store.get_review_draft(&k).unwrap().is_none());
+        let err = store.add_storyline_step(&k, "a.rs", None, "x").unwrap_err();
+        assert!(err.to_string().contains("Ready to share"), "{err}");
+        // …and with no draft there are simply no steps (not an error).
+        assert!(store.list_storyline_steps(&k).unwrap().is_empty());
+    }
+
+    #[test]
+    fn one_step_per_file_and_unknown_ids_fail_loud() {
+        let (_dir, store, k) = store_with_draft();
+        store.add_storyline_step(&k, "a.rs", None, "a").unwrap();
+
+        // v1: one step per file — a second step on the same anchor is rejected.
+        let err = store
+            .add_storyline_step(&k, "a.rs", None, "again")
+            .unwrap_err();
+        assert!(err.to_string().contains("already has a step"), "{err}");
+
+        // Edit / remove on an unknown id fail loud, never silently no-op.
+        assert!(store
+            .edit_storyline_step(&k, "st_ghost", None, "x")
+            .is_err());
+        assert!(store.remove_storyline_step(&k, "st_ghost").is_err());
+        assert!(store.get_storyline_step(&k, "st_ghost").unwrap().is_none());
+    }
+
+    #[test]
+    fn storyline_steps_are_scoped_per_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.sqlite3")).unwrap();
+        let k = key(); // feat/x
+        let mut other = key();
+        other.branch = "main".into();
+        store
+            .create_review_draft(&k, "on feat/x", "origin/main")
+            .unwrap();
+        store
+            .create_review_draft(&other, "on main", "origin/main")
+            .unwrap();
+
+        store.add_storyline_step(&k, "a.rs", None, "a").unwrap();
+        // The other branch's draft has its own (empty) storyline; the same anchor
+        // is free there (one-step-per-file is per-branch, not global).
+        assert!(store.list_storyline_steps(&other).unwrap().is_empty());
+        store
+            .add_storyline_step(&other, "a.rs", None, "a on main")
+            .unwrap();
+        assert_eq!(store.list_storyline_steps(&k).unwrap().len(), 1);
+        assert_eq!(store.list_storyline_steps(&other).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn discarding_a_draft_cascades_its_storyline_steps() {
+        let (_dir, store, k) = store_with_draft();
+        store.add_storyline_step(&k, "a.rs", None, "a").unwrap();
+        store.add_storyline_step(&k, "b.rs", None, "b").unwrap();
+        assert_eq!(store.list_storyline_steps(&k).unwrap().len(), 2);
+
+        // Discard removes the draft AND its steps — no orphans survive.
+        assert!(store.discard_review_draft(&k).unwrap());
+        assert!(store.list_storyline_steps(&k).unwrap().is_empty());
+
+        // Re-entering Ready-to-share starts from a clean storyline, not the old steps.
+        store
+            .create_review_draft(&k, "again", "origin/main")
+            .unwrap();
+        assert!(store.list_storyline_steps(&k).unwrap().is_empty());
+    }
+
+    #[test]
+    fn storyline_step_table_is_added_to_a_pre_v5_store() {
+        // A store migrated only through v4 (no review_draft_step) must gain it on
+        // the next open, without disturbing existing data.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.sqlite3");
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &MIGRATIONS[..4] {
+                conn.execute_batch(m).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 4i64).unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let k = key();
+        store
+            .create_review_draft(&k, "post-migration", "origin/main")
+            .unwrap();
+        let s = store
+            .add_storyline_step(&k, "a.rs", Some("t"), "i")
+            .unwrap();
+        assert_eq!(s.anchor, "a.rs");
+        assert_eq!(store.list_storyline_steps(&k).unwrap().len(), 1);
     }
 }
