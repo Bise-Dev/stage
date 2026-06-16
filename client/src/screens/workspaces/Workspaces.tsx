@@ -1,6 +1,7 @@
 import { listen } from '@tauri-apps/api/event';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Avatar } from '../../components/Avatar';
+import { FetchButton } from '../../components/FetchButton';
 import { Icon } from '../../components/Icon';
 import { RepoMenu } from '../../components/RepoMenu';
 import { TitleBar } from '../../components/TitleBar';
@@ -603,16 +604,7 @@ export function Workspaces({
                   onChange={(e) => setQuery(e.target.value)}
                 />
               </div>
-              <button
-                type="button"
-                className="btn btn-lg"
-                onClick={runFetch}
-                disabled={fetching}
-                style={{ opacity: fetching ? 0.6 : 1 }}
-              >
-                <Icon name="branch" size={12} color="var(--gray-700)" />{' '}
-                {fetching ? 'Fetching…' : 'Fetch'}
-              </button>
+              <FetchButton onFetch={runFetch} fetching={fetching} />
               <button
                 type="button"
                 className="btn btn-primary btn-lg"
