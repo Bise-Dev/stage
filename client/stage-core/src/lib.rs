@@ -1,14 +1,17 @@
 //! `stage-core` — the Tauri-independent core shared by the `stage` CLI and the
-//! Stage desktop app: the local Debrief store, its domain types, and the
-//! repo-key derivation that locates a repo+branch's Debrief.
+//! Stage desktop app: the local Debrief store, its domain types, the repo-key
+//! derivation that locates a repo+branch's Debrief, and the credential-free
+//! GitHub adapter ([`github`]).
 //!
-//! No Tauri, no network, no credentials — see ADR-0011. The CLI links this
-//! crate but never compiles Tauri, which is why the core lives here.
+//! No Tauri — the CLI links this crate but never compiles Tauri, which is why
+//! the core lives here. GitHub is reached by shelling out to the user's local
+//! `gh`/`git` (ADR-0022 §5); Stage itself holds **no stored credential**.
 
 pub mod base;
 pub mod diff;
 pub mod domain;
 pub mod error;
+pub mod github;
 pub mod repo_key;
 pub mod review_folder;
 pub mod store;
@@ -21,6 +24,7 @@ pub use domain::{
     SelfReviewNote, SelfReviewNoteView, Side,
 };
 pub use error::StageError;
+pub use github::{GitHub, GitHubUser};
 pub use repo_key::{repo_key_from_cwd, repo_root_from_cwd, slug_from_remote, RepoKey};
 pub use review_folder::{
     find_review, read_review_at, resync_folder, review_dir, scoped_commit, stage_root,

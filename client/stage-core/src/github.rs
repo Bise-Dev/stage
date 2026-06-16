@@ -1,0 +1,594 @@
+//! `github.rs` — the credential-free GitHub adapter (ADR-0022 §5).
+//!
+//! Stage holds **no** credential of its own. Every GitHub touchpoint shells out
+//! to the user's local CLIs:
+//!
+//! - **GitHub API** (read/open PRs, verdicts, comments, checks, search, PR
+//!   actions, the auto-comment) goes through **`gh`**, which owns its own token.
+//! - **git transport** (push, fetch) goes through the system **`git`**, which
+//!   uses the user's existing git credentials (ssh-agent, credential helpers).
+//!
+//! This module is the *layer* the networked milestones (publish, review,
+//! reviewer-entry, dashboard) compose on — it provides the runners
+//! ([`GitHub::run_gh`], [`GitHub::run_gh_json`]), the hard-requirement gate
+//! ([`GitHub::ensure_ready`]), identity ([`GitHub::current_user`]), and git
+//! transport ([`GitHub::git_push`], [`GitHub::git_fetch`]). The specific
+//! feature commands (e.g. `gh pr create`, verdict submission, `gh search`)
+//! belong to those milestones and are built on these primitives.
+//!
+//! **Fail loud (CLAUDE.md):** every failure both logs (`tracing::error!`) and
+//! surfaces a complete, user-facing message. There is no broker fallback and no
+//! default-on-error:
+//!
+//! - `gh` missing or unauthenticated → [`StageError::GhUnavailable`] carrying a
+//!   one-time, actionable "install `gh` / run `gh auth login`" message.
+//! - a `gh` command exiting non-zero → [`StageError::GhFailed`] carrying
+//!   GitHub's own stderr **verbatim** (a 404, a 403, a validation error) so the
+//!   UI banner shows the real cause.
+//! - a `git` push/fetch failing → [`StageError::GitCli`] carrying git's
+//!   stderr verbatim.
+//!
+//! **Identity (ADR-0022 §5, #53/#55):** committed artifacts are attributed by
+//! their git commit author; GitHub actions by the `gh` token owner.
+//! [`GitHub::current_user`] answers "who am I" via `gh api user`, cached for the
+//! lifetime of the adapter. There is no Stage account and no reconciliation
+//! between the git commit identity and the `gh` identity (assumed the same
+//! human — an accepted simplification).
+//!
+//! **Auth only at action time (ADR-0022 §5, #56):** the adapter never runs `gh`
+//! eagerly. The gate runs lazily on the first GitHub-needing call and is then
+//! cached, so local features (Self-Review, storyline authoring) never invoke
+//! `gh`. The adapter is meant to be constructed once and held (e.g. in app
+//! state) so the gate and the identity resolve a single time per process.
+
+use std::ffi::OsString;
+use std::path::Path;
+use std::process::{Command, Output};
+use std::sync::OnceLock;
+
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::error::StageError;
+
+/// The GitHub identity reported by `gh api user` — the `gh` token owner.
+///
+/// Unknown fields in the API payload are ignored; only what Stage needs to
+/// answer "who am I" and attribute actions is kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GitHubUser {
+    /// The GitHub handle (e.g. `"octocat"`) — how actions are attributed.
+    pub login: String,
+    /// GitHub's stable numeric user id. Crosses the JSON IPC boundary as a JS
+    /// `number` (ts-rs would otherwise emit `bigint` for a 64-bit int).
+    #[ts(type = "number")]
+    pub id: u64,
+    /// The user's display name, if set on their GitHub profile.
+    pub name: Option<String>,
+}
+
+/// The actionable hint appended to every "`gh` unavailable" message. Naming the
+/// exact remedy is the whole point — there is no broker fallback.
+const GH_INSTALL_HINT: &str = "Install it from https://cli.github.com, then run `gh auth login`.";
+
+/// The credential-free GitHub adapter. Shells out to the user's `gh` and `git`.
+///
+/// Construct once and share (`&self` everywhere): the auth gate and the identity
+/// are cached on the instance, so a long-lived adapter checks `gh auth status`
+/// and `gh api user` at most once each.
+pub struct GitHub {
+    /// The `gh` binary to invoke (`"gh"` in production; overridden in tests).
+    gh_bin: OsString,
+    /// The `git` binary to invoke (`"git"` in production; overridden in tests).
+    git_bin: OsString,
+    /// Set once `gh` is confirmed installed **and** authenticated. Only a
+    /// success is cached — a failure re-checks next time so the user can run
+    /// `gh auth login` and retry without restarting.
+    ready: OnceLock<()>,
+    /// The resolved `gh` token owner, cached for the adapter's lifetime.
+    user: OnceLock<GitHubUser>,
+}
+
+impl Default for GitHub {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GitHub {
+    /// The production adapter: the `gh` and `git` on the user's `PATH`.
+    pub fn new() -> Self {
+        Self::with_bins("gh", "git")
+    }
+
+    /// Construct with explicit binaries. Production uses [`GitHub::new`]; tests
+    /// point this at a fake `gh`/`git` script to exercise every path offline.
+    pub fn with_bins(gh: impl Into<OsString>, git: impl Into<OsString>) -> Self {
+        Self {
+            gh_bin: gh.into(),
+            git_bin: git.into(),
+            ready: OnceLock::new(),
+            user: OnceLock::new(),
+        }
+    }
+
+    /// Build a `gh` invocation with deterministic, color-free output so any
+    /// message we surface verbatim is clean.
+    fn gh_command(&self, args: &[&str], cwd: Option<&Path>) -> Command {
+        let mut cmd = Command::new(&self.gh_bin);
+        cmd.args(args);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        // No ANSI in captured output, and no "a new release of gh" noise on
+        // stderr that could pollute a surfaced error message.
+        cmd.env("NO_COLOR", "1");
+        cmd.env("GH_NO_UPDATE_NOTIFIER", "1");
+        cmd
+    }
+
+    /// Spawn `gh` and capture its output. A spawn failure means `gh` itself is
+    /// unavailable — the hard-requirement violation — so it maps to a loud,
+    /// actionable [`StageError::GhUnavailable`]. A non-zero *exit* is left for
+    /// the caller to classify (unauthenticated vs. a failed command).
+    fn run_gh_raw(&self, args: &[&str], cwd: Option<&Path>) -> Result<Output, StageError> {
+        self.gh_command(args, cwd).output().map_err(|e| {
+            let msg = if e.kind() == std::io::ErrorKind::NotFound {
+                tracing::error!(err = %e, bin = ?self.gh_bin, "gh_not_found");
+                format!(
+                    "GitHub CLI (`gh`) was not found. Stage uses your local `gh` for every \
+                     GitHub action and stores no credentials of its own. {GH_INSTALL_HINT}"
+                )
+            } else {
+                tracing::error!(err = %e, bin = ?self.gh_bin, "gh_spawn_failed");
+                format!("Couldn't run GitHub CLI (`gh`): {e}. {GH_INSTALL_HINT}")
+            };
+            StageError::GhUnavailable(msg)
+        })
+    }
+
+    /// The hard-requirement gate (ADR-0022 §5): confirm `gh` is installed **and**
+    /// authenticated. Runs `gh auth status` lazily on first use and caches the
+    /// success, so it runs at most once per adapter. A missing or
+    /// unauthenticated `gh` is a loud, one-time, actionable error — there is no
+    /// broker fallback.
+    pub fn ensure_ready(&self) -> Result<(), StageError> {
+        if self.ready.get().is_some() {
+            return Ok(());
+        }
+        let out = self.run_gh_raw(&["auth", "status"], None)?;
+        if !out.status.success() {
+            let detail = combined_output(&out);
+            tracing::error!(status = ?out.status.code(), "gh_unauthenticated");
+            let base = "GitHub CLI (`gh`) is not authenticated. Run `gh auth login` to connect \
+                        your GitHub account — Stage acts as you and stores no token of its own.";
+            let msg = if detail.is_empty() {
+                base.to_string()
+            } else {
+                format!("{base}\n\n{detail}")
+            };
+            return Err(StageError::GhUnavailable(msg));
+        }
+        let _ = self.ready.set(());
+        Ok(())
+    }
+
+    /// Run a `gh` command and return its stdout. The gate runs first
+    /// ([`GitHub::ensure_ready`]); a non-zero exit surfaces GitHub's own stderr
+    /// **verbatim** as [`StageError::GhFailed`] (never swallowed, never
+    /// defaulted). `cwd` scopes repo-relative commands (`gh pr …`); pass `None`
+    /// for global ones (`gh api …`).
+    ///
+    /// This is the primitive the networked milestones compose their typed
+    /// commands on.
+    pub fn run_gh(&self, args: &[&str], cwd: Option<&Path>) -> Result<String, StageError> {
+        self.ensure_ready()?;
+        let out = self.run_gh_raw(args, cwd)?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let msg = match first_nonempty(stderr.trim(), stdout.trim()) {
+                Some(s) => s.to_string(),
+                // gh failed but said nothing — still loud, with the exit status.
+                None => format!(
+                    "`gh {}` exited with {}",
+                    args.join(" "),
+                    describe_status(&out),
+                ),
+            };
+            tracing::error!(args = ?args, status = ?out.status.code(), "gh_command_failed");
+            return Err(StageError::GhFailed(msg));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// Run a `gh` command and parse its stdout JSON into `T` (e.g. `gh api …`
+    /// or `gh … --json …`). A parse failure is loud — never a silent default.
+    pub fn run_gh_json<T: DeserializeOwned>(
+        &self,
+        args: &[&str],
+        cwd: Option<&Path>,
+    ) -> Result<T, StageError> {
+        let stdout = self.run_gh(args, cwd)?;
+        serde_json::from_str(&stdout).map_err(|e| {
+            tracing::error!(err = %e, args = ?args, "gh_json_parse_failed");
+            StageError::Invalid(format!(
+                "Couldn't parse `gh {}` output as JSON: {e}",
+                args.join(" ")
+            ))
+        })
+    }
+
+    /// Resolve the `gh` token owner via `gh api user`, cached for the adapter's
+    /// lifetime (ADR-0022 §5). This is the "who am I" used to attribute GitHub
+    /// actions; committed artifacts are attributed by their git commit author
+    /// instead, which Stage does not reconcile against this identity.
+    pub fn current_user(&self) -> Result<GitHubUser, StageError> {
+        if let Some(user) = self.user.get() {
+            return Ok(user.clone());
+        }
+        let user: GitHubUser = self.run_gh_json(&["api", "user"], None)?;
+        // A redundant fetch under a race is harmless (the call is idempotent);
+        // keep whichever lands first.
+        let _ = self.user.set(user.clone());
+        Ok(user)
+    }
+
+    /// Spawn `git` in `repo_dir` and capture its output. A spawn failure maps to
+    /// [`StageError::GitCli`]; the caller classifies a non-zero exit.
+    fn run_git_raw(&self, repo_dir: &Path, args: &[&str]) -> Result<Output, StageError> {
+        Command::new(&self.git_bin)
+            .current_dir(repo_dir)
+            .args(args)
+            .output()
+            .map_err(|e| {
+                tracing::error!(err = %e, bin = ?self.git_bin, "git_spawn_failed");
+                StageError::GitCli(format!("Couldn't run `git`: {e}"))
+            })
+    }
+
+    /// `git fetch --prune <remote>` — transport over the user's own git
+    /// credentials (ADR-0022 §5). On a non-zero exit git's stderr is surfaced
+    /// verbatim (fail loud).
+    pub fn git_fetch(&self, repo_dir: &Path, remote: &str) -> Result<(), StageError> {
+        let out = self.run_git_raw(repo_dir, &["fetch", "--prune", remote])?;
+        check_git(&out, "git fetch")
+    }
+
+    /// `git push --set-upstream <remote> <branch>` — transport over the user's
+    /// own git credentials (ADR-0022 §5). A no-op push (remote already has the
+    /// commits) still exits 0, so re-publishing is idempotent. On a non-zero
+    /// exit git's stderr is surfaced verbatim (auth failure, protected branch,
+    /// missing write access) — fail loud.
+    pub fn git_push(&self, repo_dir: &Path, remote: &str, branch: &str) -> Result<(), StageError> {
+        let out = self.run_git_raw(repo_dir, &["push", "--set-upstream", remote, branch])?;
+        check_git(&out, "git push")
+    }
+}
+
+/// Classify a finished `git` transport command: success, or git's stderr
+/// surfaced verbatim as [`StageError::GitCli`].
+fn check_git(out: &Output, what: &str) -> Result<(), StageError> {
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let msg = match stderr.trim() {
+        "" => format!("{what} failed with {}", describe_status(out)),
+        s => s.to_string(),
+    };
+    tracing::error!(what = %what, status = ?out.status.code(), "git_transport_failed");
+    Err(StageError::GitCli(msg))
+}
+
+/// The first of two trimmed strings that is non-empty (stderr preferred over
+/// stdout for error context).
+fn first_nonempty<'a>(a: &'a str, b: &'a str) -> Option<&'a str> {
+    if !a.is_empty() {
+        Some(a)
+    } else if !b.is_empty() {
+        Some(b)
+    } else {
+        None
+    }
+}
+
+/// stderr if present, else stdout — the diagnostic text from a captured output.
+fn combined_output(out: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    first_nonempty(stderr.trim(), stdout.trim())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// A human description of an exit status — the code, or "a signal" when killed.
+fn describe_status(out: &Output) -> String {
+    match out.status.code() {
+        Some(code) => format!("status {code}"),
+        None => "a signal".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+    use std::process::Command as TestCommand;
+
+    /// Write an executable fake-CLI script and return its path (unix-only: CI
+    /// and dev are macOS/Linux). The body dispatches on `"$@"`.
+    #[cfg(unix)]
+    fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    /// Run `git -C <dir> <args…>`, asserting success. Test-only helper, mirrors
+    /// `worktree.rs`.
+    fn git(dir: &Path, args: &[&str]) {
+        let status = TestCommand::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .expect("spawn git");
+        assert!(status.success(), "git {args:?} failed in {dir:?}");
+    }
+
+    // ---- the gh hard-requirement: missing ---------------------------------
+
+    #[test]
+    fn gh_missing_is_a_loud_actionable_error() {
+        // A binary name that does not exist on PATH → spawn NotFound.
+        let gh = GitHub::with_bins("stage-nonexistent-gh-binary-xyz", "git");
+        let err = gh.current_user().expect_err("missing gh must fail");
+        match err {
+            StageError::GhUnavailable(msg) => {
+                assert!(
+                    msg.contains("https://cli.github.com"),
+                    "names install URL: {msg}"
+                );
+                assert!(msg.contains("gh auth login"), "names the remedy: {msg}");
+                assert!(msg.contains("not found"), "says it's missing: {msg}");
+            }
+            other => panic!("expected GhUnavailable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ensure_ready_reports_missing_gh() {
+        let gh = GitHub::with_bins("stage-nonexistent-gh-binary-xyz", "git");
+        let err = gh
+            .ensure_ready()
+            .expect_err("missing gh must fail the gate");
+        assert!(matches!(err, StageError::GhUnavailable(_)));
+    }
+
+    // ---- the gh hard-requirement: unauthenticated -------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_unauthenticated_is_a_loud_actionable_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = write_script(
+            dir.path(),
+            "gh",
+            "#!/usr/bin/env bash\n\
+             if [ \"$1\" = auth ] && [ \"$2\" = status ]; then\n\
+               echo 'You are not logged into any GitHub hosts. To log in, run: gh auth login' >&2\n\
+               exit 1\n\
+             fi\n\
+             exit 1\n",
+        );
+        let gh = GitHub::with_bins(fake, "git");
+        let err = gh.current_user().expect_err("unauthenticated gh must fail");
+        match err {
+            StageError::GhUnavailable(msg) => {
+                assert!(msg.contains("gh auth login"), "names the remedy: {msg}");
+                assert!(
+                    msg.contains("not authenticated"),
+                    "says it's unauthed: {msg}"
+                );
+                // gh's own diagnostic is carried through for context.
+                assert!(
+                    msg.contains("not logged into any GitHub hosts"),
+                    "carries gh detail: {msg}"
+                );
+            }
+            other => panic!("expected GhUnavailable, got {other:?}"),
+        }
+    }
+
+    // ---- identity: gh api user, parsed and cached -------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn current_user_parses_and_caches() {
+        let dir = tempfile::tempdir().unwrap();
+        let counter = dir.path().join("api_user_calls");
+        // auth status → ok; `api user` → fixture JSON, and record each call so
+        // we can prove the result is cached (the script is hit exactly once).
+        let body = format!(
+            "#!/usr/bin/env bash\n\
+             if [ \"$1\" = auth ] && [ \"$2\" = status ]; then exit 0; fi\n\
+             if [ \"$1\" = api ] && [ \"$2\" = user ]; then\n\
+               echo call >> {counter:?}\n\
+               echo '{{\"login\":\"octocat\",\"id\":583231,\"name\":\"The Octocat\",\"extra\":true}}'\n\
+               exit 0\n\
+             fi\n\
+             exit 1\n",
+            counter = counter.display(),
+        );
+        let fake = write_script(dir.path(), "gh", &body);
+        let gh = GitHub::with_bins(fake, "git");
+
+        let first = gh.current_user().expect("first resolve");
+        assert_eq!(first.login, "octocat");
+        assert_eq!(first.id, 583231);
+        assert_eq!(first.name.as_deref(), Some("The Octocat"));
+
+        let second = gh.current_user().expect("second resolve");
+        assert_eq!(first, second);
+
+        // Cached: `gh api user` ran exactly once across the two calls.
+        let calls = std::fs::read_to_string(&counter).unwrap_or_default();
+        assert_eq!(
+            calls.lines().count(),
+            1,
+            "identity must be cached, got: {calls:?}"
+        );
+    }
+
+    /// The auth gate is checked at most once per adapter (cached on success).
+    #[cfg(unix)]
+    #[test]
+    fn auth_gate_runs_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let counter = dir.path().join("auth_status_calls");
+        let body = format!(
+            "#!/usr/bin/env bash\n\
+             if [ \"$1\" = auth ] && [ \"$2\" = status ]; then echo call >> {counter:?}; exit 0; fi\n\
+             echo ok\n\
+             exit 0\n",
+            counter = counter.display(),
+        );
+        let fake = write_script(dir.path(), "gh", &body);
+        let gh = GitHub::with_bins(fake, "git");
+
+        gh.run_gh(&["api", "rate_limit"], None).expect("first call");
+        gh.run_gh(&["api", "rate_limit"], None)
+            .expect("second call");
+
+        let calls = std::fs::read_to_string(&counter).unwrap_or_default();
+        assert_eq!(
+            calls.lines().count(),
+            1,
+            "auth gate must be cached, got: {calls:?}"
+        );
+    }
+
+    // ---- error mapping: gh non-zero exit surfaces stderr verbatim ---------
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_command_failure_surfaces_github_message_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = write_script(
+            dir.path(),
+            "gh",
+            "#!/usr/bin/env bash\n\
+             if [ \"$1\" = auth ] && [ \"$2\" = status ]; then exit 0; fi\n\
+             echo 'gh: Not Found (HTTP 404)' >&2\n\
+             exit 1\n",
+        );
+        let gh = GitHub::with_bins(fake, "git");
+        let err = gh
+            .run_gh(&["api", "repos/owner/missing"], None)
+            .expect_err("a 404 must fail");
+        match err {
+            // Verbatim — no prefix, no rewrite (CLAUDE.md fail-loud).
+            StageError::GhFailed(msg) => assert_eq!(msg, "gh: Not Found (HTTP 404)"),
+            other => panic!("expected GhFailed, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_json_parse_failure_is_loud() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = write_script(
+            dir.path(),
+            "gh",
+            "#!/usr/bin/env bash\n\
+             if [ \"$1\" = auth ] && [ \"$2\" = status ]; then exit 0; fi\n\
+             echo 'this is not json'\n\
+             exit 0\n",
+        );
+        let gh = GitHub::with_bins(fake, "git");
+        let err = gh
+            .run_gh_json::<GitHubUser>(&["api", "user"], None)
+            .expect_err("non-JSON must fail");
+        match err {
+            StageError::Invalid(msg) => assert!(msg.contains("Couldn't parse"), "{msg}"),
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    // ---- git transport: push/fetch over the user's own credentials --------
+
+    /// A repo with one commit and a bare "remote" alongside it. Returns the
+    /// working repo path; `origin` points at the bare repo (no network).
+    fn repo_with_bare_remote(base: &Path) -> PathBuf {
+        let remote = base.join("remote.git");
+        git(base, &["init", "-q", "--bare", remote.to_str().unwrap()]);
+
+        let work = base.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        git(&work, &["init", "-q", "-b", "main"]);
+        std::fs::write(work.join("README.md"), "hi\n").unwrap();
+        git(&work, &["add", "."]);
+        git(
+            &work,
+            &[
+                "-c",
+                "user.email=t@e.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ],
+        );
+        git(
+            &work,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        work
+    }
+
+    #[test]
+    fn git_push_then_fetch_succeed_against_a_bare_remote() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = repo_with_bare_remote(tmp.path());
+        let gh = GitHub::new();
+
+        gh.git_push(&work, "origin", "main")
+            .expect("push to bare remote");
+        // A no-op repeat push still exits 0 — re-publish is idempotent.
+        gh.git_push(&work, "origin", "main")
+            .expect("idempotent re-push");
+        gh.git_fetch(&work, "origin")
+            .expect("fetch from bare remote");
+    }
+
+    #[test]
+    fn git_push_failure_surfaces_git_stderr() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = repo_with_bare_remote(tmp.path());
+        let gh = GitHub::new();
+
+        let err = gh
+            .git_push(&work, "no-such-remote", "main")
+            .expect_err("pushing to an undefined remote must fail");
+        match err {
+            StageError::GitCli(msg) => {
+                assert!(!msg.is_empty(), "carries git's stderr");
+                assert!(
+                    msg.contains("no-such-remote"),
+                    "names the bad remote: {msg}"
+                );
+            }
+            other => panic!("expected GitCli, got {other:?}"),
+        }
+    }
+}
