@@ -256,6 +256,16 @@ pub fn run() {
             commands::self_review_note_resolve,
             commands::self_review_note_reopen,
             commands::self_review_note_delete,
+            commands::review_draft_get,
+            commands::review_draft_create,
+            commands::review_draft_set_title,
+            commands::review_draft_discard,
+            commands::storyline_steps,
+            commands::storyline_step_add,
+            commands::storyline_step_edit,
+            commands::storyline_step_remove,
+            commands::storyline_steps_reorder,
+            commands::storyline_preview,
             #[cfg(debug_assertions)]
             activity_log::activity_log_snapshot,
             #[cfg(debug_assertions)]

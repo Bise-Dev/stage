@@ -6,7 +6,8 @@ use tauri::{AppHandle, Manager, State};
 
 use stage_core::diff::{default_base, DiffLineIndex};
 use stage_core::{
-    repo_key_from_cwd, Debrief, NoteAnchor, NoteStatus, SelfReviewNote, SelfReviewNoteView, Store,
+    repo_key_from_cwd, Debrief, NoteAnchor, NoteStatus, Review, SelfReviewNote, SelfReviewNoteView,
+    Store, StorylinePreview, StorylineStep,
 };
 
 use crate::api;
@@ -1051,4 +1052,158 @@ pub fn self_review_note_delete(state: State<'_, AppState>, id: String) -> Result
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
     Ok(store.delete_note(&key, &id)?)
+}
+
+// --- Draft Review + storyline (local, no auth — ADR-0022 §1/§3, milestone B) -
+//
+// The author's local, pre-publish storyline lives entirely in the SQLite store,
+// keyed by the active repo + branch (same `repo_key_from_cwd` keying the Debrief
+// commands use). No `gh`, no network, no sign-in (ID-3 #56): `gh` is only invoked
+// when a GitHub action is taken (Publish, milestone D). Single-writer (ADR-0022
+// §2): the store is the only home for a pre-publish storyline, so composing
+// requires the Ready-to-share draft to exist — these commands fail loud (the
+// `StageError` message surfaces verbatim in the client banner) rather than
+// inventing one.
+
+/// The draft Review for the active repo + branch, or `None` if "Ready to share"
+/// hasn't been triggered on this machine for this branch (WS-2 #60).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn review_draft_get(state: State<'_, AppState>) -> Result<Option<Review>, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.get_review_draft(&key)?)
+}
+
+/// The **Ready to share** transition (WS-2 #60): create the per-machine draft
+/// Review for the active repo + branch. `base_ref` is the comparison/PR-target
+/// branch (the picker seeds it from `self_review_base_options`). Fails loud if a
+/// draft already exists — "Ready to share" is one-time, not an upsert.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn review_draft_create(
+    state: State<'_, AppState>,
+    title: String,
+    base_ref: String,
+) -> Result<Review, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.create_review_draft(&key, &title, &base_ref)?)
+}
+
+/// Rename the draft Review (WS-3 #61) — the human-readable title only. Fails loud
+/// if no draft exists.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn review_draft_set_title(
+    state: State<'_, AppState>,
+    title: String,
+) -> Result<Review, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.set_review_title(&key, &title)?)
+}
+
+/// Discard the draft Review (GAP-1 #91): pre-publish only — deletes the draft row
+/// and its storyline steps cascade out of view. Idempotent (returns whether a row
+/// was removed). An *open PR* is closed/merged on GitHub, never "discarded".
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn review_draft_discard(state: State<'_, AppState>) -> Result<bool, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.discard_review_draft(&key)?)
+}
+
+/// The draft storyline steps for the active repo + branch, in author order
+/// (SL-1 #65). Empty when nothing has been composed yet.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn storyline_steps(state: State<'_, AppState>) -> Result<Vec<StorylineStep>, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.list_storyline_steps(&key)?)
+}
+
+/// Compose a step (SL-1 #65 / SL-2 #66): append a step anchored to `anchor` with
+/// `intro` (markdown) and an optional `title`. Fails loud if `anchor` isn't a file
+/// in the committed diff, if a step already anchors it, or if there's no draft.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn storyline_step_add(
+    state: State<'_, AppState>,
+    anchor: String,
+    title: Option<String>,
+    intro: String,
+) -> Result<StorylineStep, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(stage_core::storyline::add_step(
+        &store,
+        &path,
+        &key,
+        &anchor,
+        title.as_deref(),
+        &intro,
+    )?)
+}
+
+/// Edit a step's `title` and `intro` (SL-2 #66 / SL-3 #67). `title: null` clears
+/// the heading. The anchor and order are untouched. Fails loud on an unknown id.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn storyline_step_edit(
+    state: State<'_, AppState>,
+    id: String,
+    title: Option<String>,
+    intro: String,
+) -> Result<StorylineStep, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.edit_storyline_step(&key, &id, title.as_deref(), &intro)?)
+}
+
+/// Remove a step from the draft storyline (SL-3 #67). Fails loud on an unknown id.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn storyline_step_remove(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.remove_storyline_step(&key, &id)?)
+}
+
+/// Reorder the draft storyline to exactly `ordered_ids` (SL-3 #67). Fails loud
+/// unless the list is a permutation of the current step ids (no silent drop).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn storyline_steps_reorder(
+    state: State<'_, AppState>,
+    ordered_ids: Vec<String>,
+) -> Result<Vec<StorylineStep>, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(store.reorder_storyline_steps(&key, &ordered_ids)?)
+}
+
+/// The author-side local storyline **preview** (SL-4 #68 author side + GAP-4
+/// #94): the full committed tree-to-tree diff, the ordered steps (each with a
+/// computed `stale` flag), and the un-anchored diff paths still reachable as an
+/// overlay. All derived state is computed in Rust (ADR-0022 §7). Fails loud if
+/// there's no Ready-to-share draft.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn storyline_preview(state: State<'_, AppState>) -> Result<StorylinePreview, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(stage_core::storyline::preview(&store, &path, &key)?)
 }

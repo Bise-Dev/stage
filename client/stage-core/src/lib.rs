@@ -15,6 +15,7 @@ pub mod github;
 pub mod repo_key;
 pub mod review_folder;
 pub mod store;
+pub mod storyline;
 pub mod worktree;
 
 pub use base::{base_options, BaseOptions, LocalDefault};
@@ -31,4 +32,8 @@ pub use review_folder::{
     write_review, ReviewMeta, ReviewStep, StageReview,
 };
 pub use store::{default_store_path, Store, STORE_PATH_ENV};
+pub use storyline::{
+    add_step, assemble_preview, committed_diff_file_set, preview, StorylinePreview, StorylineStep,
+    StorylineStepView,
+};
 pub use worktree::{list_worktrees, repo_common_dir, WorktreeInfo};
