@@ -1,13 +1,37 @@
 ---
 name: self-review-debrief
-description: Author and revise a Stage Debrief — an agent's reviewable account of its own branch work — and read the author's Review notes back. Use after you (the agent) have made code changes the author will review locally in Stage, or when the author asks you to "update the debrief", "address the review notes", or "write a self-review debrief".
+description: Author and revise a Stage Debrief — an agent's reviewable account of its own branch work — and read the author's Review notes back. Use after you (the agent) have made code changes the author will review locally in Stage, or when the author asks you to "update the debrief", "address the review notes", or "write a self-review debrief". Intros and note replies are written terse (caveman-compressed) for fast review; full technical accuracy is preserved.
 ---
 
 # Self-Review Debrief
 
-You just changed code on a branch. This skill produces a **Debrief**: an ordered, per-file account of *what you did and why*, written for the **author** to review locally inside Stage's Self-Review screen. The author leaves **Review notes** anchored to the diff; you read them back, fix the code, reply, and regenerate the Debrief. That is the local author↔agent loop (ADR-0011, `CONTEXT.md` → **Debrief**, **Review note**).
+You just changed code on a branch. This skill produces a **Debrief**: an ordered, per-file account of *what you did and why*, written for the **author** to review locally inside Stage's Self-Review screen. The author leaves **Review notes** — feedback anchored to specific diff lines; you read them back, fix the code, reply, and regenerate the Debrief. That is the local author↔agent loop.
 
-It is **local and auth-free**: no network, no tokens. You write through the `stage` CLI into a SQLite store the desktop app shares. The author never sees raw JSON — they see your intros and notes in the app.
+It is **local and auth-free**: no network, no tokens. You write through the `stage` CLI into a local store the Stage app reads. The author never sees raw JSON — they see your intros and notes in the app.
+
+## Caveman voice
+
+Intros and note replies are the wordy part of a Debrief. Write them **terse, like a smart caveman**: all technical substance stays, only fluff dies. Author reads dense + fast, not prose. This is the *content* style — workflow steps below stay as written.
+
+**Drop:** articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/happy to/of course), hedging. Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Abbreviate common terms (DB/auth/config/req/res/fn/impl). Strip needless conjunctions. Arrows for causality (`X -> Y`). One word when one word enough.
+
+**Keep exact:** technical terms, file + symbol names, code blocks (unchanged), error strings (quoted verbatim). Brevity never costs accuracy.
+
+Pattern: `[thing] [action] [reason]. [next step / watch-out].` Markdown still fine — short heading + terse lines beats a wall of text.
+
+> # Parser extract
+> Split `parse()` out of `Loader` -> testable alone. Caller unchanged.
+> Watch: error path now returns `Err`, not panic. See `load_test.rs`.
+
+Not: "I refactored the loader by extracting the parsing logic into its own function so that it can be tested independently. The caller remains unchanged. Please note that…"
+
+**Caveman off** — write full prose — when terseness risks misread:
+
+- security / credential / data-exposure implications
+- irreversible or destructive changes (migrations, deletes, drops, force-pushes)
+- multi-step sequences where fragment order could be read wrong
+
+Resume terse after the part that needs care.
 
 ## Locating the `stage` binary
 
@@ -58,7 +82,7 @@ Write a fresh Debrief over your Base-scope changes.
 
    Output: `{ "base": "main", "files": [{ "file": "...", "status": "...", "additions": N, "deletions": N }] }`. Pass `--base <branch>` to diff against something other than the repo's default branch.
 
-2. **Author an intro per file.** For each file you want the author to review, write a short **markdown** intro in *your own voice* — what you changed in that file and why, decisions and trade-offs, anything the author should scrutinise. This is the value of the Debrief; don't just restate the diff. Skip files that are pure noise (lockfiles, generated output) if they add nothing to the review.
+2. **Author an intro per file.** For each file you want the author to review, write a short **markdown** intro in the [Caveman voice](#caveman-voice) — what you changed in that file and why, decisions and trade-offs, anything the author should scrutinise. This is the value of the Debrief; don't just restate the diff. Skip files that are pure noise (lockfiles, generated output) if they add nothing to the review.
 
 3. **Build the payload and store it.** The `set` command reads one JSON document from stdin:
 
@@ -66,8 +90,8 @@ Write a fresh Debrief over your Base-scope changes.
    {
      "base": "main",
      "steps": [
-       { "file": "client/src/foo.ts", "intro": "# Refactor\nExtracted the parser so…", "order": 0 },
-       { "file": "client/src/bar.ts", "intro": "Thread the new option through…" }
+       { "file": "client/src/foo.ts", "intro": "# Refactor\nExtracted parser -> testable alone. Caller unchanged.", "order": 0 },
+       { "file": "client/src/bar.ts", "intro": "Thread new `opt` through -> callers pass `None` by default." }
      ]
    }
    ```
@@ -84,7 +108,7 @@ Write a fresh Debrief over your Base-scope changes.
 
    On success `set` echoes the stored Debrief (with `createdAt`/`updatedAt`). `set` **replaces** the whole Debrief each time — it is the full current account, not an append. Regenerating preserves `createdAt`.
 
-4. **Open Stage at the Debrief.** Surface the fresh Debrief in the desktop app's Self-Review screen for the author (ADR-0014):
+4. **Open Stage at the Debrief.** Surface the fresh Debrief in the desktop app's Self-Review screen for the author:
 
    ```sh
    "$BIN" open
@@ -112,12 +136,12 @@ The author left Review notes. Each note is feedback anchored to a diff location:
 
 For **each** open note:
 
-1. **Read it** — `body` is the ask; `anchor.file` (+ optional `lineStart`/`lineEnd`) is where. `outdated: true` means the anchored file is no longer in the current diff (the **Stale step** pattern) — the feedback may be obsolete or the file was reverted; use judgement and say so in your reply.
+1. **Read it** — `body` is the ask; `anchor.file` (+ optional `lineStart`/`lineEnd`) is where. `outdated: true` means the anchored file is no longer in the current diff — the feedback may be obsolete or the file was reverted; use judgement and say so in your reply.
 2. **Fix the code** to satisfy the note. Make the actual change.
-3. **Record it** — mark the note addressed with a reply describing *how* you handled it:
+3. **Record it** — mark the note addressed with a reply describing *how* you handled it, in the [Caveman voice](#caveman-voice) (terse; full prose for the security/destructive/sequencing exceptions):
 
    ```sh
-   "$BIN" self-review address <id> --reply "Hoisted the regex to a module constant."
+   "$BIN" self-review address <id> --reply "Hoisted regex -> module const. One alloc, not per-call."
    ```
 
    `address` moves the note `open → addressed`. It **fails loud** on an unknown id or a note the author already `resolved` (you cannot re-address a resolved note). It does not resolve the note — only the author closes it (`resolved`) or reopens it.
@@ -128,18 +152,20 @@ After every open note is addressed, **regenerate the Debrief** so it reflects th
 
 - **Never invent files.** Only reference paths from `self-review files`. The CLI rejects a `set` whose steps name files absent from the Base diff, naming the offenders — this is intentional (the author must never be shown a step for a file they aren't reviewing). If a path is rejected, re-run `files` and reconcile; do not work around it.
 - **Fail loud, don't paper over.** Every command prints its error to stderr and exits non-zero (per `CLAUDE.md`). If a command fails, read the message and fix the cause — don't retry blindly or fabricate output.
-- **Intros are your commentary, in markdown.** Write for a human reviewer who can already see the diff: explain intent and decisions, not line-by-line restatement.
+- **Intros + replies are terse caveman markdown.** Write for a human who can already see the diff: intent and decisions, not line-by-line restatement. Drop fluff, keep every technical fact exact (see [Caveman voice](#caveman-voice)). Switch to full prose for security, destructive, or order-sensitive notes.
 - **The Debrief is whole, not incremental.** `set` overwrites. Always send the complete current set of steps.
 - **You only ever set status to `addressed`.** `resolved`/reopen are the author's actions in the app. Don't assume a note is done because you replied.
 
 ## Command reference
 
-| Command | Purpose |
-|---|---|
-| `self-review files [--base <b>]` | List Base-scope diff files (Debrief candidates) as JSON. |
-| `self-review set` | Read a Debrief JSON doc from stdin and store it (validates every file). |
-| `self-review show` | Print the stored Debrief as JSON, or `null`. |
-| `self-review clear` | Delete the stored Debrief. |
-| `self-review notes [--status open\|addressed\|resolved]` | List Review notes as JSON, each with computed `outdated`. |
-| `self-review address <id> --reply "…"` | Mark a note `addressed` with your reply. |
-| `open` | Open/focus the Stage desktop app in Self-Review for the current repo (ADR-0014). Run after every successful `set`; non-fatal if it fails. |
+Every command reads the repo + current branch from your **CWD** and fails loud on error (message to stderr, non-zero exit). The third column is the per-command contract — preconditions and the specific ways it fails.
+
+| Command | Purpose | Contract — preconditions & failure |
+|---|---|---|
+| `self-review files [--base <b>]` | List Base-scope diff files (Debrief candidates) as JSON. | Output: `{ base, files[] }`. `--base` overrides the diff target (default = repo's default branch). These files are the **only** ones a Debrief may reference. |
+| `self-review set` | Read a Debrief JSON doc from stdin and store it. | **Rejects** (non-zero exit, names the offenders) any `steps[].file` not present in `files`. **Replaces** the whole Debrief — not append. A raw newline in the doc is invalid JSON → write to a file, then pipe. Preserves `createdAt` across regenerates. |
+| `self-review show` | Print the stored Debrief as JSON, or `null`. | Prints `null` (not an error) when no Debrief is stored. |
+| `self-review clear` | Delete the stored Debrief. | Removes the stored Debrief for the current `(repo, branch)`. |
+| `self-review notes [--status open\|addressed\|resolved]` | List Review notes as JSON, each with computed `outdated`. | Optional `--status` filter. `outdated: true` = the note's anchored file has left the diff. |
+| `self-review address <id> --reply "…"` | Mark a note `addressed` with your reply. | **Fails** on an unknown `<id>` or a note the author already `resolved`. Moves `open → addressed` only — `resolved`/reopen are author-only actions in the app. |
+| `open` | Open/focus the Stage desktop app in Self-Review for the current repo. Run after every successful `set`. | **Non-fatal**: on failure (e.g. GUI not installed) it prints the reason to stderr and exits non-zero, but the Debrief is already stored — don't treat the run as failed. |
