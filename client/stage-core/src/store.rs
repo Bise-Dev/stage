@@ -497,6 +497,15 @@ impl Store {
     /// (idempotent, like [`Store::clear_debrief`]). An *open PR* is closed/merged
     /// on GitHub, never "discarded".
     pub fn discard_review_draft(&self, key: &RepoKey) -> Result<bool, StageError> {
+        // Cascade the draft's storyline steps (milestone B) — there's no SQL
+        // foreign key (the link is code-enforced, like note↔reply), so delete
+        // them explicitly. Without this, discard-then-recreate on the same
+        // (repo, branch) would resurrect the old, orphaned steps.
+        self.conn.execute(
+            "DELETE FROM review_draft_step \
+             WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
+            params![key.repo_owner, key.repo_name, key.branch],
+        )?;
         let removed = self.conn.execute(
             "DELETE FROM review_draft WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
             params![key.repo_owner, key.repo_name, key.branch],
@@ -1408,7 +1417,10 @@ mod tests {
             .reorder_storyline_steps(&k, &[c.id.clone(), b.id.clone(), a.id.clone()])
             .unwrap();
         assert_eq!(
-            reordered.iter().map(|s| s.anchor.as_str()).collect::<Vec<_>>(),
+            reordered
+                .iter()
+                .map(|s| s.anchor.as_str())
+                .collect::<Vec<_>>(),
             vec!["c.rs", "b.rs", "a.rs"],
         );
         // Order indices are compacted to 0,1,2.
@@ -1455,9 +1467,7 @@ mod tests {
         let store = Store::open(&dir.path().join("h.sqlite3")).unwrap();
         let k = key();
         assert!(store.get_review_draft(&k).unwrap().is_none());
-        let err = store
-            .add_storyline_step(&k, "a.rs", None, "x")
-            .unwrap_err();
+        let err = store.add_storyline_step(&k, "a.rs", None, "x").unwrap_err();
         assert!(err.to_string().contains("Ready to share"), "{err}");
         // …and with no draft there are simply no steps (not an error).
         assert!(store.list_storyline_steps(&k).unwrap().is_empty());
@@ -1475,7 +1485,9 @@ mod tests {
         assert!(err.to_string().contains("already has a step"), "{err}");
 
         // Edit / remove on an unknown id fail loud, never silently no-op.
-        assert!(store.edit_storyline_step(&k, "st_ghost", None, "x").is_err());
+        assert!(store
+            .edit_storyline_step(&k, "st_ghost", None, "x")
+            .is_err());
         assert!(store.remove_storyline_step(&k, "st_ghost").is_err());
         assert!(store.get_storyline_step(&k, "st_ghost").unwrap().is_none());
     }
@@ -1498,9 +1510,29 @@ mod tests {
         // The other branch's draft has its own (empty) storyline; the same anchor
         // is free there (one-step-per-file is per-branch, not global).
         assert!(store.list_storyline_steps(&other).unwrap().is_empty());
-        store.add_storyline_step(&other, "a.rs", None, "a on main").unwrap();
+        store
+            .add_storyline_step(&other, "a.rs", None, "a on main")
+            .unwrap();
         assert_eq!(store.list_storyline_steps(&k).unwrap().len(), 1);
         assert_eq!(store.list_storyline_steps(&other).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn discarding_a_draft_cascades_its_storyline_steps() {
+        let (_dir, store, k) = store_with_draft();
+        store.add_storyline_step(&k, "a.rs", None, "a").unwrap();
+        store.add_storyline_step(&k, "b.rs", None, "b").unwrap();
+        assert_eq!(store.list_storyline_steps(&k).unwrap().len(), 2);
+
+        // Discard removes the draft AND its steps — no orphans survive.
+        assert!(store.discard_review_draft(&k).unwrap());
+        assert!(store.list_storyline_steps(&k).unwrap().is_empty());
+
+        // Re-entering Ready-to-share starts from a clean storyline, not the old steps.
+        store
+            .create_review_draft(&k, "again", "origin/main")
+            .unwrap();
+        assert!(store.list_storyline_steps(&k).unwrap().is_empty());
     }
 
     #[test]

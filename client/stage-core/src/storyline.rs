@@ -203,7 +203,11 @@ pub fn add_step(
 /// Build the author preview (SL-4 + GAP-4) for `key`'s draft storyline: list the
 /// draft steps, compute the full committed diff against the draft's base, and
 /// assemble the overlay. Fails loud if there is no Ready-to-share draft.
-pub fn preview(store: &Store, repo_root: &Path, key: &RepoKey) -> Result<StorylinePreview, StageError> {
+pub fn preview(
+    store: &Store,
+    repo_root: &Path,
+    key: &RepoKey,
+) -> Result<StorylinePreview, StageError> {
     let draft = store.get_review_draft(key)?.ok_or_else(|| {
         StageError::Invalid(format!(
             "no storyline draft for branch '{}' — mark the change Ready to share first",
@@ -271,7 +275,11 @@ mod tests {
 
         // Steps come back in author order.
         assert_eq!(
-            preview.steps.iter().map(|s| s.step.anchor.as_str()).collect::<Vec<_>>(),
+            preview
+                .steps
+                .iter()
+                .map(|s| s.step.anchor.as_str())
+                .collect::<Vec<_>>(),
             vec!["a.rs", "c.rs"],
         );
         // No step is stale — both anchors are in the diff.
@@ -299,9 +307,20 @@ mod tests {
 
         let preview = assemble_preview(diff, steps);
 
-        let gone = preview.steps.iter().find(|s| s.step.anchor == "gone.rs").unwrap();
-        assert!(gone.stale, "a step anchoring a dropped file must be flagged stale");
-        let live = preview.steps.iter().find(|s| s.step.anchor == "a.rs").unwrap();
+        let gone = preview
+            .steps
+            .iter()
+            .find(|s| s.step.anchor == "gone.rs")
+            .unwrap();
+        assert!(
+            gone.stale,
+            "a step anchoring a dropped file must be flagged stale"
+        );
+        let live = preview
+            .steps
+            .iter()
+            .find(|s| s.step.anchor == "a.rs")
+            .unwrap();
         assert!(!live.stale);
         // A stale step doesn't consume a diff file: `a.rs` is anchored, so the
         // only diff file is storied and nothing is left unstoried.
