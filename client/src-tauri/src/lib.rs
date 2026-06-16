@@ -194,6 +194,9 @@ pub fn run() {
                 recents: Arc::new(recents),
                 sessions: Arc::new(sessions),
                 api: api_client,
+                // Shared credential-free GitHub adapter (ADR-0022 §5): its `gh`
+                // auth gate + identity resolve once and are reused by the dashboard.
+                github: stage_core::GitHub::new(),
                 auth: Mutex::new(initial_token.map(|token| AuthSession { token })),
                 auth_in_flight: Mutex::new(None),
                 github_app_client_id,
@@ -221,6 +224,8 @@ pub fn run() {
             commands::self_review_diff,
             commands::self_review_base_options,
             commands::repo_overview,
+            commands::dashboard_overview,
+            commands::storyline_staleness,
             commands::workspace_create,
             commands::workspace_update,
             commands::workspace_publish,

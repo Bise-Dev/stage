@@ -739,6 +739,37 @@ impl Store {
             .optional()?;
         Ok(id)
     }
+
+    /// Every pre-publish draft Review in `(repo_owner, repo_name)`, newest first.
+    /// This is the local-store half of the dashboard scan (DB-1 #84): one row per
+    /// branch the author hit "Ready to share" on, *on this machine* (drafts are
+    /// strictly per-machine — ADR-0022 §3). Unlike [`Store::get_review_draft`]
+    /// this spans branches, so the dashboard sees every in-progress Review at once.
+    pub fn list_review_drafts(
+        &self,
+        repo_owner: &str,
+        repo_name: &str,
+    ) -> Result<Vec<Review>, StageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT title, base_ref, head_ref, pr_number, created_at, updated_at \
+             FROM review_draft \
+             WHERE repo_owner = ?1 AND repo_name = ?2 \
+             ORDER BY updated_at DESC",
+        )?;
+        let drafts = stmt
+            .query_map(params![repo_owner, repo_name], |r| {
+                Ok(Review {
+                    title: r.get(0)?,
+                    base_ref: r.get(1)?,
+                    head_ref: r.get(2)?,
+                    pr_number: r.get(3)?,
+                    created_at: r.get(4)?,
+                    updated_at: r.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(drafts)
+    }
 }
 
 /// Map a `review_note` row to a [`SelfReviewNote`] **without** its thread — callers
@@ -1299,6 +1330,43 @@ mod tests {
 
         // Renaming a discarded (absent) draft fails loud.
         assert!(store.set_review_title(&k, "ghost").is_err());
+    }
+
+    #[test]
+    fn list_review_drafts_is_scoped_to_the_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("drafts.sqlite3")).unwrap();
+        let mk = |repo: &str, branch: &str| RepoKey {
+            repo_owner: "octo".into(),
+            repo_name: repo.into(),
+            branch: branch.into(),
+        };
+        let a = mk("stage", "feat/a");
+        let b = mk("stage", "feat/b");
+        let elsewhere = mk("other", "feat/c");
+
+        // No drafts yet → an empty list, never an error (the dashboard scan of a
+        // repo with no in-progress Reviews is a normal, quiet result).
+        assert!(store
+            .list_review_drafts("octo", "stage")
+            .unwrap()
+            .is_empty());
+
+        store.create_review_draft(&a, "A", "origin/main").unwrap();
+        store.create_review_draft(&b, "B", "origin/main").unwrap();
+        store
+            .create_review_draft(&elsewhere, "C", "origin/main")
+            .unwrap();
+
+        let drafts = store.list_review_drafts("octo", "stage").unwrap();
+        // Scoped to the (owner, repo): the other repo's draft is excluded.
+        assert_eq!(drafts.len(), 2, "only (octo, stage) drafts");
+        let branches: std::collections::HashSet<&str> =
+            drafts.iter().map(|d| d.head_ref.as_str()).collect();
+        assert_eq!(
+            branches,
+            std::collections::HashSet::from(["feat/a", "feat/b"]),
+        );
     }
 
     #[test]

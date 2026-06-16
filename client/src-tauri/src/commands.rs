@@ -328,6 +328,74 @@ pub async fn repo_overview(
     Ok(rows)
 }
 
+/// The local-first per-repo dashboard (DB-1..5 #84–88, ADR-0022 §6/§7): the
+/// local-store draft scan merged with a `gh` PR search, every row's state derived
+/// in Rust (TS only renders). The local-first replacement for `repo_overview` —
+/// the repo + identity come from the active repo and the user's own `gh`, so
+/// there are no owner/repo args. `include_archived` flips the DB-5 view filter.
+/// Sync: it shells out to `gh`/`git` like the other stage-core commands (Tauri
+/// runs it on a worker; the webview shows a spinner).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn dashboard_overview(
+    state: State<'_, AppState>,
+    include_archived: bool,
+) -> Result<stage_core::DashboardView, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    let view =
+        stage_core::assemble_dashboard(&store, &state.github, &repo_root, &key, include_archived)?;
+    Ok(view)
+}
+
+/// The unified storyline-staleness check (ST-1 #89) for the active repo+branch:
+/// each step's anchor vs. the current committed diff, with a per-step reason.
+/// Resolves the Review from the committed `.stage/<branch>/` once published, else
+/// the pre-publish draft + its Debrief steps; an empty list means there is no
+/// storyline to check. Computed in Rust — nothing auto-fixes (ADR-0022 §7).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn storyline_staleness(
+    state: State<'_, AppState>,
+) -> Result<Vec<stage_core::StepStaleness>, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+
+    // The committed `.stage/<branch>/` folder is authoritative once published;
+    // before publish, fall back to the draft + its Debrief steps. No Review for
+    // this branch → nothing to check (an empty list, not a failure).
+    let resolved = if let Some((_, review)) = stage_core::find_review(&repo_root, &key.branch)? {
+        let anchors = review
+            .steps
+            .into_iter()
+            .map(|s| s.anchor)
+            .collect::<Vec<_>>();
+        Some((review.meta.base_ref, review.meta.head_ref, anchors))
+    } else {
+        let store = Store::open_default()?;
+        match store.get_review_draft(&key)? {
+            Some(draft) => {
+                let anchors = store
+                    .get_debrief(&key)?
+                    .map(|d| d.steps.into_iter().map(|s| s.file).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                Some((draft.base_ref, draft.head_ref, anchors))
+            }
+            None => None,
+        }
+    };
+
+    let Some((base_ref, head_ref, anchors)) = resolved else {
+        return Ok(Vec::new());
+    };
+    Ok(stage_core::assess_step_staleness(
+        &repo_root, &base_ref, &head_ref, &anchors,
+    )?)
+}
+
 #[tauri::command]
 // `pill = "cmd"` tags this span so the dev Activity-log layer records one row
 // per invocation with its duration (debug builds only). `skip_all` keeps the

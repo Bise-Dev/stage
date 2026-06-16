@@ -106,6 +106,7 @@ export function Workspaces({
   onStartSelfReview,
   onOpenStoryline,
   onOpenReview,
+  onOpenDashboard,
   onOpenSettings,
   onSignOut,
 }: {
@@ -114,6 +115,7 @@ export function Workspaces({
   onStartSelfReview: () => void;
   onOpenStoryline: (ctx: StorylineCtx) => void;
   onOpenReview: (ctx: ReviewCtx) => void;
+  onOpenDashboard: () => void;
   onOpenSettings: () => void;
   onSignOut: () => void;
 }) {
@@ -456,7 +458,21 @@ export function Workspaces({
   return (
     <div className="stage">
       <div className="win">
-        <TitleBar title="Stage" />
+        <TitleBar
+          title="Stage"
+          right={
+            <button
+              type="button"
+              className="btn"
+              onClick={onOpenDashboard}
+              title="Open the local-first dashboard"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            >
+              <Icon name="doc-stack" size={12} />
+              Dashboard
+            </button>
+          }
+        />
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           {/* Left filter rail */}
           <div
