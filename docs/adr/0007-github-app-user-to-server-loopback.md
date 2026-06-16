@@ -2,11 +2,11 @@
 
 **Status:** accepted
 **Date:** 2026-05-26
-**Supersedes:** ADR-0005
+**Supersedes:** ADR-0021
 
 ## Context
 
-The previous auth design (ADR-0005 + OAuth App device flow) had two GitHub identities running side-by-side: an OAuth App user-token that the backend used once to identify the user and then discarded, and a single `GITHUB_ADMIN_PAT` that did every GitHub-proxy action under one bot identity. Every PR comment, merge, label, or reviewer-request via Stage was attributed to that bot — not to the signed-in user.
+The previous auth design (ADR-0021 + OAuth App device flow) had two GitHub identities running side-by-side: an OAuth App user-token that the backend used once to identify the user and then discarded, and a single `GITHUB_ADMIN_PAT` that did every GitHub-proxy action under one bot identity. Every PR comment, merge, label, or reviewer-request via Stage was attributed to that bot — not to the signed-in user.
 
 ADR-0001 had promised "GitHub OAuth tokens are held exclusively by the Stage Backend"; in practice the tokens were thrown away and a PAT did the work.
 
@@ -43,7 +43,7 @@ Stage adopts a **single GitHub App** with **user-to-server tokens** as the ident
 
 ## Reference
 
-- Spec: `docs/superpowers/specs/2026-05-26-github-app-auth-redesign-design.md`.
+- The GitHub-App auth redesign spec — preserved in git history.
 - [GitHub Apps user-to-server tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app).
 - [RFC 8252 §7.3](https://datatracker.ietf.org/doc/html/rfc8252#section-7.3).
 - [`cli/oauth`](https://github.com/cli/oauth) (reference loopback + device-flow impl).

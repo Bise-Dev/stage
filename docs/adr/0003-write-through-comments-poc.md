@@ -5,7 +5,7 @@
 
 ## Context
 
-A natural design would have the Stage backend persist `DraftReview` / `DraftComment` tables so reviewers can compose an offline batch of comments before submitting. Earlier spec versions (preserved under `docs/history/specs/v2-design.md` §5.6 with corresponding plan tasks) described exactly this — a `category` enum, draft tables, a `publish-all` endpoint that flushes them into a github review.
+A natural design would have the Stage backend persist `DraftReview` / `DraftComment` tables so reviewers can compose an offline batch of comments before submitting. Earlier spec versions (preserved in git history) described exactly this — a `category` enum, draft tables, a `publish-all` endpoint that flushes them into a github review.
 
 That design has a real cost in the POC: it duplicates state github already provides natively (github's own "pending review" works the same way), the `category` field never makes it onto github, and a non-Stage reviewer (the most common case for an open-source repo) sees none of it.
 
@@ -13,7 +13,7 @@ That design has a real cost in the POC: it duplicates state github already provi
 
 For the POC, the Stage backend does **not** store a `DraftReview` / `DraftComment` / `Comment` entity. The Local Client holds the pre-publish draft queue. When the user submits, the client posts to a Stage backend endpoint that **immediately** writes through to github as native github review activity and returns the github response.
 
-Concretely, the backend exposes these PR-anchored write endpoints (see `docs/api.md` for full shapes):
+Concretely, the backend exposes these PR-anchored write endpoints (shapes live in the backend code; run `just generate-schema` for an OpenAPI dump):
 
 - `POST /api/v1/repos/<o>/<r>/pulls/<n>/comments/create/` — single issue or review comment
 - `POST /api/v1/repos/<o>/<r>/pulls/<n>/review/create/` — batched review submission (multiple comments at once)

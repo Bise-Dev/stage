@@ -1,4 +1,4 @@
-# ADR-0005 · Local Client SDK hand-rolls the device-flow vocabulary
+# ADR-0021 · Local Client SDK hand-rolls the device-flow vocabulary
 
 **Status:** superseded by [ADR-0007](./0007-github-app-user-to-server-loopback.md) (2026-05-26)
 **Date:** 2026-05-24
@@ -50,4 +50,4 @@ It does **not** pull in any of the surveyed OAuth crates.
 
 ## Reference
 
-`docs/superpowers/specs/2026-05-24-backend-client-seam-design.md` § 6 contains the full crate survey table that backs this decision.
+The backend↔client seam design (§ crate survey) contains the full crate survey table that backs this decision; preserved in git history.

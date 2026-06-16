@@ -10,7 +10,7 @@ The Local Client SDK (`client/src-tauri/src/api/`) implements the four `/api/v1/
 1. **Who holds the Stage session token between calls?** The SDK could cache it internally (one auth, then implicit on every later call), or stay stateless (caller passes `token: &str` per authed call).
 2. **Who drives the device-flow poll loop?** The SDK could expose a single `await`-able method that loops internally until terminal, or expose one-shot `device_poll(&device_code)` and let the caller drive the cadence.
 
-ADR-0001 establishes the three-tier topology and the rule that the Local Client has no GitHub credentials. The Stage session token is the only auth secret the client ever holds, and per `docs/design.md` § 7 it is long-lived (no auto-expiry) until user-initiated logout. ADR-0005 explains why the SDK hand-rolls the device-flow vocabulary instead of importing `oauth2-rs`. This ADR sits below ADR-0005 in the dependency order: now that we own the device-flow code, *how does it shape its public surface*?
+ADR-0001 establishes the three-tier topology and the rule that the Local Client has no GitHub credentials. The Stage session token is the only auth secret the client ever holds, and per ADR-0008 it is long-lived (no auto-expiry) until user-initiated logout. ADR-0021 explains why the SDK hand-rolls the device-flow vocabulary instead of importing `oauth2-rs`. This ADR sits below ADR-0021 in the dependency order: now that we own the device-flow code, *how does it shape its public surface*?
 
 ## Decision
 
@@ -46,7 +46,7 @@ The SDK is **stateless on the session token** and **does not own the device-flow
 
 ## Reference
 
-- `docs/superpowers/specs/2026-05-24-backend-client-seam-design.md` § 2 (Public API surface) + § 3 (Caller-owned polling loop) — the inline rationale this ADR canonicalises.
+- The backend↔client seam design (§ Public API surface, § Caller-owned polling loop) — the inline rationale this ADR canonicalises; preserved in git history.
 - ADR-0001 (three-tier topology) — establishes the no-GitHub-credentials-on-client rule that motivates the Stage session token's central role.
-- ADR-0005 (SDK hand-rolls device-flow vocabulary) — predecessor; explains why we own the device-flow code at all.
-- `docs/design.md` § 7 — backend-side auth implementation (long-lived session tokens until user-initiated logout).
+- ADR-0021 (SDK hand-rolls device-flow vocabulary) — predecessor; explains why we own the device-flow code at all.
+- ADR-0007 / ADR-0008 — the backend-side auth model (long-lived session tokens until user-initiated logout).
