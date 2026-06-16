@@ -31,6 +31,7 @@ import type { NoteReply } from './generated/NoteReply';
 import type { NoteStatus } from './generated/NoteStatus';
 import type { OpenIntent } from './generated/OpenIntent';
 import type { OpenMode } from './generated/OpenMode';
+import type { PrRef } from './generated/PrRef';
 import type { PushOutcome } from './generated/PushOutcome';
 import type { RecentRepo } from './generated/RecentRepo';
 import type { ReplyAuthor } from './generated/ReplyAuthor';
@@ -40,6 +41,9 @@ import type { Review } from './generated/Review';
 import type { ReviewRole } from './generated/ReviewRole';
 import type { ReviewSignal } from './generated/ReviewSignal';
 import type { ReviewStatus } from './generated/ReviewStatus';
+import type { ReviewerEntry } from './generated/ReviewerEntry';
+import type { ReviewerPr } from './generated/ReviewerPr';
+import type { ReviewerStep } from './generated/ReviewerStep';
 import type { SelfReviewDiff } from './generated/SelfReviewDiff';
 import type { SelfReviewFileChange } from './generated/SelfReviewFileChange';
 import type { SelfReviewNote } from './generated/SelfReviewNote';
@@ -81,6 +85,7 @@ export type {
   NoteStatus,
   OpenIntent,
   OpenMode,
+  PrRef,
   PushOutcome,
   RecentRepo,
   ReplyAuthor,
@@ -90,6 +95,9 @@ export type {
   ReviewRole,
   ReviewSignal,
   ReviewStatus,
+  ReviewerEntry,
+  ReviewerPr,
+  ReviewerStep,
   SelfReviewNote,
   SelfReviewNoteView,
   SelfReviewDiff,
@@ -607,6 +615,27 @@ export const storylineStepsReorder = (orderedIds: string[]) =>
  *  tree-to-tree diff, the ordered steps with `stale` flags, and the un-anchored
  *  paths still reachable as an overlay. Fails loud if there's no draft. */
 export const storylinePreview = () => invoke<StorylinePreview>('storyline_preview');
+
+// --- Reviewer entry (open a PR read-only; ADR-0022 §6, milestone F) ---
+// The local-first reviewer flow: `stage open <pr-url>` resolves the PR to this
+// clone (origin match) and lands here. All derived state (the tree-to-tree diff,
+// the storyline overlay, stale flags) is computed in Rust; the screen only
+// renders the DTO (ADR-0022 §7). No `.stage`/`gh`/`git` is read from TS.
+
+/** Open `pr` for review against the active repo's clone, **read-only**: resolve
+ *  the PR via `gh`, `git fetch` its head, and render the tree-to-tree committed
+ *  diff plus the author's storyline read from the committed `.stage/<branch>/` —
+ *  with no working-tree mutation. Fails loud with `gh`/`git`'s real cause (e.g.
+ *  `gh auth login` needed), which the caller renders in a red banner. */
+export const reviewOpen = (pr: PrRef) => invoke<ReviewerEntry>('review_open', { pr });
+
+/** Check out the PR's `branch` (`git checkout -B`) — **the lone working-tree
+ *  mutation the reviewer flow performs** (ADR-0022 §6), so the reviewer can
+ *  build/run. The screen gates this behind an explicit "Check out this branch"
+ *  confirmation; everything else stays read-only. Fails loud (git's stderr) on a
+ *  dirty tree or a missing fetched head. */
+export const reviewCheckoutBranch = (pr: PrRef, branch: string) =>
+  invoke<void>('review_checkout_branch', { pr, branch });
 
 // --- Self-Review Debrief (cycle 1: local agent↔author loop; see ADR-0011,
 // CONTEXT.md "Debrief" / "Review note"). All local + auth-free. ---

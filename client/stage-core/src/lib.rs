@@ -16,6 +16,7 @@ pub mod github;
 pub mod pr;
 pub mod repo_key;
 pub mod review_folder;
+pub mod reviewer;
 pub mod staleness;
 pub mod store;
 pub mod storyline;
@@ -36,10 +37,14 @@ pub use pr::{
     CheckResult, CheckStatus, DraftLineComment, IssueComment, LineComment, MergeMethod, PrActivity,
     ReviewSummary, SubmittedVerdict, Verdict,
 };
-pub use repo_key::{repo_key_from_cwd, repo_root_from_cwd, slug_from_remote, RepoKey};
+pub use repo_key::{origin_slug, repo_key_from_cwd, repo_root_from_cwd, slug_from_remote, RepoKey};
 pub use review_folder::{
-    find_review, read_review_at, resync_folder, review_committed_for_branch, review_dir,
-    scoped_commit, stage_root, write_review, ReviewMeta, ReviewStep, StageReview,
+    find_review, read_review_at, read_review_from_tree, resync_folder, review_committed_for_branch,
+    review_dir, scoped_commit, stage_root, write_review, ReviewMeta, ReviewStep, StageReview,
+};
+pub use reviewer::{
+    checkout_pr_branch, open_review, parse_pr_ref, resolve_clone, PrRef, ReviewerEntry, ReviewerPr,
+    ReviewerStep,
 };
 pub use staleness::{assess_step_staleness, StaleReason, StepStaleness};
 pub use store::{default_store_path, Store, STORE_PATH_ENV};

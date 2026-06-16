@@ -4,6 +4,7 @@ import { Dashboard } from './screens/dashboard/Dashboard';
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { SignIn } from './screens/onboarding/SignIn';
 import { RepoHome } from './screens/repo/RepoHome';
+import { LocalReview } from './screens/review/LocalReview';
 import { ReviewStoryline } from './screens/review/ReviewStoryline';
 import { SelfReview } from './screens/selfReview/SelfReview';
 import { Settings } from './screens/settings/Settings';
@@ -12,6 +13,7 @@ import { Storyline, type StorylineCtx } from './screens/storyline/Storyline';
 import { Workspaces } from './screens/workspaces/Workspaces';
 import {
   type OpenIntent,
+  type PrRef,
   type ReviewCtx,
   type User,
   authBootstrap,
@@ -32,6 +34,7 @@ type View =
   | 'storyline'
   | 'localStoryline'
   | 'review'
+  | 'localReview'
   | 'settings';
 
 export function App() {
@@ -51,6 +54,9 @@ export function App() {
   const [storylineCtx, setStorylineCtx] = useState<StorylineCtx | null>(null);
   // The published workspace being reviewed read-only (Step 2 reviewer flow).
   const [reviewCtx, setReviewCtx] = useState<ReviewCtx | null>(null);
+  // The PR opened for local-first read-only review via `stage open <pr-url>`
+  // (ADR-0022 §6, milestone F). Set from an `OpenMode::Review` open-intent.
+  const [localReviewPr, setLocalReviewPr] = useState<PrRef | null>(null);
   // A `stage open` intent that arrived with no valid session (ADR-0013/0014):
   // we show SignIn first and retain it here so the author's auth choice — sign
   // in *or* "Stay offline" — then lands directly in Self-Review for the repo.
@@ -67,15 +73,21 @@ export function App() {
   const viewRef = useRef(view);
   viewRef.current = view;
 
-  // Set the active repo and route to Self-Review for a `stage open` intent.
+  // Set the active repo and route per the `stage open` intent's mode (ADR-0014,
+  // ADR-0022 §6): `Review` opens the carried PR read-only; otherwise Self-Review.
   // Fail-loud (CLAUDE.md): a bad repo path surfaces and falls back to the repo
   // picker rather than wedging on a blank screen.
   const routeToIntent = useCallback(async (intent: OpenIntent) => {
     try {
       await setActiveRepo(intent.repo);
       setHasRepo(true);
-      setSeedBase(true);
-      setView('selfReview');
+      if (intent.mode === 'review' && intent.pr) {
+        setLocalReviewPr(intent.pr);
+        setView('localReview');
+      } else {
+        setSeedBase(true);
+        setView('selfReview');
+      }
     } catch (e) {
       console.warn('open_intent_set_repo_failed', e);
       setView('openRepo');
@@ -248,6 +260,7 @@ export function App() {
     setHasRepo(false);
     setStorylineCtx(null);
     setReviewCtx(null);
+    setLocalReviewPr(null);
     setView('signIn');
   }, []);
 
@@ -292,6 +305,12 @@ export function App() {
   }
   if (view === 'localStoryline') {
     return <LocalStoryline onBack={exitLocalStoryline} />;
+  }
+  // Local-first reviewer entry (ADR-0022 §6, milestone F): reached via
+  // `stage open <pr-url>`. Local + `gh`, no Stage session — so it sits ahead of
+  // the auth guard, like Self-Review. Back returns to the repo picker.
+  if (view === 'localReview' && localReviewPr) {
+    return <LocalReview pr={localReviewPr} onBack={() => setView('openRepo')} />;
   }
   if (!user) {
     // Defensive: should be unreachable (storyline/workspaces are signed-in

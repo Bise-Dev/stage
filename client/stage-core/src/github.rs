@@ -397,6 +397,59 @@ impl GitHub {
         check_git(&out, "git push")
     }
 
+    /// The local ref a fetched PR head lands at ([`GitHub::fetch_pr_head`]). Kept
+    /// under `refs/stage/review/` so it never collides with the user's branches
+    /// or remote-tracking refs, and so the reviewer entry can diff/read it by a
+    /// stable name without a checkout.
+    pub fn pr_head_local_ref(pr_number: u32) -> String {
+        format!("refs/stage/review/pr-{pr_number}")
+    }
+
+    /// Fetch PR `pr_number`'s head commit (and refresh its base branch) into
+    /// local refs — **read-only, no working-tree mutation** (ADR-0022 §6,
+    /// milestone F). Transport is the user's own `git` credentials, like
+    /// [`GitHub::git_fetch`].
+    ///
+    /// The head is fetched via the canonical `refs/pull/<n>/head` ref, which the
+    /// **base** repo publishes even when the PR is opened from a fork — so the
+    /// reviewer never needs the contributor's branch or fork remote. It lands at
+    /// [`GitHub::pr_head_local_ref`] (returned). The base branch is refreshed into
+    /// its `refs/remotes/<remote>/<base_ref>` tracking ref in the same fetch so
+    /// the tree-to-tree diff resolves a current base (ADR-0018).
+    ///
+    /// Fail loud: git's stderr surfaces verbatim on a non-zero exit (a deleted
+    /// PR, no network, no read access).
+    pub fn fetch_pr_head(
+        &self,
+        repo_dir: &Path,
+        remote: &str,
+        pr_number: u32,
+        base_ref: &str,
+    ) -> Result<String, StageError> {
+        let local_head = Self::pr_head_local_ref(pr_number);
+        let head_spec = format!("+refs/pull/{pr_number}/head:{local_head}");
+        let base_spec = format!("+refs/heads/{base_ref}:refs/remotes/{remote}/{base_ref}");
+        let out = self.run_git_raw(repo_dir, &["fetch", remote, &head_spec, &base_spec])?;
+        check_git(&out, "git fetch")?;
+        Ok(local_head)
+    }
+
+    /// Check out `branch` at `source_ref`, creating or resetting the local branch
+    /// to that commit (`git checkout -B`). **This is the lone working-tree
+    /// mutation the reviewer flow performs** (ADR-0022 §6, narrowly amending
+    /// ADR-0016's observe-only stance) and must only be reached on explicit user
+    /// confirmation — see [`crate::reviewer::checkout_pr_branch`]. Fail loud:
+    /// git's stderr verbatim (e.g. uncommitted changes that would be overwritten).
+    pub fn checkout_local_branch(
+        &self,
+        repo_dir: &Path,
+        branch: &str,
+        source_ref: &str,
+    ) -> Result<(), StageError> {
+        let out = self.run_git_raw(repo_dir, &["checkout", "-B", branch, source_ref])?;
+        check_git(&out, "git checkout")
+    }
+
     /// List the repo's PRs for the dashboard (DB-1 #84 / DB-3 #86, ADR-0022 §6).
     /// `repo` is the `owner/name` slug; `filter` picks authored vs.
     /// review-requested. `--state all` is deliberate: the archived view-filter
@@ -771,6 +824,98 @@ mod tests {
             }
             other => panic!("expected GitCli, got {other:?}"),
         }
+    }
+
+    // ---- reviewer entry: fetch the PR head read-only, then opt-in checkout --
+
+    /// A bare "origin" with `main` pushed and a `feat/x` commit (adding
+    /// `feat.txt`) exposed as `refs/pull/1/head` — exactly what GitHub publishes
+    /// for a PR. Returns a fresh reviewer clone, checked out on `main`, that has
+    /// **not** fetched the PR head yet.
+    fn pr_remote_and_reviewer_clone(base: &Path) -> PathBuf {
+        let remote = base.join("remote.git");
+        git(base, &["init", "-q", "--bare", remote.to_str().unwrap()]);
+
+        let publisher = base.join("publisher");
+        std::fs::create_dir_all(&publisher).unwrap();
+        git(&publisher, &["init", "-q", "-b", "main"]);
+        git(&publisher, &["config", "user.email", "t@e.com"]);
+        git(&publisher, &["config", "user.name", "t"]);
+        std::fs::write(publisher.join("base.txt"), "x\n").unwrap();
+        git(&publisher, &["add", "-A"]);
+        git(&publisher, &["commit", "-q", "-m", "base"]);
+        git(
+            &publisher,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        git(&publisher, &["push", "-q", "origin", "main"]);
+        git(&publisher, &["checkout", "-q", "-b", "feat/x"]);
+        std::fs::write(publisher.join("feat.txt"), "y\n").unwrap();
+        git(&publisher, &["add", "-A"]);
+        git(&publisher, &["commit", "-q", "-m", "feat"]);
+        // GitHub exposes the PR head at refs/pull/<n>/head on the base repo.
+        git(
+            &publisher,
+            &["push", "-q", "origin", "feat/x:refs/pull/1/head"],
+        );
+
+        let reviewer = base.join("reviewer");
+        git(
+            base,
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                reviewer.to_str().unwrap(),
+            ],
+        );
+        reviewer
+    }
+
+    #[test]
+    fn fetch_pr_head_lands_the_pull_ref_without_touching_the_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reviewer = pr_remote_and_reviewer_clone(tmp.path());
+        let gh = GitHub::new();
+
+        let local = gh
+            .fetch_pr_head(&reviewer, "origin", 1, "main")
+            .expect("fetch PR head");
+        assert_eq!(local, "refs/stage/review/pr-1");
+
+        let repo = git2::Repository::open(&reviewer).unwrap();
+        // The PR head and a current base are both resolvable locally now.
+        assert!(repo.revparse_single("refs/stage/review/pr-1").is_ok());
+        assert!(repo.revparse_single("origin/main").is_ok());
+        // Read-only invariant: the working tree was not mutated — the PR's
+        // `feat.txt` is not checked out, and HEAD is still `main`.
+        assert!(
+            !reviewer.join("feat.txt").exists(),
+            "fetching a PR head must not write the working tree"
+        );
+        assert_eq!(repo.head().unwrap().shorthand(), Some("main"));
+    }
+
+    #[test]
+    fn checkout_local_branch_is_the_lone_opt_in_worktree_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reviewer = pr_remote_and_reviewer_clone(tmp.path());
+        let gh = GitHub::new();
+        let local = gh.fetch_pr_head(&reviewer, "origin", 1, "main").unwrap();
+
+        // Before the confirmed checkout the working tree is untouched.
+        assert!(!reviewer.join("feat.txt").exists());
+
+        gh.checkout_local_branch(&reviewer, "feat/x", &local)
+            .expect("checkout the PR branch");
+
+        // After it: the PR branch is checked out so the reviewer can build/run.
+        assert!(
+            reviewer.join("feat.txt").exists(),
+            "checkout brings the PR head into the working tree"
+        );
+        let repo = git2::Repository::open(&reviewer).unwrap();
+        assert_eq!(repo.head().unwrap().shorthand(), Some("feat/x"));
     }
 
     // ---- dashboard PR search: parse + role-distinguishing query -------------

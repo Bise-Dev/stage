@@ -12,7 +12,8 @@ use stage_core::diff::{
     assert_files_in_base_diff, default_base, self_review_diff, DiffLineIndex, SelfReviewScope,
 };
 use stage_core::{
-    repo_key_from_cwd, repo_root_from_cwd, DebriefInput, NoteStatus, StageError, Store,
+    parse_pr_ref, repo_key_from_cwd, repo_root_from_cwd, resolve_clone, DebriefInput, NoteStatus,
+    PrRef, StageError, Store,
 };
 
 #[derive(Parser)]
@@ -27,11 +28,20 @@ enum Command {
     /// Author or inspect the Debrief for the current repo + branch.
     #[command(subcommand)]
     SelfReview(SelfReviewCmd),
-    /// Open (or focus) the Stage desktop app in Self-Review for the current
-    /// repo. Spawns the GUI and forwards the repo root; a running instance is
-    /// brought to front and navigated there (ADR-0014). Fails loud (nonzero) if
-    /// the GUI binary can't be located — set `STAGE_GUI_BIN` to override.
-    Open,
+    /// Open (or focus) the Stage desktop app, forwarding the target to a running
+    /// instance (ADR-0014). With no argument, opens the current repo in
+    /// Self-Review. With a GitHub **PR URL** (or `owner/repo#number`), opens that
+    /// PR in **read-only review mode** (ADR-0022 §6): the PR is resolved to a
+    /// local clone by `origin` match, its head is fetched, and the storyline +
+    /// diff render with no working-tree mutation. No matching local clone is a
+    /// loud, actionable error. Fails loud (nonzero) if the GUI binary can't be
+    /// located — set `STAGE_GUI_BIN` to override.
+    Open {
+        /// A GitHub PR URL (e.g. `https://github.com/owner/repo/pull/123`) or
+        /// `owner/repo#123`. Omit to open the current repo in Self-Review.
+        #[arg(value_name = "PR_URL")]
+        target: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -108,11 +118,44 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), StageError> {
     let cwd = std::env::current_dir()?;
-    let root = repo_root_from_cwd(&cwd)?;
     match cli.command {
-        Command::SelfReview(cmd) => self_review(cmd, &cwd, &root),
-        Command::Open => open_gui(&root),
+        Command::SelfReview(cmd) => {
+            // Self-Review is always scoped to the repo containing cwd.
+            let root = repo_root_from_cwd(&cwd)?;
+            self_review(cmd, &cwd, &root)
+        }
+        // `open` may be run from anywhere for a PR URL, so it resolves its own
+        // repo (it must not require cwd to be a repo for the review path).
+        Command::Open { target } => open(target, &cwd),
     }
+}
+
+/// `stage open [<pr-url>]`. With no argument, open the current repo in
+/// Self-Review (the existing behaviour). With a PR URL (or `owner/repo#number`),
+/// resolve it to a local clone by `origin` match and open it in read-only review
+/// mode (ADR-0022 §6, milestone F). Fail loud on an unparseable target or when no
+/// matching local clone exists.
+fn open(target: Option<String>, cwd: &Path) -> Result<(), StageError> {
+    match target {
+        None => {
+            let root = repo_root_from_cwd(cwd)?;
+            open_gui(&root)
+        }
+        Some(target) => {
+            let pr = parse_pr_ref(&target)?;
+            let clone = resolve_review_clone(&pr, cwd)?;
+            open_review_gui(&pr, &clone)
+        }
+    }
+}
+
+/// Resolve the PR to a local clone by `origin` match (ADR-0022 §6). The reviewer
+/// runs `stage open <pr-url>` from within (or above) their clone, so the cwd's
+/// repo is the candidate; a cwd that isn't a git repo simply yields no candidate
+/// and falls through to [`resolve_clone`]'s loud "no local clone" error.
+fn resolve_review_clone(pr: &PrRef, cwd: &Path) -> Result<PathBuf, StageError> {
+    let candidates: Vec<PathBuf> = repo_root_from_cwd(cwd).map(|r| vec![r]).unwrap_or_default();
+    resolve_clone(&candidates, pr)
 }
 
 /// The bundled GUI binary's name (the Tauri app), a sibling of this CLI in the
@@ -137,6 +180,30 @@ fn open_gui(root: &Path) -> Result<(), StageError> {
         .stderr(Stdio::null())
         .spawn()?;
     eprintln!("stage: opening Stage at {}", root.display());
+    Ok(())
+}
+
+/// Launch the Stage desktop app in **read-only review mode** for `pr`, forwarding
+/// the resolved `clone` root and the PR identity (ADR-0022 §6). The GUI parses
+/// `--review <owner>/<repo>#<number>` into an `OpenMode::Review` intent and, on a
+/// warm start, the single-instance plugin forwards this argv to the live app.
+/// Detached stdio for the same reason as [`open_gui`].
+fn open_review_gui(pr: &PrRef, clone: &Path) -> Result<(), StageError> {
+    let bin = resolve_gui_binary()?;
+    let spec = format!("{}/{}#{}", pr.owner, pr.name, pr.number);
+    std::process::Command::new(&bin)
+        .arg("open")
+        .arg(clone)
+        .arg("--review")
+        .arg(&spec)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    eprintln!(
+        "stage: opening {}/{} PR #{} for review",
+        pr.owner, pr.name, pr.number
+    );
     Ok(())
 }
 
@@ -313,4 +380,70 @@ fn self_review(cmd: SelfReviewCmd, cwd: &Path, root: &Path) -> Result<(), StageE
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .expect("spawn git")
+            .success();
+        assert!(ok, "git {args:?} failed in {dir:?}");
+    }
+
+    fn pr(owner: &str, name: &str, number: u32) -> PrRef {
+        PrRef {
+            owner: owner.into(),
+            name: name.into(),
+            number,
+        }
+    }
+
+    #[test]
+    fn resolve_review_clone_uses_the_cwd_repo_when_origin_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(
+            root,
+            &["remote", "add", "origin", "git@github.com:Octo/Stage.git"],
+        );
+
+        // Case-insensitive origin match → the cwd repo resolves.
+        let got = resolve_review_clone(&pr("octo", "stage", 5), root).expect("resolve");
+        assert_eq!(
+            got.canonicalize().unwrap(),
+            root.canonicalize().unwrap(),
+            "the cwd clone is the resolved review root"
+        );
+    }
+
+    #[test]
+    fn resolve_review_clone_errors_loudly_when_cwd_origin_mismatches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(
+            root,
+            &["remote", "add", "origin", "git@github.com:someone/else.git"],
+        );
+
+        let err = resolve_review_clone(&pr("octo", "stage", 9), root).unwrap_err();
+        assert!(err.to_string().contains("octo/stage"), "{err}");
+    }
+
+    #[test]
+    fn resolve_review_clone_errors_loudly_outside_a_repo() {
+        // cwd is not a git repo → no candidate → the loud "no local clone" error.
+        let dir = tempfile::tempdir().unwrap();
+        let err = resolve_review_clone(&pr("octo", "stage", 3), dir.path()).unwrap_err();
+        assert!(err.to_string().contains("No local clone"), "{err}");
+    }
 }

@@ -108,6 +108,27 @@ pub fn slug_from_remote(url: &str) -> Option<(String, String)> {
     Some((owner.to_string(), name.to_string()))
 }
 
+/// The `(owner, name)` slug of `repo_root`'s **`origin`** remote, or `None` when
+/// there is no git repo there, no `origin` remote, or its URL carries no
+/// owner/name pair. This is the reviewer-entry origin-match key (ADR-0022 §6,
+/// milestone F): a PR `owner/name` is matched against a candidate clone's
+/// `origin`.
+///
+/// Unlike [`repo_key_from_cwd`] this is **`origin`-only** (no first-remote
+/// fallback) and never invents a `local` slug — a non-match must stay a
+/// non-match, so an unrelated clone is never mistaken for the PR's repo. A path
+/// that isn't a repo is `Ok(None)` (skip it), not an error, so resolution can
+/// scan a list of candidates without one bad entry failing the whole lookup.
+pub fn origin_slug(repo_root: &Path) -> Result<Option<(String, String)>, StageError> {
+    let Ok(repo) = Repository::open(repo_root) else {
+        return Ok(None);
+    };
+    let Ok(remote) = repo.find_remote("origin") else {
+        return Ok(None);
+    };
+    Ok(remote.url().and_then(slug_from_remote))
+}
+
 /// No-remote fallback: `("local", "<repo-basename>-<hash8>")`, where the hash is
 /// the first 4 bytes of SHA-256 over the canonical **common directory** and the
 /// basename is that common dir's parent (the main worktree's directory). Keying
@@ -286,5 +307,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = repo_key_from_cwd(dir.path()).unwrap_err();
         assert!(matches!(err, StageError::NotARepo(_)));
+    }
+
+    #[test]
+    fn origin_slug_reads_the_origin_remote_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = fixture(dir.path(), "main", Some("git@github.com:octo/Stage.git"));
+        let slug = origin_slug(dir.path()).unwrap();
+        assert_eq!(slug, Some(("octo".into(), "Stage".into())));
+    }
+
+    #[test]
+    fn origin_slug_is_none_without_origin_or_repo() {
+        // A repo with no remote at all → None (never the `local` fallback slug).
+        let with_repo = tempfile::tempdir().unwrap();
+        let _repo = fixture(with_repo.path(), "main", None);
+        assert_eq!(origin_slug(with_repo.path()).unwrap(), None);
+
+        // A path that isn't a repo → None (skipped during candidate resolution),
+        // not an error.
+        let bare = tempfile::tempdir().unwrap();
+        assert_eq!(origin_slug(bare.path()).unwrap(), None);
     }
 }
