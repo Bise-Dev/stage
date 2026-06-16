@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { Dashboard } from './screens/dashboard/Dashboard';
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { SignIn } from './screens/onboarding/SignIn';
 import { RepoHome } from './screens/repo/RepoHome';
@@ -26,6 +27,7 @@ type View =
   | 'openRepo'
   | 'repoHome'
   | 'workspaces'
+  | 'dashboard'
   | 'selfReview'
   | 'storyline'
   | 'localStoryline'
@@ -200,6 +202,10 @@ export function App() {
     setView('workspaces');
   }, []);
 
+  // The local-first dashboard (milestone G): the per-repo overview assembled in
+  // Rust. Reachable from Workspaces; returns there.
+  const openDashboard = useCallback(() => setView('dashboard'), []);
+
   const openReview = useCallback((ctx: ReviewCtx) => {
     setReviewCtx(ctx);
     setView('review');
@@ -298,6 +304,9 @@ export function App() {
   if (view === 'review' && reviewCtx) {
     return <ReviewStoryline ctx={reviewCtx} user={user} onBack={backFromReview} />;
   }
+  if (view === 'dashboard') {
+    return <Dashboard onBack={backToWorkspaces} />;
+  }
   return (
     <Workspaces
       user={user}
@@ -305,6 +314,7 @@ export function App() {
       onStartSelfReview={startSelfReview}
       onOpenStoryline={openStoryline}
       onOpenReview={openReview}
+      onOpenDashboard={openDashboard}
       onOpenSettings={openSettings}
       onSignOut={signOut}
     />

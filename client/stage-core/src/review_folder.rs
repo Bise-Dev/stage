@@ -299,6 +299,42 @@ pub fn find_review(
     Ok(None)
 }
 
+/// Is the PR on `branch` **Stage-guided** (DB-2 #85)? `true` when a committed
+/// `.stage/<branch>/review.toml` exists in the git *tree* at the branch's head.
+///
+/// Reads the committed tree, never the working dir, so it answers for any
+/// fetched ref without a checkout — the dashboard's checkout-free "Stage vs.
+/// plain PR" probe. Candidate refs are tried in order: the local branch, then
+/// its `origin/<branch>` remote-tracking copy.
+///
+/// If neither resolves in this clone (e.g. an un-fetched reviewer branch) the
+/// answer is `Ok(false)`: from local data we simply cannot see a Review, which
+/// is the honest "plain as far as we can tell" result and respects the user's
+/// real local access (DB-4 #87) — it is a derived signal over available refs,
+/// not a swallowed error. A genuine tree-read failure on a *resolved* ref
+/// propagates (fail loud).
+pub fn review_committed_for_branch(repo_root: &Path, branch: &str) -> Result<bool, StageError> {
+    let repo = git2::Repository::discover(repo_root)?;
+    let rel = format!(
+        "{STAGE_DIR}/{}/{REVIEW_TOML}",
+        folder_name_for_branch(branch)?
+    );
+    let rel_path = Path::new(&rel);
+    for candidate in [branch.to_string(), format!("origin/{branch}")] {
+        // A ref absent from this clone isn't an error — try the next candidate.
+        let Ok(obj) = repo.revparse_single(&candidate) else {
+            continue;
+        };
+        let tree = obj.peel_to_tree()?;
+        match tree.get_path(rel_path) {
+            Ok(_) => return Ok(true),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => continue,
+            Err(e) => return Err(StageError::Git(e)),
+        }
+    }
+    Ok(false)
+}
+
 /// Write `review` to `.stage/<head_ref>/` (folder derived from the authoritative
 /// `head_ref`). Creates the folder, writes `review.toml`, and rewrites `steps/`
 /// wholesale so a removed step drops its file. Returns the folder path.
@@ -679,5 +715,32 @@ mod tests {
         assert!(parse_step_body("+++\nanchor = \"a\"\nno closing fence\n", "010_x.md").is_err());
         // Missing required `anchor` key in frontmatter.
         assert!(parse_step_body("+++\ntitle = \"t\"\n+++\nbody\n", "010_x.md").is_err());
+    }
+
+    #[test]
+    fn review_committed_for_branch_detects_stage_guided_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        repo(root); // one commit on `main`, identity configured
+
+        // A branch whose committed tree carries `.stage/feat-x/review.toml`.
+        git(root, &["checkout", "-q", "-b", "feat/x"]);
+        write_review(root, &sample("feat/x")).unwrap();
+        scoped_commit(root, "feat/x", "stage: publish review").unwrap();
+        assert!(
+            review_committed_for_branch(root, "feat/x").unwrap(),
+            "a committed .stage/<branch>/ makes the head Stage-guided"
+        );
+
+        // A plain branch — code change, no `.stage` in its tree → not guided.
+        git(root, &["checkout", "-q", "main"]);
+        git(root, &["checkout", "-q", "-b", "feat/plain"]);
+        std::fs::write(root.join("code.rs"), "plain change\n").unwrap();
+        git(root, &["add", "code.rs"]);
+        git(root, &["commit", "-q", "-m", "plain change"]);
+        assert!(!review_committed_for_branch(root, "feat/plain").unwrap());
+
+        // A branch absent from this clone → not detectable, `Ok(false)` (no error).
+        assert!(!review_committed_for_branch(root, "feat/never-fetched").unwrap());
     }
 }

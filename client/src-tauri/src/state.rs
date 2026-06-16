@@ -18,6 +18,10 @@ pub struct AppState {
     /// logout and loaded into `auth` at boot.
     pub sessions: Arc<SessionStore>,
     pub api: api::Client,
+    /// The credential-free GitHub adapter (ADR-0022 §5). Held here, as its own
+    /// docs advise, so the `gh` auth gate and `gh api user` identity resolve at
+    /// most once per process. The dashboard's PR search goes through it.
+    pub github: stage_core::GitHub,
     pub auth: Mutex<Option<AuthSession>>,
     pub auth_in_flight: Mutex<Option<AbortHandle>>,
     pub github_app_client_id: String,

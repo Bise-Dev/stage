@@ -28,7 +28,7 @@ pub struct DiffStats {
 /// worktree never skews the diff. Falls back to `base_ref` verbatim for refs
 /// that are already remote (`origin/main`), tags, or raw SHAs. Returns the
 /// resolved commit and the ref string it actually came from (for the UI).
-fn resolve_base_commit<'r>(
+pub(crate) fn resolve_base_commit<'r>(
     repo: &'r Repository,
     base_ref: &str,
 ) -> Result<(git2::Commit<'r>, String), StageError> {

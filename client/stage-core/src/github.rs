@@ -70,6 +70,69 @@ pub struct GitHubUser {
     pub name: Option<String>,
 }
 
+/// Whose PRs to list for the dashboard (DB-1 #84 / DB-3 #86). Two separate `gh`
+/// queries the caller merges, so each surfaced row knows whether it is mine or
+/// waiting on my review.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrFilter {
+    /// PRs I opened — `gh pr list --author @me`.
+    Authored,
+    /// PRs awaiting my review — `gh pr list --search "review-requested:@me"`.
+    /// Surfaces a PR even when the author skipped Stage entirely (DB-3).
+    ReviewRequested,
+}
+
+/// The PR author from `gh pr list --json author`. Only the login is kept; gh's
+/// other fields (GraphQL node id, `is_bot`, display name) are ignored.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GhAuthor {
+    pub login: String,
+}
+
+/// One pull request from `gh pr list --json …` — exactly the fields the
+/// dashboard needs to derive a row's status + signal (ADR-0022 §6, DB-2 #85).
+/// Unknown fields in gh's payload are ignored (serde default).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhPullRequest {
+    pub number: u32,
+    pub title: String,
+    /// gh's uppercase PR state: `"OPEN"`, `"CLOSED"`, or `"MERGED"`.
+    pub state: String,
+    pub url: String,
+    /// The PR's head branch — the dashboard's join key against local drafts and
+    /// committed `.stage/<branch>/` folders.
+    pub head_ref_name: String,
+    pub base_ref_name: String,
+    pub is_draft: bool,
+    pub additions: u32,
+    pub deletions: u32,
+    /// gh's review decision: `""` (none yet), `"APPROVED"`, `"CHANGES_REQUESTED"`,
+    /// or `"REVIEW_REQUIRED"`. Defaulted so a payload without the key still parses.
+    #[serde(default)]
+    pub review_decision: String,
+    pub author: GhAuthor,
+    /// Issue-comment count for the dashboard signal. `gh` returns the full
+    /// `comments` array; only its length is kept (see [`count_json_array`]).
+    #[serde(rename = "comments", deserialize_with = "count_json_array")]
+    pub comments: u32,
+}
+
+/// Deserialize a JSON array as just its length, discarding the elements — the
+/// dashboard signal needs the `comments` *count*, not the bodies gh streams.
+fn count_json_array<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let items = Vec::<serde::de::IgnoredAny>::deserialize(deserializer)?;
+    Ok(items.len() as u32)
+}
+
+/// Page size for [`GitHub::list_repo_prs`]. gh defaults to 30; we raise it so a
+/// busy repo's dashboard is complete, and warn loudly if even this is hit
+/// (CLAUDE.md: no silent caps — never imply completeness we can't promise).
+const PR_LIST_LIMIT: usize = 200;
+
 /// The actionable hint appended to every "`gh` unavailable" message. Naming the
 /// exact remedy is the whole point — there is no broker fallback.
 const GH_INSTALL_HINT: &str = "Install it from https://cli.github.com, then run `gh auth login`.";
@@ -332,6 +395,45 @@ impl GitHub {
     pub fn git_push(&self, repo_dir: &Path, remote: &str, branch: &str) -> Result<(), StageError> {
         let out = self.run_git_raw(repo_dir, &["push", "--set-upstream", remote, branch])?;
         check_git(&out, "git push")
+    }
+
+    /// List the repo's PRs for the dashboard (DB-1 #84 / DB-3 #86, ADR-0022 §6).
+    /// `repo` is the `owner/name` slug; `filter` picks authored vs.
+    /// review-requested. `--state all` is deliberate: the archived view-filter
+    /// (DB-5 #88) is a *computed* dashboard concern, so this returns open **and**
+    /// closed/merged PRs and the caller hides them — state is never stored.
+    ///
+    /// Fail loud through [`GitHub::run_gh_json`]: a missing/unauthenticated `gh`,
+    /// a non-zero `gh` exit (its stderr verbatim), or unparseable JSON all
+    /// surface their real cause — never an empty list standing in for a failure.
+    pub fn list_repo_prs(
+        &self,
+        repo: &str,
+        filter: PrFilter,
+    ) -> Result<Vec<GhPullRequest>, StageError> {
+        // Field set drives the JSON shape of [`GhPullRequest`]; keep them in sync.
+        const FIELDS: &str = "number,title,state,url,headRefName,baseRefName,\
+isDraft,additions,deletions,reviewDecision,author,comments";
+        // `--limit` wants a &str; PR_LIST_LIMIT is the matching numeric guard.
+        const LIMIT_ARG: &str = "200";
+        let mut args: Vec<&str> = vec![
+            "pr", "list", "--repo", repo, "--state", "all", "--limit", LIMIT_ARG, "--json", FIELDS,
+        ];
+        match filter {
+            PrFilter::Authored => args.extend_from_slice(&["--author", "@me"]),
+            PrFilter::ReviewRequested => {
+                args.extend_from_slice(&["--search", "review-requested:@me"])
+            }
+        }
+        let prs: Vec<GhPullRequest> = self.run_gh_json(&args, None)?;
+        if prs.len() >= PR_LIST_LIMIT {
+            tracing::warn!(
+                repo = %repo,
+                limit = PR_LIST_LIMIT,
+                "pr_list_hit_limit: the dashboard may be missing older PRs for this repo"
+            );
+        }
+        Ok(prs)
     }
 }
 
@@ -669,5 +771,50 @@ mod tests {
             }
             other => panic!("expected GitCli, got {other:?}"),
         }
+    }
+
+    // ---- dashboard PR search: parse + role-distinguishing query -------------
+
+    #[cfg(unix)]
+    #[test]
+    fn list_repo_prs_parses_authored_and_review_requested() {
+        let dir = tempfile::tempdir().unwrap();
+        // The fake gh dispatches on the args: a `review-requested:@me` search
+        // returns the reviewer fixture, anything else the authored fixture.
+        // `comments` is the full array gh streams — we keep only its length;
+        // `author` carries gh's extra fields (node id, is_bot) which we ignore.
+        let body = "#!/usr/bin/env bash\n\
+             if [ \"$1\" = auth ] && [ \"$2\" = status ]; then exit 0; fi\n\
+             case \"$*\" in\n\
+               *review-requested*)\n\
+                 echo '[{\"number\":7,\"title\":\"Their PR\",\"state\":\"OPEN\",\"url\":\"https://gh/7\",\"headRefName\":\"feat/their\",\"baseRefName\":\"main\",\"isDraft\":false,\"additions\":3,\"deletions\":1,\"reviewDecision\":\"REVIEW_REQUIRED\",\"author\":{\"login\":\"them\",\"id\":\"NID\",\"is_bot\":false},\"comments\":[{},{}]}]'\n\
+                 ;;\n\
+               *)\n\
+                 echo '[{\"number\":5,\"title\":\"My PR\",\"state\":\"MERGED\",\"url\":\"https://gh/5\",\"headRefName\":\"feat/mine\",\"baseRefName\":\"main\",\"isDraft\":false,\"additions\":10,\"deletions\":2,\"reviewDecision\":\"\",\"author\":{\"login\":\"me\",\"id\":\"NID\",\"is_bot\":false},\"comments\":[]}]'\n\
+                 ;;\n\
+             esac\n\
+             exit 0\n";
+        let fake = write_script(dir.path(), "gh", body);
+        let gh = GitHub::with_bins(fake, "git");
+
+        let mine = gh.list_repo_prs("o/r", PrFilter::Authored).unwrap();
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].number, 5);
+        assert_eq!(mine[0].state, "MERGED");
+        assert_eq!(mine[0].author.login, "me");
+        assert_eq!(mine[0].additions, 10);
+        assert_eq!(mine[0].deletions, 2);
+        // Empty comments array → count 0.
+        assert_eq!(mine[0].comments, 0);
+        assert_eq!(mine[0].review_decision, "");
+
+        let theirs = gh.list_repo_prs("o/r", PrFilter::ReviewRequested).unwrap();
+        assert_eq!(theirs.len(), 1);
+        assert_eq!(theirs[0].number, 7);
+        assert_eq!(theirs[0].state, "OPEN");
+        assert_eq!(theirs[0].review_decision, "REVIEW_REQUIRED");
+        assert_eq!(theirs[0].author.login, "them");
+        // Two-element comments array → count 2 (the bodies are discarded).
+        assert_eq!(theirs[0].comments, 2);
     }
 }

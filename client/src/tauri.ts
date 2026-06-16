@@ -16,6 +16,8 @@ import type { BaseOptions } from './generated/BaseOptions';
 import type { BranchInfo } from './generated/BranchInfo';
 import type { ChangedFile } from './generated/ChangedFile';
 import type { CommittedDiff } from './generated/CommittedDiff';
+import type { DashboardRow } from './generated/DashboardRow';
+import type { DashboardView } from './generated/DashboardView';
 import type { Debrief } from './generated/Debrief';
 import type { DebriefStep } from './generated/DebriefStep';
 import type { DiffStats } from './generated/DiffStats';
@@ -35,6 +37,9 @@ import type { ReplyAuthor } from './generated/ReplyAuthor';
 import type { RepoInfo } from './generated/RepoInfo';
 import type { RepoSummary } from './generated/RepoSummary';
 import type { Review } from './generated/Review';
+import type { ReviewRole } from './generated/ReviewRole';
+import type { ReviewSignal } from './generated/ReviewSignal';
+import type { ReviewStatus } from './generated/ReviewStatus';
 import type { SelfReviewDiff } from './generated/SelfReviewDiff';
 import type { SelfReviewFileChange } from './generated/SelfReviewFileChange';
 import type { SelfReviewNote } from './generated/SelfReviewNote';
@@ -42,6 +47,8 @@ import type { SelfReviewNoteView } from './generated/SelfReviewNoteView';
 import type { SelfReviewScope } from './generated/SelfReviewScope';
 import type { SelfReviewStats } from './generated/SelfReviewStats';
 import type { Side } from './generated/Side';
+import type { StaleReason } from './generated/StaleReason';
+import type { StepStaleness } from './generated/StepStaleness';
 import type { Storyline } from './generated/Storyline';
 import type { StorylineFile } from './generated/StorylineFile';
 import type { StorylineFileWrite } from './generated/StorylineFileWrite';
@@ -59,6 +66,8 @@ export type {
   BranchInfo,
   ChangedFile,
   CommittedDiff,
+  DashboardRow,
+  DashboardView,
   Debrief,
   DebriefStep,
   DiffStats,
@@ -78,6 +87,9 @@ export type {
   RepoInfo,
   RepoSummary,
   Review,
+  ReviewRole,
+  ReviewSignal,
+  ReviewStatus,
   SelfReviewNote,
   SelfReviewNoteView,
   SelfReviewDiff,
@@ -85,6 +97,8 @@ export type {
   SelfReviewScope,
   SelfReviewStats,
   Side,
+  StaleReason,
+  StepStaleness,
   Storyline,
   StorylineFile,
   StorylineFileWrite,
@@ -244,6 +258,26 @@ export type RepoAccessError = {
 
 export const repoOverview = (owner: string, repo: string) =>
   invoke<OverviewRow[]>('repo_overview', { owner, repo });
+
+/**
+ * The local-first per-repo dashboard (DB-1..5, ADR-0022 §6/§7): the local-store
+ * draft scan merged with a `gh` PR search, every row's state already derived in
+ * Rust (this is the pure-render boundary — the screen only displays it). The
+ * local-first replacement for {@link repoOverview}; repo + identity come from the
+ * active repo + the user's own `gh`, so there are no owner/repo args.
+ * `includeArchived` flips the DB-5 view filter (closed/merged PRs hidden by
+ * default).
+ */
+export const dashboardOverview = (includeArchived: boolean) =>
+  invoke<DashboardView>('dashboard_overview', { includeArchived });
+
+/**
+ * The unified storyline-staleness check (ST-1, ADR-0022 §7) for the active
+ * repo+branch: each step's anchor vs. the current committed diff, with a per-step
+ * reason. An empty array means there is no storyline to check. Nothing
+ * auto-fixes — the author re-anchors by hand.
+ */
+export const storylineStaleness = () => invoke<StepStaleness[]>('storyline_staleness');
 
 export const openInFinder = (path: string) => invoke<void>('open_in_finder', { path });
 
