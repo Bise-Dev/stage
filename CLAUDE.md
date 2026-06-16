@@ -172,3 +172,17 @@ The switch happens automatically in `backend/config/logging.py` based on `DJANGO
 - Don't construct messages with `%`-formatting or f-strings — pass the data as kwargs and let the renderer handle it.
 - Don't `print()`. Use a logger.
 - Don't reconfigure structlog. The one-and-only configuration lives in `backend/config/logging.py`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live as GitHub issues in `Bise-Dev/stage`, managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary — `needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
