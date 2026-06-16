@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { FetchButton } from '../../components/FetchButton';
 import { Icon } from '../../components/Icon';
 import { RepoMenu } from '../../components/RepoMenu';
 import { TitleBar } from '../../components/TitleBar';
@@ -326,10 +327,7 @@ export function RepoHome({
                   style={{ paddingLeft: 28, width: '100%' }}
                 />
               </div>
-              <button type="button" className="btn btn-lg" onClick={onFetch} disabled={fetching}>
-                <Icon name="branch" size={12} color="var(--gray-700)" />{' '}
-                {fetching ? 'Fetching…' : 'Fetch'}
-              </button>
+              <FetchButton onFetch={onFetch} fetching={fetching} />
             </div>
 
             {error && <div style={errorBanner}>{error}</div>}
