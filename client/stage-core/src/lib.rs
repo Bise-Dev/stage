@@ -10,6 +10,7 @@
 pub mod base;
 pub mod dashboard;
 pub mod diff;
+pub mod discussion;
 pub mod domain;
 pub mod error;
 pub mod github;
@@ -26,6 +27,9 @@ pub use dashboard::{
     assemble_dashboard, DashboardRow, DashboardView, ReviewRole, ReviewSignal, ReviewStatus,
 };
 pub use diff::DiffLineIndex;
+pub use discussion::{
+    group_threads_by_step, PrDiscussion, ReviewThread, StepThreads, ThreadComment,
+};
 pub use domain::{
     Debrief, DebriefInput, DebriefStep, NoteAnchor, NoteReply, NoteStatus, ReplyAuthor, Review,
     SelfReviewNote, SelfReviewNoteView, Side,
