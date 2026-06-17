@@ -492,6 +492,55 @@ impl Store {
             .ok_or_else(|| StageError::Invalid("review draft vanished after update".into()))
     }
 
+    /// Choose/change the draft's Base branch (GAP-2, #92). The author may retarget
+    /// the change against a different base before (re-)publishing; the value is
+    /// the ref used for the diff and serialized into `review.toml` at Publish
+    /// (e.g. `"origin/main"` — the remote-tracking ref is preferred over a stale
+    /// local copy, ADR-0016/0018). Fails loud if no draft exists for `key`.
+    pub fn set_review_base_ref(&self, key: &RepoKey, base_ref: &str) -> Result<Review, StageError> {
+        let now = now_epoch();
+        let changed = self.conn.execute(
+            "UPDATE review_draft SET base_ref = ?1, updated_at = ?2 \
+             WHERE repo_owner = ?3 AND repo_name = ?4 AND branch = ?5",
+            params![base_ref, now, key.repo_owner, key.repo_name, key.branch],
+        )?;
+        if changed == 0 {
+            return Err(StageError::Invalid(format!(
+                "no review draft for branch '{}'",
+                key.branch
+            )));
+        }
+        self.get_review_draft(key)?
+            .ok_or_else(|| StageError::Invalid("review draft vanished after update".into()))
+    }
+
+    /// Record the GitHub PR number on the draft once it has been published
+    /// (PUB-1/PUB-3, milestone D). Idempotent — re-publishing to the same PR sets
+    /// the same value. This mirrors the `pr_number` committed into `review.toml`;
+    /// the committed `.stage` stays authoritative post-publish, the store row just
+    /// remembers "this branch's draft has an open PR" for this machine. Fails loud
+    /// if no draft exists for `key`.
+    pub fn set_review_pr_number(
+        &self,
+        key: &RepoKey,
+        pr_number: u32,
+    ) -> Result<Review, StageError> {
+        let now = now_epoch();
+        let changed = self.conn.execute(
+            "UPDATE review_draft SET pr_number = ?1, updated_at = ?2 \
+             WHERE repo_owner = ?3 AND repo_name = ?4 AND branch = ?5",
+            params![pr_number, now, key.repo_owner, key.repo_name, key.branch],
+        )?;
+        if changed == 0 {
+            return Err(StageError::Invalid(format!(
+                "no review draft for branch '{}'",
+                key.branch
+            )));
+        }
+        self.get_review_draft(key)?
+            .ok_or_else(|| StageError::Invalid("review draft vanished after update".into()))
+    }
+
     /// Discard the draft Review (GAP-1, #91): pre-publish only — a draft is just
     /// a store row, so discarding deletes it. Returns whether a row was removed
     /// (idempotent, like [`Store::clear_debrief`]). An *open PR* is closed/merged
