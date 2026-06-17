@@ -10,10 +10,12 @@
 pub mod base;
 pub mod dashboard;
 pub mod diff;
+pub mod discussion;
 pub mod domain;
 pub mod error;
 pub mod github;
 pub mod pr;
+pub mod publish;
 pub mod repo_key;
 pub mod review_folder;
 pub mod reviewer;
@@ -27,6 +29,9 @@ pub use dashboard::{
     assemble_dashboard, DashboardRow, DashboardView, ReviewRole, ReviewSignal, ReviewStatus,
 };
 pub use diff::DiffLineIndex;
+pub use discussion::{
+    group_threads_by_step, PrDiscussion, ReviewThread, StepThreads, ThreadComment,
+};
 pub use domain::{
     Debrief, DebriefInput, DebriefStep, NoteAnchor, NoteReply, NoteStatus, ReplyAuthor, Review,
     SelfReviewNote, SelfReviewNoteView, Side,
@@ -37,10 +42,15 @@ pub use pr::{
     CheckResult, CheckStatus, DraftLineComment, IssueComment, LineComment, MergeMethod, PrActivity,
     ReviewSummary, SubmittedVerdict, Verdict,
 };
+pub use publish::{
+    assess_publish_readiness, publish_review, PublishAction, PublishOutcome, PublishReadiness,
+    PublishRequest,
+};
 pub use repo_key::{origin_slug, repo_key_from_cwd, repo_root_from_cwd, slug_from_remote, RepoKey};
 pub use review_folder::{
     find_review, read_review_at, read_review_from_tree, resync_folder, review_committed_for_branch,
-    review_dir, scoped_commit, stage_root, write_review, ReviewMeta, ReviewStep, StageReview,
+    review_dir, scoped_commit, stage_folder_has_changes, stage_root, write_review, ReviewMeta,
+    ReviewStep, StageReview,
 };
 pub use reviewer::{
     checkout_pr_branch, open_review, parse_pr_ref, resolve_clone, PrRef, ReviewerEntry, ReviewerPr,

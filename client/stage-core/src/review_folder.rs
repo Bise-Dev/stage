@@ -575,6 +575,19 @@ pub fn scoped_commit(repo_root: &Path, branch: &str, message: &str) -> Result<St
     Ok(head.trim().to_string())
 }
 
+/// Whether `.stage/<branch>/…` has uncommitted changes (new, modified, or
+/// deleted files) relative to `HEAD`. Drives Publish's idempotency (milestone D):
+/// the scoped commit is skipped when the folder is already committed, so a
+/// re-publish with no storyline edits — or a retry after a failed push — proceeds
+/// straight to `git push` instead of failing on `git commit`'s "nothing to
+/// commit". Scoped to the `.stage/<branch>` pathspec so the user's own in-flight
+/// code changes never count.
+pub fn stage_folder_has_changes(repo_root: &Path, branch: &str) -> Result<bool, StageError> {
+    let folder = format!("{STAGE_DIR}/{}", folder_name_for_branch(branch)?);
+    let out = run_git(repo_root, &["status", "--porcelain", "--", &folder])?;
+    Ok(!out.trim().is_empty())
+}
+
 /// Run `git -C <repo_root> <args>`; fail loud (log + surface git's stderr) on a
 /// non-zero exit. Returns stdout.
 fn run_git(repo_root: &Path, args: &[&str]) -> Result<String, StageError> {
