@@ -4022,6 +4022,7 @@ dependencies = [
  "clap",
  "serde_json",
  "stage-core",
+ "tempfile",
 ]
 
 [[package]]

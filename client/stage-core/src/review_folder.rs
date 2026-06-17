@@ -299,6 +299,142 @@ pub fn find_review(
     Ok(None)
 }
 
+/// Read the committed Review for `branch` straight from a git `root_tree` — the
+/// reviewer-entry read path (ADR-0022 §6, milestone F). The reviewer fetches the
+/// PR head and reads its `.stage/<branch>/` **from the committed tree, never the
+/// working dir**, so the storyline renders with **no checkout and no
+/// working-tree mutation** (the read-only invariant). Mirrors [`find_review`]'s
+/// fast-path-then-`head_ref`-scan discovery, but over a `git2::Tree`.
+///
+/// Returns `None` when the head carries no `.stage` (a plain PR) or no folder's
+/// authoritative `head_ref` matches `branch`. A malformed `review.toml`/step file
+/// fails loud, exactly as the on-disk [`read_review_at`] does — never a silent
+/// empty Review.
+pub fn read_review_from_tree(
+    repo: &git2::Repository,
+    root_tree: &git2::Tree,
+    branch: &str,
+) -> Result<Option<StageReview>, StageError> {
+    // The `.stage` subtree; absent → no committed Review (a plain PR).
+    let Some(stage_tree) = child_tree(repo, root_tree, STAGE_DIR)? else {
+        return Ok(None);
+    };
+
+    // Fast path: the folder named for this branch, accepted only if its
+    // authoritative head_ref agrees (a sanitized-name collision falls through).
+    let fast_name = folder_name_for_branch(branch)?;
+    if let Some(review) = read_review_folder_from_tree(repo, &stage_tree, &fast_name)? {
+        if review.meta.head_ref == branch {
+            return Ok(Some(review));
+        }
+    }
+
+    // Scan: head_ref is the source of truth, so a stale/renamed folder name is
+    // still found here.
+    for entry in stage_tree.iter() {
+        if entry.kind() != Some(git2::ObjectType::Tree) {
+            continue; // only review folders are subtrees
+        }
+        let Some(name) = entry.name() else {
+            continue;
+        };
+        if name == fast_name {
+            continue; // already tried on the fast path
+        }
+        if let Some(review) = read_review_folder_from_tree(repo, &stage_tree, name)? {
+            if review.meta.head_ref == branch {
+                return Ok(Some(review));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Read one `.stage/<folder>/` Review folder from a git tree. `None` when the
+/// named folder is absent or has no `review.toml` (not a Review folder).
+fn read_review_folder_from_tree(
+    repo: &git2::Repository,
+    stage_tree: &git2::Tree,
+    folder_name: &str,
+) -> Result<Option<StageReview>, StageError> {
+    let Some(folder_tree) = child_tree(repo, stage_tree, folder_name)? else {
+        return Ok(None);
+    };
+    let Some(meta_raw) = blob_string(repo, &folder_tree, REVIEW_TOML)? else {
+        return Ok(None);
+    };
+    let meta: ReviewMeta = toml::from_str(&meta_raw).map_err(|e| {
+        tracing::error!(err = %e, folder = %folder_name, "review_toml_tree_parse_failed");
+        StageError::Invalid(format!(".stage/{folder_name}/{REVIEW_TOML}: {e}"))
+    })?;
+
+    let mut steps = Vec::new();
+    if let Some(steps_tree) = child_tree(repo, &folder_tree, STEPS_DIR)? {
+        for entry in steps_tree.iter() {
+            let Some(name) = entry.name() else {
+                continue;
+            };
+            if !name.ends_with(".md") {
+                continue;
+            }
+            let (order, slug) = parse_step_filename(name)?;
+            let raw = blob_string(repo, &steps_tree, name)?.ok_or_else(|| {
+                StageError::Invalid(format!(
+                    ".stage/{folder_name}/{STEPS_DIR}/{name} is not a file"
+                ))
+            })?;
+            let (anchor, title, intro) = parse_step_body(&raw, name)?;
+            steps.push(ReviewStep {
+                order,
+                slug,
+                anchor,
+                title,
+                intro,
+            });
+        }
+    }
+    steps.sort_by_key(|s| s.order);
+    Ok(Some(StageReview { meta, steps }))
+}
+
+/// The child subtree named `name` under `tree`, or `None` if absent or not a
+/// tree (a blob with that name). Read-only tree navigation for the reviewer
+/// entry.
+fn child_tree<'r>(
+    repo: &'r git2::Repository,
+    tree: &git2::Tree,
+    name: &str,
+) -> Result<Option<git2::Tree<'r>>, StageError> {
+    let Some(entry) = tree.get_name(name) else {
+        return Ok(None);
+    };
+    if entry.kind() != Some(git2::ObjectType::Tree) {
+        return Ok(None);
+    }
+    let obj = entry.to_object(repo)?;
+    let tree = obj
+        .into_tree()
+        .map_err(|_| StageError::Invalid(format!("{name} is not a tree")))?;
+    Ok(Some(tree))
+}
+
+/// The UTF-8 contents of the blob named `name` under `tree`, or `None` if absent.
+/// `None` is also returned for a non-blob entry (a subtree with that name).
+fn blob_string(
+    repo: &git2::Repository,
+    tree: &git2::Tree,
+    name: &str,
+) -> Result<Option<String>, StageError> {
+    let Some(entry) = tree.get_name(name) else {
+        return Ok(None);
+    };
+    let obj = entry.to_object(repo)?;
+    let Some(blob) = obj.as_blob() else {
+        return Ok(None);
+    };
+    Ok(Some(String::from_utf8_lossy(blob.content()).into_owned()))
+}
+
 /// Is the PR on `branch` **Stage-guided** (DB-2 #85)? `true` when a committed
 /// `.stage/<branch>/review.toml` exists in the git *tree* at the branch's head.
 ///
@@ -755,5 +891,69 @@ mod tests {
 
         // A branch absent from this clone → not detectable, `Ok(false)` (no error).
         assert!(!review_committed_for_branch(root, "feat/never-fetched").unwrap());
+    }
+
+    #[test]
+    fn read_review_from_tree_reads_committed_stage_without_checkout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        repo(root); // one commit on `main`, identity configured
+
+        // Commit a Review on feat/x.
+        git(root, &["checkout", "-q", "-b", "feat/x"]);
+        write_review(root, &sample("feat/x")).unwrap();
+        scoped_commit(root, "feat/x", "stage: publish review").unwrap();
+
+        // Move back to main: the working tree no longer holds `.stage/feat-x/`.
+        git(root, &["checkout", "-q", "main"]);
+        assert!(
+            !root.join(".stage").join("feat-x").exists(),
+            "precondition: feat/x's .stage is not in the working tree"
+        );
+
+        // Read the Review straight from feat/x's committed tree — no checkout.
+        let repo = git2::Repository::open(root).unwrap();
+        let tree = repo
+            .revparse_single("feat/x")
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .tree()
+            .unwrap();
+        let review = read_review_from_tree(&repo, &tree, "feat/x")
+            .unwrap()
+            .expect("committed .stage read from the tree");
+        assert_eq!(review.meta.head_ref, "feat/x");
+        assert_eq!(review.meta.title, "Rename Workspace to Review");
+        // Steps come back in order, fully parsed (frontmatter + intro body).
+        assert_eq!(review.steps.len(), 2);
+        assert_eq!(review.steps[0].order, 10);
+        assert_eq!(review.steps[0].anchor, "src/domain.rs");
+        assert_eq!(review.steps[0].title.as_deref(), Some("Rename the type"));
+        assert!(review.steps[0].intro.contains("Renamed `Workspace`"));
+        assert_eq!(review.steps[1].order, 20);
+        assert_eq!(review.steps[1].anchor, "src/store.rs");
+
+        // A plain head (no `.stage` in its tree) → None, not an error.
+        git(root, &["checkout", "-q", "-b", "feat/plain"]);
+        std::fs::write(root.join("plain.rs"), "fn p() {}\n").unwrap();
+        git(root, &["add", "plain.rs"]);
+        git(root, &["commit", "-q", "-m", "plain"]);
+        let plain_tree = repo
+            .revparse_single("feat/plain")
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .tree()
+            .unwrap();
+        assert!(read_review_from_tree(&repo, &plain_tree, "feat/plain")
+            .unwrap()
+            .is_none());
+
+        // A head that carries a `.stage` but not for the asked branch → None
+        // (head_ref is authoritative). feat/x's tree has only feat-x's folder.
+        assert!(read_review_from_tree(&repo, &tree, "feat/other")
+            .unwrap()
+            .is_none());
     }
 }

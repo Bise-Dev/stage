@@ -25,19 +25,31 @@ use crate::recents::RecentsStore;
 use crate::session::SessionStore;
 use crate::state::{AppState, AuthSession, OpenIntent, OpenMode};
 
-/// Parse a `stage open <repo-root>` invocation out of a process argv (the
-/// program name is `argv[0]`). Returns the open-intent, or `None` for a plain
-/// launch (dock/Finder). Shared by cold start (`setup`) and the warm-start
+/// Parse a `stage open <repo-root> [--review <owner>/<repo>#<n>]` invocation out
+/// of a process argv (the program name is `argv[0]`). Returns the open-intent, or
+/// `None` for a plain launch (dock/Finder). With `--review` the mode is
+/// `Review` and `pr` carries the resolved PR (ADR-0022 §6); otherwise it is a
+/// Self-Review open. Shared by cold start (`setup`) and the warm-start
 /// single-instance callback (ADR-0014).
 fn parse_open_intent(argv: &[String]) -> Option<OpenIntent> {
     let mut it = argv.iter().skip(1);
     while let Some(arg) = it.next() {
         if arg == "open" {
             // The next token is the canonical repo root the CLI resolved.
-            return it.next().map(|p| OpenIntent {
-                repo: PathBuf::from(p),
-                mode: OpenMode::SelfReview,
-            });
+            let repo = PathBuf::from(it.next()?);
+            // Optional `--review <owner>/<repo>#<number>` → read-only review mode.
+            // The CLI emits the `owner/repo#n` shorthand `parse_pr_ref` accepts.
+            let mut pr = None;
+            let mut mode = OpenMode::SelfReview;
+            while let Some(flag) = it.next() {
+                if flag == "--review" {
+                    if let Some(p) = it.next().and_then(|s| stage_core::parse_pr_ref(s).ok()) {
+                        pr = Some(p);
+                        mode = OpenMode::Review;
+                    }
+                }
+            }
+            return Some(OpenIntent { repo, mode, pr });
         }
     }
     None
@@ -271,6 +283,8 @@ pub fn run() {
             commands::storyline_step_remove,
             commands::storyline_steps_reorder,
             commands::storyline_preview,
+            commands::review_open,
+            commands::review_checkout_branch,
             #[cfg(debug_assertions)]
             activity_log::activity_log_snapshot,
             #[cfg(debug_assertions)]

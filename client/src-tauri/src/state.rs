@@ -37,23 +37,30 @@ pub struct AppState {
     pub activity_log: Arc<crate::activity_log::ActivityLog>,
 }
 
-/// What `stage open` asks the GUI to do. Only the repo root is carried — the
-/// branch is rediscovered from that working tree (ADR-0014).
+/// What `stage open` asks the GUI to do (ADR-0014). `repo` is the local clone
+/// the screen targets — the branch is rediscovered from its working tree for
+/// Self-Review, and for Review it is the clone the PR was resolved to by `origin`
+/// match (ADR-0022 §6). `pr` is carried only in `Review` mode.
 #[derive(Clone, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct OpenIntent {
     pub repo: PathBuf,
     pub mode: OpenMode,
+    /// The pull request to open for review; `Some` only when `mode == Review`
+    /// (ADR-0022 §6). `null` for a Self-Review open.
+    pub pr: Option<stage_core::PrRef>,
 }
 
-/// The screen `stage open` lands on. Self-Review only today; an enum so adding
-/// a mode later is a non-breaking change. Serializes as `"selfReview"`.
+/// The screen `stage open` lands on. `SelfReview` (the author's local review) or
+/// `Review` (open a PR read-only, ADR-0022 §6). Serializes as `"selfReview"` /
+/// `"review"`.
 #[derive(Clone, Copy, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum OpenMode {
     SelfReview,
+    Review,
 }
 
 pub struct ActiveRepo {

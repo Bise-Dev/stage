@@ -1275,3 +1275,39 @@ pub fn storyline_preview(state: State<'_, AppState>) -> Result<StorylinePreview,
     let store = Store::open_default()?;
     Ok(stage_core::storyline::preview(&store, &path, &key)?)
 }
+
+/// Open `pr` for review against the active repo's clone, **read-only**
+/// (ADR-0022 §6, milestone F): resolve the PR via `gh`, fetch its head, and
+/// render the tree-to-tree diff + the author's storyline read from the committed
+/// `.stage/<branch>/` — no working-tree mutation. The view-ready
+/// [`stage_core::ReviewerEntry`] is computed entirely in Rust; the webview only
+/// renders it (ADR-0022 §7). Shells out to `gh`/`git` like the other networked
+/// commands (Tauri runs it on a worker; the webview shows a spinner).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn review_open(
+    state: State<'_, AppState>,
+    pr: stage_core::PrRef,
+) -> Result<stage_core::ReviewerEntry, AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    Ok(stage_core::open_review(&state.github, &repo_root, &pr)?)
+}
+
+/// Check out the PR's `branch` in the active repo (`git checkout -B`) — **the
+/// lone working-tree mutation the reviewer flow performs** (ADR-0022 §6), so the
+/// reviewer can build/run. The webview gates this behind an explicit "Check out
+/// this branch" confirmation; everything else stays read-only. Fail loud (git's
+/// stderr verbatim) on a dirty tree or a missing fetched head.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn review_checkout_branch(
+    state: State<'_, AppState>,
+    pr: stage_core::PrRef,
+    branch: String,
+) -> Result<(), AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    stage_core::checkout_pr_branch(&state.github, &repo_root, &pr, &branch)?;
+    Ok(())
+}
