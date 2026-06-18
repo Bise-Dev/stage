@@ -171,8 +171,10 @@ pub fn run() {
                 recents: Arc::new(recents),
                 // Shared credential-free GitHub adapter (ADR-0022 §5): its `gh`
                 // auth gate + `gh api user` identity resolve once and are reused by
-                // every GitHub command. Stage holds no token of its own.
-                github: stage_core::GitHub::new(),
+                // every GitHub command. Stage holds no token of its own. `Arc` so
+                // networked commands clone it into `spawn_blocking` and run `gh`/git
+                // off the UI thread without re-running the auth gate (ADR-0023).
+                github: Arc::new(stage_core::GitHub::new()),
                 pending_open: Mutex::new(pending_open),
                 #[cfg(debug_assertions)]
                 activity_log,

@@ -47,10 +47,13 @@ function DevRootWithDrawer({ children }: { children: ReactNode }) {
   // flashes at the default height before settling.
   if (sizePct == null) return <>{children}</>;
 
-  // Remount the group on open/close so the app panel cleanly reclaims 100% when
-  // the drawer is hidden, and restores the saved split when shown.
+  // The app lives in the top panel and MUST stay mounted across drawer toggles:
+  // never key/remount the Group, or the whole app subtree (`children`) remounts
+  // and loses its state — it snaps back to the repo picker on every open/close.
+  // The library re-normalizes the app panel to 100% when the drawer panel
+  // unmounts, and the drawer restores the saved split via its `defaultSize`.
   return (
-    <Group key={open ? 'open' : 'closed'} orientation="vertical" style={{ height: '100%' }}>
+    <Group orientation="vertical" style={{ height: '100%' }}>
       <Panel id="app" minSize="20%">
         {children}
       </Panel>

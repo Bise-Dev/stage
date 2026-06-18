@@ -146,6 +146,18 @@ function ThreadView({
   writes: DiscussionWrites;
 }) {
   const rootId = thread.comments[0]?.id;
+  // Resolve/reopen hits `gh` (network). Guard against a double-click firing two
+  // mutations now that the command runs async and the UI no longer blocks
+  // (ADR-0023) — same `busy` pattern as Composer/VerdictBar.
+  const [toggling, setToggling] = useState(false);
+  const toggleResolved = async () => {
+    setToggling(true);
+    try {
+      await (thread.isResolved ? writes.onReopen(thread.id) : writes.onResolve(thread.id));
+    } finally {
+      setToggling(false);
+    }
+  };
   return (
     <div
       style={{
@@ -182,11 +194,16 @@ function ThreadView({
         <button
           type="button"
           className="btn"
-          onClick={() =>
-            void (thread.isResolved ? writes.onReopen(thread.id) : writes.onResolve(thread.id))
-          }
+          onClick={() => void toggleResolved()}
+          disabled={toggling}
         >
-          {thread.isResolved ? 'Reopen' : 'Resolve'}
+          {toggling
+            ? thread.isResolved
+              ? 'Reopening…'
+              : 'Resolving…'
+            : thread.isResolved
+              ? 'Reopen'
+              : 'Resolve'}
         </button>
       </div>
       <div style={{ padding: '8px 10px' }}>

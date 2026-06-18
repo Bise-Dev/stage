@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
@@ -315,21 +316,31 @@ pub fn git_diff_files(
 /// in Rust (TS only renders). The local-first replacement for `repo_overview` —
 /// the repo + identity come from the active repo and the user's own `gh`, so
 /// there are no owner/repo args. `include_archived` flips the DB-5 view filter.
-/// Sync: it shells out to `gh`/`git` like the other stage-core commands (Tauri
-/// runs it on a worker; the webview shows a spinner).
+/// Async (ADR-0023): the blocking `gh` PR search + `git`/store reads run in
+/// `spawn_blocking`, off the UI thread, so the window stays responsive while the
+/// webview shows its spinner.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn dashboard_overview(
+pub async fn dashboard_overview(
     state: State<'_, AppState>,
     include_archived: bool,
 ) -> Result<stage_core::DashboardView, AppError> {
     let path = active_repo_path(&state)?;
-    let key = repo_key_from_cwd(&path)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    let store = Store::open_default()?;
-    let view =
-        stage_core::assemble_dashboard(&store, &state.github, &repo_root, &key, include_archived)?;
-    Ok(view)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::DashboardView, AppError> {
+        let key = repo_key_from_cwd(&path)?;
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        let store = Store::open_default()?;
+        Ok(stage_core::assemble_dashboard(
+            &store,
+            &github,
+            &repo_root,
+            &key,
+            include_archived,
+        )?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("dashboard_overview_join_error: {e}")))?
 }
 
 /// The unified storyline-staleness check (ST-1 #89) for the active repo+branch:
@@ -404,9 +415,16 @@ pub async fn git_fetch(state: State<'_, AppState>) -> Result<git::FetchOutcome, 
 // per invocation with its duration (debug builds only). `skip_all` keeps the
 // non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn git_push(state: State<'_, AppState>, branch: String) -> Result<git::PushOutcome, AppError> {
+pub async fn git_push(
+    state: State<'_, AppState>,
+    branch: String,
+) -> Result<git::PushOutcome, AppError> {
     let repo = active_repo_path(&state)?;
-    git::push(&repo, &branch)
+    // The push goes over the network with the user's git credentials — keep it
+    // off the UI thread (ADR-0023), mirroring `git_fetch`.
+    tauri::async_runtime::spawn_blocking(move || git::push(&repo, &branch))
+        .await
+        .map_err(|e| AppError::Backend(format!("git_push_join_error: {e}")))?
 }
 
 #[tauri::command]
@@ -743,17 +761,22 @@ pub fn storyline_preview(state: State<'_, AppState>) -> Result<StorylinePreview,
 /// render the tree-to-tree diff + the author's storyline read from the committed
 /// `.stage/<branch>/` — no working-tree mutation. The view-ready
 /// [`stage_core::ReviewerEntry`] is computed entirely in Rust; the webview only
-/// renders it (ADR-0022 §7). Shells out to `gh`/`git` like the other networked
-/// commands (Tauri runs it on a worker; the webview shows a spinner).
+/// renders it (ADR-0022 §7). Async (ADR-0023): the blocking `gh`/`git` work runs
+/// in `spawn_blocking`, off the UI thread, while the webview shows a spinner.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn review_open(
+pub async fn review_open(
     state: State<'_, AppState>,
     pr: stage_core::PrRef,
 ) -> Result<stage_core::ReviewerEntry, AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    Ok(stage_core::open_review(&state.github, &repo_root, &pr)?)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::ReviewerEntry, AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        Ok(stage_core::open_review(&github, &repo_root, &pr)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("review_open_join_error: {e}")))?
 }
 
 /// Check out the PR's `branch` in the active repo (`git checkout -B`) — **the
@@ -763,15 +786,20 @@ pub fn review_open(
 /// stderr verbatim) on a dirty tree or a missing fetched head.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn review_checkout_branch(
+pub async fn review_checkout_branch(
     state: State<'_, AppState>,
     pr: stage_core::PrRef,
     branch: String,
 ) -> Result<(), AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    stage_core::checkout_pr_branch(&state.github, &repo_root, &pr, &branch)?;
-    Ok(())
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        stage_core::checkout_pr_branch(&github, &repo_root, &pr, &branch)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("review_checkout_branch_join_error: {e}")))?
 }
 
 // --- Identity (ADR-0022 §5, milestone C) -------------------------------------
@@ -785,8 +813,15 @@ pub fn review_checkout_branch(
 /// `gh`'s real message when `gh` is absent or unauthenticated (no broker fallback).
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn gh_identity(state: State<'_, AppState>) -> Result<stage_core::GitHubUser, AppError> {
-    Ok(state.github.current_user()?)
+pub async fn gh_identity(state: State<'_, AppState>) -> Result<stage_core::GitHubUser, AppError> {
+    let github = Arc::clone(&state.github);
+    // First call runs `gh auth status` + `gh api user` (network); cached after.
+    // Keep even that one-time hit off the UI thread (ADR-0023).
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::GitHubUser, AppError> {
+        Ok(github.current_user()?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("gh_identity_join_error: {e}")))?
 }
 
 // --- Publish (PUB-1..7, ADR-0022 §3/§7, milestone D) -------------------------
@@ -796,8 +831,8 @@ pub fn gh_identity(state: State<'_, AppState>) -> Result<stage_core::GitHubUser,
 // and create/update/reopen the PR via `gh` (auto-posting the single "Open in
 // Stage" comment on first create). All lifecycle transitions are computed in Rust
 // (ADR-0022 §7); the gate and every gh/git failure fail loud (StageError →
-// AppError, message verbatim). Shells out to gh/git like the other networked
-// commands (Tauri runs it on a worker; the webview shows a spinner).
+// AppError, message verbatim). The several back-to-back gh/git network ops run
+// in `spawn_blocking`, off the UI thread (ADR-0023); the webview shows a spinner.
 
 /// Whether the active repo+branch's draft storyline is ready to publish (PUB-2
 /// #73): **≥1 step and every step has a non-empty intro**. Computed from the
@@ -821,21 +856,22 @@ pub fn publish_readiness(
 /// a not-ready draft (same gate as `publish_readiness`) or any gh/git failure.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn review_publish(
+pub async fn review_publish(
     state: State<'_, AppState>,
     req: stage_core::PublishRequest,
 ) -> Result<stage_core::PublishOutcome, AppError> {
     let path = active_repo_path(&state)?;
-    let key = repo_key_from_cwd(&path)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    let store = Store::open_default()?;
-    Ok(stage_core::publish_review(
-        &store,
-        &state.github,
-        &repo_root,
-        &key,
-        &req,
-    )?)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::PublishOutcome, AppError> {
+        let key = repo_key_from_cwd(&path)?;
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        let store = Store::open_default()?;
+        Ok(stage_core::publish_review(
+            &store, &github, &repo_root, &key, &req,
+        )?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("review_publish_join_error: {e}")))?
 }
 
 // --- Native GitHub review & verdict (RW-1..5, ADR-0022 §4/§8, milestone E) ----
@@ -849,13 +885,18 @@ pub fn review_publish(
 /// (RW-4): state, verdict decision, reviews, conversation + line comments, checks.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_activity(
+pub async fn pr_activity(
     state: State<'_, AppState>,
     pr_number: u32,
 ) -> Result<stage_core::PrActivity, AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    Ok(state.github.read_pr_activity(&repo_root, pr_number)?)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::PrActivity, AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        Ok(github.read_pr_activity(&repo_root, pr_number)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_activity_join_error: {e}")))?
 }
 
 /// Submit the overall review **verdict** (RW-3, ADR-0022 §8): `approve` /
@@ -863,7 +904,7 @@ pub fn pr_activity(
 /// line comments. `requestChanges`/`comment` require a non-empty body (enforced).
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_submit_verdict(
+pub async fn pr_submit_verdict(
     state: State<'_, AppState>,
     pr_number: u32,
     verdict: stage_core::Verdict,
@@ -871,79 +912,105 @@ pub fn pr_submit_verdict(
     comments: Vec<stage_core::DraftLineComment>,
 ) -> Result<stage_core::SubmittedVerdict, AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    Ok(state
-        .github
-        .submit_verdict(&repo_root, pr_number, verdict, &body, &comments)?)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(
+        move || -> Result<stage_core::SubmittedVerdict, AppError> {
+            let repo_root = stage_core::repo_root_from_cwd(&path)?;
+            Ok(github.submit_verdict(&repo_root, pr_number, verdict, &body, &comments)?)
+        },
+    )
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_submit_verdict_join_error: {e}")))?
 }
 
 /// Post a single inline review comment anchored to a diff line (RW-2).
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_comment_on_line(
+pub async fn pr_comment_on_line(
     state: State<'_, AppState>,
     pr_number: u32,
     comment: stage_core::DraftLineComment,
 ) -> Result<stage_core::LineComment, AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    Ok(state
-        .github
-        .comment_on_line(&repo_root, pr_number, &comment)?)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::LineComment, AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        Ok(github.comment_on_line(&repo_root, pr_number, &comment)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_comment_on_line_join_error: {e}")))?
 }
 
 /// Post a file-level review comment (RW-2) — not anchored to a specific line.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_comment_on_file(
+pub async fn pr_comment_on_file(
     state: State<'_, AppState>,
     pr_number: u32,
     path: String,
     body: String,
 ) -> Result<stage_core::LineComment, AppError> {
     let repo = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&repo)?;
-    Ok(state
-        .github
-        .comment_on_file(&repo_root, pr_number, &path, &body)?)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::LineComment, AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&repo)?;
+        Ok(github.comment_on_file(&repo_root, pr_number, &path, &body)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_comment_on_file_join_error: {e}")))?
 }
 
 /// Merge the PR (RW-5) with the given method (`merge`/`squash`/`rebase`).
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_merge(
+pub async fn pr_merge(
     state: State<'_, AppState>,
     pr_number: u32,
     method: stage_core::MergeMethod,
 ) -> Result<(), AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    state.github.merge_pr(&repo_root, pr_number, method)?;
-    Ok(())
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        github.merge_pr(&repo_root, pr_number, method)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_merge_join_error: {e}")))?
 }
 
 /// Close the PR without merging (RW-5).
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_close(state: State<'_, AppState>, pr_number: u32) -> Result<(), AppError> {
+pub async fn pr_close(state: State<'_, AppState>, pr_number: u32) -> Result<(), AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    state.github.close_pr(&repo_root, pr_number)?;
-    Ok(())
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        github.close_pr(&repo_root, pr_number)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_close_join_error: {e}")))?
 }
 
 /// Flip the PR's draft status (RW-5): `true` → mark draft, `false` → ready.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_set_draft(
+pub async fn pr_set_draft(
     state: State<'_, AppState>,
     pr_number: u32,
     draft: bool,
 ) -> Result<(), AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    state.github.set_pr_draft(&repo_root, pr_number, draft)?;
-    Ok(())
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        github.set_pr_draft(&repo_root, pr_number, draft)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_set_draft_join_error: {e}")))?
 }
 
 // --- Per-step PR discussion (IC-1..3, ADR-0022 §4, milestone E) ---------------
@@ -960,22 +1027,27 @@ pub fn pr_set_draft(
 /// the webview already holds (from the reviewer entry or the draft storyline).
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_discussion(
+pub async fn pr_discussion(
     state: State<'_, AppState>,
     pr_number: u32,
     step_anchors: Vec<String>,
 ) -> Result<stage_core::PrDiscussion, AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    let threads = state.github.read_pr_threads(&repo_root, pr_number)?;
-    Ok(stage_core::group_threads_by_step(&step_anchors, threads))
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::PrDiscussion, AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        let threads = github.read_pr_threads(&repo_root, pr_number)?;
+        Ok(stage_core::group_threads_by_step(&step_anchors, threads))
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_discussion_join_error: {e}")))?
 }
 
 /// Start a new code-anchored discussion thread on a step (IC-1): a line comment
 /// when `line` is set, else a file-level comment. `anchor` is the step's diff path.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_start_thread(
+pub async fn pr_start_thread(
     state: State<'_, AppState>,
     pr_number: u32,
     anchor: String,
@@ -984,68 +1056,103 @@ pub fn pr_start_thread(
     body: String,
 ) -> Result<stage_core::LineComment, AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    Ok(state
-        .github
-        .start_step_thread(&repo_root, pr_number, &anchor, line, side, &body)?)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::LineComment, AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        Ok(github.start_step_thread(&repo_root, pr_number, &anchor, line, side, &body)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_start_thread_join_error: {e}")))?
 }
 
 /// Reply to an existing thread (IC-1), addressing its root comment id.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_reply_thread(
+pub async fn pr_reply_thread(
     state: State<'_, AppState>,
     pr_number: u32,
     in_reply_to: u64,
     body: String,
 ) -> Result<stage_core::ThreadComment, AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    Ok(state
-        .github
-        .reply_to_thread(&repo_root, pr_number, in_reply_to, &body)?)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::ThreadComment, AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        Ok(github.reply_to_thread(&repo_root, pr_number, in_reply_to, &body)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_reply_thread_join_error: {e}")))?
 }
 
 /// Resolve a review thread (IC-2), by its GraphQL node id. Returns whether the
 /// thread's resolution state changed.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_resolve_thread(state: State<'_, AppState>, thread_id: String) -> Result<bool, AppError> {
+pub async fn pr_resolve_thread(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<bool, AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    Ok(state.github.resolve_thread(&repo_root, &thread_id)?)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<bool, AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        Ok(github.resolve_thread(&repo_root, &thread_id)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_resolve_thread_join_error: {e}")))?
 }
 
 /// Reopen a resolved review thread (IC-2), by its GraphQL node id.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_reopen_thread(state: State<'_, AppState>, thread_id: String) -> Result<bool, AppError> {
+pub async fn pr_reopen_thread(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<bool, AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    Ok(state.github.reopen_thread(&repo_root, &thread_id)?)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<bool, AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        Ok(github.reopen_thread(&repo_root, &thread_id)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_reopen_thread_join_error: {e}")))?
 }
 
 /// Edit one's own thread comment (IC-3), by its REST comment id. GitHub enforces
 /// authorship; the webview shows the affordance only when `viewerCanUpdate`.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_edit_comment(
+pub async fn pr_edit_comment(
     state: State<'_, AppState>,
     comment_id: u64,
     body: String,
 ) -> Result<stage_core::ThreadComment, AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    Ok(state.github.edit_comment(&repo_root, comment_id, &body)?)
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::ThreadComment, AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        Ok(github.edit_comment(&repo_root, comment_id, &body)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_edit_comment_join_error: {e}")))?
 }
 
 /// Delete one's own thread comment (IC-3), by its REST comment id. GitHub
 /// enforces authorship; gated in the webview by `viewerCanDelete`.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn pr_delete_comment(state: State<'_, AppState>, comment_id: u64) -> Result<(), AppError> {
+pub async fn pr_delete_comment(
+    state: State<'_, AppState>,
+    comment_id: u64,
+) -> Result<(), AppError> {
     let path = active_repo_path(&state)?;
-    let repo_root = stage_core::repo_root_from_cwd(&path)?;
-    state.github.delete_comment(&repo_root, comment_id)?;
-    Ok(())
+    let github = Arc::clone(&state.github);
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), AppError> {
+        let repo_root = stage_core::repo_root_from_cwd(&path)?;
+        github.delete_comment(&repo_root, comment_id)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("pr_delete_comment_join_error: {e}")))?
 }

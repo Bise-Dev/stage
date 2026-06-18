@@ -13,7 +13,11 @@ pub struct AppState {
     /// docs advise, so the `gh` auth gate and `gh api user` identity resolve at
     /// most once per process. Every GitHub command (publish, verdict, discussion,
     /// dashboard PR search, identity) goes through it. Stage stores no token.
-    pub github: stage_core::GitHub,
+    ///
+    /// `Arc` so a networked command can `Arc::clone` it into a `spawn_blocking`
+    /// closure and run its blocking `gh`/`git` I/O off the UI thread (ADR-0023)
+    /// while still sharing the one cached auth gate + identity across calls.
+    pub github: Arc<stage_core::GitHub>,
     /// A pending `stage open` request (ADR-0014): on cold start it is parsed
     /// from this process's argv in `setup`; on warm start the single-instance
     /// callback writes it here and emits `open-intent`. The webview drains it

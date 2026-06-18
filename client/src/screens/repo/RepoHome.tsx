@@ -19,8 +19,6 @@ import {
 } from '../../tauri';
 import { RepoBranchList, type RepoFilter, buildRepoRows, repoRowCounts } from './RepoBranchList';
 
-const SHOW_PATHS_KEY = 'repoHome:showPaths';
-
 /** Owner/name from a remote URL, else the path's basename. Mirrors the Rust
  *  `slug_from_remote`. */
 function repoLabel(remoteUrl: string | null, path: string): string {
@@ -114,9 +112,6 @@ export function RepoHome({
   const [fetching, setFetching] = useState(false);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<RepoFilter>('all');
-  const [showPaths, setShowPaths] = useState(
-    () => localStorage.getItem(SHOW_PATHS_KEY) !== 'false',
-  );
 
   const reload = useCallback(async () => {
     try {
@@ -167,14 +162,6 @@ export function RepoHome({
       for (const off of offs) void off.then((f) => f());
     };
   }, [reload]);
-
-  const toggleShowPaths = useCallback(() => {
-    setShowPaths((cur) => {
-      const next = !cur;
-      localStorage.setItem(SHOW_PATHS_KEY, String(next));
-      return next;
-    });
-  }, []);
 
   const onFetch = useCallback(async () => {
     setFetching(true);
@@ -264,19 +251,6 @@ export function RepoHome({
               />
             </div>
 
-            <div className="section-label" style={{ marginTop: 14, padding: '0 6px' }}>
-              Paths
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              <FilterRow
-                icon={<Icon name="eye" size={11} />}
-                label={showPaths ? 'Shown' : 'Hidden'}
-                count=""
-                active={showPaths}
-                onClick={toggleShowPaths}
-              />
-            </div>
-
             <div style={{ flex: 1 }} />
 
             <div className="section-label" style={{ marginTop: 14, padding: '0 6px' }}>
@@ -351,7 +325,6 @@ export function RepoHome({
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
               <RepoBranchList
                 rows={rows}
-                showPaths={showPaths}
                 filter={filter}
                 query={query}
                 onSelfReview={onSelfReview}
