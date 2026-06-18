@@ -163,11 +163,9 @@ function Bucket({
 
 function RepoBranchRow({
   row,
-  showPaths,
   onSelfReview,
 }: {
   row: RepoRow;
-  showPaths: boolean;
   onSelfReview: (worktreePath: string) => void;
 }) {
   const { branch, worktree, isDefault, hasDebrief } = row;
@@ -176,9 +174,9 @@ function RepoBranchRow({
   // row whose directory still exists (not prunable).
   const canSelfReview = worktree !== null && worktree.prunable === null;
   const updated = branch ? relativeTimeFromEpoch(branch.updatedAt) : null;
-  // Second line: the worktree path (toggleable) for worktree rows, else the last
-  // commit subject so a plain branch row isn't empty.
-  const subtitle = worktree && showPaths ? worktree.path : !worktree ? branch?.lastCommit : null;
+  // Second line: the worktree path for worktree rows, else the last commit
+  // subject so a plain branch row isn't empty.
+  const subtitle = worktree ? worktree.path : (branch?.lastCommit ?? null);
 
   return (
     // `group` drives the hover-reveal of the Self-review button (below).
@@ -307,13 +305,11 @@ function RepoBranchRow({
 
 export function RepoBranchList({
   rows,
-  showPaths,
   filter,
   query,
   onSelfReview,
 }: {
   rows: RepoRow[];
-  showPaths: boolean;
   filter: RepoFilter;
   /** Free-text filter over branch name + worktree path. */
   query: string;
@@ -352,7 +348,7 @@ export function RepoBranchList({
           count={worktreeRows.length}
         >
           {worktreeRows.map((r) => (
-            <RepoBranchRow key={r.key} row={r} showPaths={showPaths} onSelfReview={onSelfReview} />
+            <RepoBranchRow key={r.key} row={r} onSelfReview={onSelfReview} />
           ))}
         </Bucket>
       )}
@@ -364,7 +360,7 @@ export function RepoBranchList({
           count={rootRows.length}
         >
           {rootRows.map((r) => (
-            <RepoBranchRow key={r.key} row={r} showPaths={showPaths} onSelfReview={onSelfReview} />
+            <RepoBranchRow key={r.key} row={r} onSelfReview={onSelfReview} />
           ))}
         </Bucket>
       )}
@@ -376,7 +372,7 @@ export function RepoBranchList({
           count={plainRows.length}
         >
           {plainRows.map((r) => (
-            <RepoBranchRow key={r.key} row={r} showPaths={showPaths} onSelfReview={onSelfReview} />
+            <RepoBranchRow key={r.key} row={r} onSelfReview={onSelfReview} />
           ))}
         </Bucket>
       )}
