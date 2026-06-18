@@ -1,5 +1,7 @@
 # Backend architecture and styleguide baseline
 
+**Status:** superseded by [ADR-0022](0022-local-stage-folder-replaces-backend.md)
+
 ## Context
 
 Django has no opinionated layout for applications larger than the tutorial. The defaults distribute business logic across views, serializers, model `save()` overrides, signals, and managers. As a project grows, this distribution becomes the source of the most expensive bugs: logic in `save()` fires from places nobody expected, signals create implicit graphs, fat views block reuse, and `ModelSerializer`s couple HTTP shape to storage shape.

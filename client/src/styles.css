@@ -70,7 +70,7 @@ body {
 }
 
 /* ─── Shared app chrome & primitives (ported from design tokens.css) ───
-   Used by the Workspaces screen and future review screens. Onboarding
+   Used by the review screens. Onboarding
    predates these and inlines its own equivalents; not refactored here. */
 
 .stage {

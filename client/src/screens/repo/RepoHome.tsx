@@ -94,15 +94,15 @@ function FilterRow({
 export function RepoHome({
   onEnterSelfReview,
   onEnterStoryline,
+  onOpenDashboard,
   onChangeRepo,
   onOpenSettings,
-  onSignIn,
 }: {
   onEnterSelfReview: () => void;
   onEnterStoryline: () => void;
+  onOpenDashboard: () => void;
   onChangeRepo: () => void;
   onOpenSettings: () => void;
-  onSignIn: () => void;
 }) {
   const [label, setLabel] = useState('…');
   const [repoPath, setRepoPath] = useState('');
@@ -282,17 +282,15 @@ export function RepoHome({
             <div className="section-label" style={{ marginTop: 14, padding: '0 6px' }}>
               Repository
             </div>
-            {/* Same picker as the signed-in Workspaces home; local-only has no
-                session, so the auth item is "Sign in" rather than "Sign out".
-                `label` is already "owner/repo" or the path basename, which is
-                exactly what RepoMenu renders from `slug`. */}
+            {/* The repo picker. No sign-in/out item — Stage has no account or
+                session (ADR-0022 §5); identity is the local `gh` user, shown
+                read-only in Settings. `label` is "owner/repo" or the path
+                basename, exactly what RepoMenu renders from `slug`. */}
             <RepoMenu
               slug={label}
               path={repoPath || null}
               onChangeRepo={onChangeRepo}
               onOpenSettings={onOpenSettings}
-              authLabel="Sign in"
-              onAuth={onSignIn}
             />
           </div>
 
@@ -332,8 +330,16 @@ export function RepoHome({
               <button
                 type="button"
                 className="btn"
+                onClick={onOpenDashboard}
+                title="Your reviews and the PRs awaiting your review"
+              >
+                <Icon name="doc-stack" size={12} color="var(--gray-700)" /> Dashboard
+              </button>
+              <button
+                type="button"
+                className="btn"
                 onClick={onEnterStoryline}
-                title="Compose a local storyline for the focused branch (no sign-in needed)"
+                title="Compose a local storyline for the focused branch"
               >
                 <Icon name="doc-stack" size={12} color="var(--gray-700)" /> Storyline
               </button>

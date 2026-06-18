@@ -1,6 +1,6 @@
 # ADR-0007 · GitHub App user-to-server + loopback + PKCE for client auth
 
-**Status:** accepted
+**Status:** superseded by [ADR-0022](0022-local-stage-folder-replaces-backend.md) (was: accepted)
 **Date:** 2026-05-26
 **Supersedes:** ADR-0021
 

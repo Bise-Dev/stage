@@ -2,33 +2,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use tokio::task::AbortHandle;
 
-use crate::api;
-use crate::errors::AppError;
 use crate::recents::RecentsStore;
-use crate::session::SessionStore;
 use crate::watcher::WatcherHandle;
 
 pub struct AppState {
     pub active: Mutex<Option<ActiveRepo>>,
     pub recents: Arc<RecentsStore>,
-    /// On-disk mirror of the signed-in session token (ADR-0013). `auth` below
-    /// is the runtime source of truth; this is written through on sign-in /
-    /// logout and loaded into `auth` at boot.
-    pub sessions: Arc<SessionStore>,
-    pub api: api::Client,
     /// The credential-free GitHub adapter (ADR-0022 §5). Held here, as its own
     /// docs advise, so the `gh` auth gate and `gh api user` identity resolve at
-    /// most once per process. The dashboard's PR search goes through it.
+    /// most once per process. Every GitHub command (publish, verdict, discussion,
+    /// dashboard PR search, identity) goes through it. Stage stores no token.
     pub github: stage_core::GitHub,
-    pub auth: Mutex<Option<AuthSession>>,
-    pub auth_in_flight: Mutex<Option<AbortHandle>>,
-    pub github_app_client_id: String,
     /// A pending `stage open` request (ADR-0014): on cold start it is parsed
     /// from this process's argv in `setup`; on warm start the single-instance
     /// callback writes it here and emits `open-intent`. The webview drains it
-    /// once via `take_open_intent` and routes to Self-Review for `repo`.
+    /// once via `take_open_intent` and routes per its mode.
     pub pending_open: Mutex<Option<OpenIntent>>,
     /// Dev-only Activity log ring (decision #6). The `tracing` layer in
     /// `lib.rs` holds the same `Arc`, so both the layer and the IPC commands
@@ -73,18 +62,4 @@ pub struct ActiveRepo {
     pub common_dir: PathBuf,
     #[allow(dead_code)]
     pub watcher: WatcherHandle,
-}
-
-pub struct AuthSession {
-    pub token: String,
-}
-
-impl AppState {
-    pub fn require_token(&self) -> Result<String, AppError> {
-        self.auth
-            .lock()
-            .as_ref()
-            .map(|a| a.token.clone())
-            .ok_or(AppError::NotAuthenticated)
-    }
 }

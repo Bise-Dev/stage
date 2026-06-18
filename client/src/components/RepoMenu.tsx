@@ -9,28 +9,22 @@ function basename(path: string): string {
 }
 
 /**
- * The bottom-left repository picker shared by the signed-in Workspaces home and
- * the local-only Repo home. A button showing the repo slug/path that opens an
- * upward popover with Change repository… / Reveal in Finder / Settings… and an
- * auth action. The auth action is the only thing that differs between the two
- * homes: signed-in passes "Sign out"; local-only passes "Sign in" (there is no
- * session to sign out of yet) — hence `authLabel` + `onAuth`.
+ * The bottom-left repository picker for the Repo home. A button showing the repo
+ * slug/path that opens an upward popover with Change repository… / Reveal in
+ * Finder / Settings…. Stage has no Stage account or session (ADR-0022 §5), so
+ * there is no sign-in/out item — identity is just the local `gh` token owner,
+ * shown read-only in Settings.
  */
 export function RepoMenu({
   slug,
   path,
   onChangeRepo,
   onOpenSettings,
-  authLabel,
-  onAuth,
 }: {
   slug: string | null;
   path: string | null;
   onChangeRepo: () => void;
   onOpenSettings: () => void;
-  /** "Sign out" (signed-in) or "Sign in" (local-only). */
-  authLabel: string;
-  onAuth: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -162,18 +156,6 @@ export function RepoMenu({
             }}
           >
             Settings…
-          </MenuItem>
-          <div
-            aria-hidden="true"
-            style={{ height: 1, background: 'var(--hairline)', margin: '4px 0' }}
-          />
-          <MenuItem
-            onClick={() => {
-              setOpen(false);
-              onAuth();
-            }}
-          >
-            {authLabel}
           </MenuItem>
         </div>
       )}

@@ -1,4 +1,3 @@
-mod backend
 mod client
 
 PRE_COMMIT_VERSION := "4.5.1"
@@ -6,10 +5,10 @@ PRE_COMMIT_VERSION := "4.5.1"
 default:
     @just --list
 
-# Bootstrap the whole monorepo: backend, client, and the pre-commit hook
+# Bootstrap the monorepo: the client and the pre-commit hook. Stage is
+# backend-free (ADR-0022) — there is nothing else to set up.
 [group('setup')]
 bootstrap:
-    just backend::bootstrap
     just client::install
     uv tool run pre-commit@{{PRE_COMMIT_VERSION}} install
 
@@ -34,4 +33,3 @@ verify:
     just pre-commit
     just client::clippy
     just client::test
-    just backend::test

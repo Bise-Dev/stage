@@ -1,7 +1,6 @@
-# Run the whole Stage dev stack from one command: `mprocs`
-# Three panes — postgres (docker), the Django backend, and the Tauri client.
-# The backend waits for postgres to report healthy and applies migrations
-# before starting runserver, so the panes can all boot at once.
+# Run the Stage dev stack from one command: `mprocs`
+# Stage is backend-free (ADR-0022): the Tauri client is the whole app, reaching
+# GitHub through the user's own local `gh`/`git`. One pane — the client.
 
 # Mirror every pane's output to logs/<name>.log (logs/ is gitignored).
 # Paths resolve relative to this config, so logs land at the repo root
@@ -12,24 +11,9 @@ proc_log:
   mode: truncate
 
 procs:
-  postgres:
-    shell: docker compose up postgres
-    cwd: backend
-
-  backend:
-    # Block until postgres is accepting connections, then migrate + serve.
-    shell: |
-      until docker compose exec -T postgres pg_isready -U stage >/dev/null 2>&1; do
-        echo "waiting for postgres…"; sleep 1
-      done
-      uv run python manage.py migrate
-      uv run python manage.py runserver
-    cwd: backend
-
   client:
     # `bun install` is idempotent — a no-op when deps are current — so a fresh
-    # worktree (no node_modules) self-bootstraps, mirroring how `uv run`
-    # auto-syncs the backend venv above.
+    # worktree (no node_modules) self-bootstraps.
     shell: |
       bun install
       bun run tauri dev

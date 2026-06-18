@@ -1,6 +1,6 @@
 # ADR-0016 · Git worktrees: observe-only, git as source of truth, Repo keyed by common-dir
 
-**Status:** accepted
+**Status:** accepted — amended by [ADR-0022](0022-local-stage-folder-replaces-backend.md)
 **Date:** 2026-06-06
 
 ## Context

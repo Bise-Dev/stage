@@ -244,9 +244,7 @@ fn classify_pill(explicit: Option<&str>, target: &str) -> ActivityLogPill {
         Some("rust") => return ActivityLogPill::Rust,
         _ => {}
     }
-    if target.starts_with("stage_client_lib::api") {
-        ActivityLogPill::Http
-    } else if target.starts_with("stage_client_lib::git") {
+    if target.starts_with("stage_client_lib::git") {
         ActivityLogPill::Git
     } else {
         ActivityLogPill::Rust
@@ -430,10 +428,6 @@ mod tests {
         assert_eq!(
             classify_pill(Some("cmd"), "stage_client_lib::git"),
             ActivityLogPill::Cmd
-        );
-        assert_eq!(
-            classify_pill(None, "stage_client_lib::api::client"),
-            ActivityLogPill::Http
         );
         assert_eq!(
             classify_pill(None, "stage_client_lib::git"),

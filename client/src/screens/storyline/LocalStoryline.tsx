@@ -8,14 +8,19 @@ import { Markdown } from '../../components/Markdown';
 import { TitleBar } from '../../components/TitleBar';
 import {
   type BaseOptions,
+  type PublishOutcome,
+  type PublishReadiness,
   type Review,
   type SelfReviewFileChange,
   type StorylinePreview,
   type StorylineStepView,
   gitCurrentBranch,
+  openUrl,
+  publishReadiness,
   reviewDraftCreate,
   reviewDraftDiscard,
   reviewDraftGet,
+  reviewPublish,
   selfReviewBaseOptions,
   storylinePreview,
   storylineStepAdd,
@@ -83,7 +88,8 @@ function FileDiff({ file }: { file: SelfReviewFileChange | null }) {
  * diff overlay, stale flags, which files are outside the storyline) is computed
  * in Rust; this screen only renders the DTOs (ADR-0022 §7).
  *
- * Reached from the local-only Repo-home; publishing to GitHub is milestone D.
+ * Reached from the Repo-home. Publishing (D) serializes the draft into
+ * `.stage/<branch>/`, pushes, and opens/updates the PR via `gh` — the Publish tab.
  */
 export function LocalStoryline({ onBack }: { onBack: () => void }) {
   const [branch, setBranch] = useState<string>('');
@@ -99,7 +105,7 @@ export function LocalStoryline({ onBack }: { onBack: () => void }) {
   const [baseInput, setBaseInput] = useState('');
   const [starting, setStarting] = useState(false);
 
-  const [mode, setMode] = useState<'compose' | 'preview'>('compose');
+  const [mode, setMode] = useState<'compose' | 'preview' | 'publish'>('compose');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Edit buffers for the selected step, seeded on selection.
   const [titleBuf, setTitleBuf] = useState('');
@@ -303,6 +309,18 @@ export function LocalStoryline({ onBack }: { onBack: () => void }) {
                     />{' '}
                     Preview
                   </button>
+                  <button
+                    type="button"
+                    className={mode === 'publish' ? 'btn btn-primary' : 'btn'}
+                    onClick={() => setMode('publish')}
+                  >
+                    <Icon
+                      name="gh"
+                      size={11}
+                      color={mode === 'publish' ? '#fff' : 'var(--gray-700)'}
+                    />{' '}
+                    Publish
+                  </button>
                 </div>
                 <button type="button" className="btn" onClick={discard}>
                   Discard
@@ -359,8 +377,19 @@ export function LocalStoryline({ onBack }: { onBack: () => void }) {
               onSave={saveStep}
               fileFor={fileFor}
             />
-          ) : (
+          ) : mode === 'preview' ? (
             <PreviewWalk preview={preview} fileFor={fileFor} />
+          ) : (
+            <PublishPanel
+              draft={draft}
+              branch={branch}
+              baseChoices={baseChoices}
+              onPublished={() =>
+                reviewDraftGet()
+                  .then(setDraft)
+                  .catch(() => {})
+              }
+            />
           )}
         </div>
       </div>
@@ -823,6 +852,230 @@ function StepRow({
       <button type="button" className="btn" onClick={onRemove} aria-label="Remove step">
         ✕
       </button>
+    </div>
+  );
+}
+
+/**
+ * Publish (PUB-1..7, ADR-0022 §3): serialize the draft storyline into
+ * `.stage/<branch>/`, scoped-commit, push with the user's own git creds, and
+ * create/update/reopen the PR via `gh`. The readiness gate (≥1 step, every step
+ * has an intro) is computed in Rust ([`publishReadiness`]) and re-enforced by
+ * [`reviewPublish`]; we render it and disable Publish until it's met. The PR
+ * title/body are distinct from the Review title (which lives in `review.toml`).
+ */
+function PublishPanel({
+  draft,
+  branch,
+  baseChoices,
+  onPublished,
+}: {
+  draft: Review | null;
+  branch: string;
+  baseChoices: string[];
+  onPublished: () => void;
+}) {
+  const [readiness, setReadiness] = useState<PublishReadiness | null>(null);
+  const [prTitle, setPrTitle] = useState(draft?.title ?? branch);
+  const [prBody, setPrBody] = useState('');
+  const [baseOverride, setBaseOverride] = useState('');
+  const [publishing, setPublishing] = useState(false);
+  const [outcome, setOutcome] = useState<PublishOutcome | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    publishReadiness()
+      .then(setReadiness)
+      .catch((e) => {
+        console.warn('publish_readiness_failed', e);
+        setError(msgOf(e));
+      });
+  }, []);
+
+  if (!draft) return <div style={notice}>No draft to publish.</div>;
+
+  const alreadyPublished = draft.prNumber !== null;
+  const canPublish = readiness?.ready === true && prTitle.trim().length > 0 && !publishing;
+
+  const publish = async () => {
+    setPublishing(true);
+    setError(null);
+    try {
+      const o = await reviewPublish({
+        prTitle: prTitle.trim(),
+        prBody,
+        baseRef: baseOverride.trim() || null,
+        reviewers: [],
+        labels: [],
+      });
+      setOutcome(o);
+      onPublished();
+    } catch (e) {
+      console.warn('review_publish_failed', e);
+      setError(msgOf(e));
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  return (
+    <div style={{ flex: 1, overflow: 'auto', padding: 24, background: '#fff' }}>
+      <div style={{ maxWidth: 540 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--gray-900)', marginBottom: 6 }}>
+          {alreadyPublished ? 'Push an update' : 'Publish to GitHub'}
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--gray-600)', marginBottom: 18 }}>
+          Stage writes your storyline into <span className="mono">.stage/{branch}/</span>, commits
+          it, pushes <span className="mono">{branch}</span> with your own git credentials, and{' '}
+          {alreadyPublished ? 'updates the existing PR' : 'opens a PR'} via your local{' '}
+          <span className="mono">gh</span>.
+        </div>
+
+        {/* Readiness gate (PUB-2): rendered, and re-enforced in Rust. */}
+        {readiness === null ? (
+          <div style={{ fontSize: 12, color: 'var(--gray-400)', marginBottom: 16 }}>
+            Checking readiness…
+          </div>
+        ) : readiness.ready ? (
+          <div
+            style={{
+              fontSize: 12.5,
+              color: 'var(--green-d, #1a7f37)',
+              background: 'rgba(26,127,55,0.08)',
+              border: '1px solid rgba(26,127,55,0.2)',
+              borderRadius: 'var(--r-sm)',
+              padding: '8px 12px',
+              marginBottom: 16,
+            }}
+          >
+            Ready — {readiness.stepCount} step{readiness.stepCount === 1 ? '' : 's'}, each with an
+            intro.
+          </div>
+        ) : (
+          <div
+            style={{
+              fontSize: 12.5,
+              color: 'var(--blue-press)',
+              background: 'var(--blue-tint)',
+              border: '1px solid rgba(31,111,235,0.2)',
+              borderRadius: 'var(--r-sm)',
+              padding: '8px 12px',
+              marginBottom: 16,
+            }}
+          >
+            {readiness.stepCount === 0
+              ? 'Add at least one step before publishing.'
+              : `${readiness.stepsMissingIntro.length} step${
+                  readiness.stepsMissingIntro.length === 1 ? '' : 's'
+                } still need an intro — fill them in on the Compose tab.`}
+          </div>
+        )}
+
+        <label
+          htmlFor="pub-title"
+          style={{ fontSize: 12, fontWeight: 600, color: 'var(--gray-700)' }}
+        >
+          PR title
+        </label>
+        <input
+          id="pub-title"
+          className="input"
+          value={prTitle}
+          onChange={(e) => setPrTitle(e.target.value)}
+          style={{ display: 'block', width: '100%', margin: '4px 0 14px' }}
+        />
+
+        <label
+          htmlFor="pub-body"
+          style={{ fontSize: 12, fontWeight: 600, color: 'var(--gray-700)' }}
+        >
+          PR description{' '}
+          <span style={{ fontWeight: 400, color: 'var(--gray-500)' }}>(markdown)</span>
+        </label>
+        <textarea
+          id="pub-body"
+          className="input"
+          value={prBody}
+          onChange={(e) => setPrBody(e.target.value)}
+          rows={5}
+          placeholder="What this change does and why."
+          style={{
+            display: 'block',
+            width: '100%',
+            margin: '4px 0 14px',
+            resize: 'vertical',
+            fontFamily: 'inherit',
+          }}
+        />
+
+        <label
+          htmlFor="pub-base"
+          style={{ fontSize: 12, fontWeight: 600, color: 'var(--gray-700)' }}
+        >
+          Base branch{' '}
+          <span style={{ fontWeight: 400, color: 'var(--gray-500)' }}>(optional override)</span>
+        </label>
+        <input
+          id="pub-base"
+          list="pub-base-choices"
+          className="input mono"
+          value={baseOverride}
+          onChange={(e) => setBaseOverride(e.target.value)}
+          placeholder={draft.baseRef}
+          style={{ display: 'block', width: '100%', margin: '4px 0 18px' }}
+        />
+        <datalist id="pub-base-choices">
+          {baseChoices.map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
+
+        {error && (
+          <div style={{ marginBottom: 14 }}>
+            <ErrorBanner title="Couldn't publish" detail={error} onClose={() => setError(null)} />
+          </div>
+        )}
+
+        {outcome ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              padding: '12px 14px',
+              background: 'rgba(26,127,55,0.06)',
+              border: '1px solid rgba(26,127,55,0.2)',
+              borderRadius: 'var(--r-md)',
+            }}
+          >
+            <Icon name="check" size={14} color="var(--green-d, #1a7f37)" />
+            <div style={{ flex: 1, fontSize: 12.5, color: 'var(--gray-800)' }}>
+              {outcome.action === 'created'
+                ? 'Opened'
+                : outcome.action === 'reopened'
+                  ? 'Reopened'
+                  : 'Updated'}{' '}
+              PR <span className="mono">#{outcome.prNumber}</span>.
+            </div>
+            <button type="button" className="btn" onClick={() => void openUrl(outcome.url)}>
+              Open on GitHub
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={publish}
+            disabled={!canPublish}
+          >
+            {publishing
+              ? 'Publishing…'
+              : alreadyPublished
+                ? `Push update to #${draft.prNumber}`
+                : 'Publish to GitHub'}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
