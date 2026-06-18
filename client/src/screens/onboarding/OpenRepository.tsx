@@ -11,7 +11,6 @@ import {
   repoSummary,
   setActiveRepo,
 } from '../../tauri';
-import { WizardRail } from './WizardRail';
 
 type SummaryState = { kind: 'loading' } | { kind: 'ready'; summary: RepoSummary };
 
@@ -157,8 +156,6 @@ export function OpenRepository({ onOpened, onBack }: Props) {
         className="flex flex-1 overflow-hidden"
         style={{ background: 'linear-gradient(180deg, #fbfaf8 0%, #f0eee9 100%)', minHeight: 0 }}
       >
-        <WizardRail active="openRepo" />
-
         <div className="flex flex-col flex-1 overflow-hidden" style={{ padding: '28px 36px' }}>
           <div
             style={{
@@ -168,7 +165,7 @@ export function OpenRepository({ onOpened, onBack }: Props) {
               letterSpacing: '-0.02em',
             }}
           >
-            Open a local repository
+            Open a repository
           </div>
           <div
             style={{
@@ -214,7 +211,8 @@ export function OpenRepository({ onOpened, onBack }: Props) {
               </div>
               <div style={{ fontSize: 12, color: 'var(--gray-600)', marginTop: 2 }}>
                 Any local git repository works. Stage reads from <span className="mono">.git</span>{' '}
-                — it doesn't modify your working tree.
+                and, on publish, commits your storyline to a <span className="mono">.stage/</span>{' '}
+                folder on your branch.
               </div>
             </div>
             <button
@@ -385,7 +383,6 @@ function RepoRow({
       : ready
         ? `${ready.branchesCount} ${ready.branchesCount === 1 ? 'branch' : 'branches'}`
         : '—';
-  const defaultBranchLabel = summary?.kind === 'loading' ? '…' : (ready?.defaultBranch ?? '—');
 
   return (
     <div className="relative group">
@@ -462,20 +459,6 @@ function RepoRow({
                 no remote
               </span>
             ) : null}
-            <span
-              className="mono inline-flex items-center"
-              style={{
-                height: 18,
-                padding: '0 6px',
-                borderRadius: 9,
-                fontSize: 11,
-                fontWeight: 600,
-                background: 'rgba(0,0,0,0.05)',
-                color: 'var(--gray-600)',
-              }}
-            >
-              {defaultBranchLabel}
-            </span>
           </span>
           <span
             className="mono block"
