@@ -2,81 +2,55 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Dashboard } from './screens/dashboard/Dashboard';
 import { OpenRepository } from './screens/onboarding/OpenRepository';
-import { SignIn } from './screens/onboarding/SignIn';
 import { RepoHome } from './screens/repo/RepoHome';
 import { LocalReview } from './screens/review/LocalReview';
-import { ReviewStoryline } from './screens/review/ReviewStoryline';
 import { SelfReview } from './screens/selfReview/SelfReview';
 import { Settings } from './screens/settings/Settings';
 import { LocalStoryline } from './screens/storyline/LocalStoryline';
-import { Storyline, type StorylineCtx } from './screens/storyline/Storyline';
-import { Workspaces } from './screens/workspaces/Workspaces';
 import {
   type OpenIntent,
   type PrRef,
-  type ReviewCtx,
-  type User,
-  authBootstrap,
-  authLogout,
   onOpenIntent,
   onOpenSettings,
   setActiveRepo,
   takeOpenIntent,
 } from './tauri';
 
+// The single-mode, no-backend app (ADR-0022): there is no Stage account, session,
+// or sign-in (§5) — identity is the local `gh` user, resolved lazily where needed.
+// A repo is opened, then the author works locally (Self-Review → Storyline →
+// Publish) or reviews a PR read-only (LocalReview), all via `gh`/`git`.
 type View =
-  | 'signIn'
   | 'openRepo'
   | 'repoHome'
-  | 'workspaces'
-  | 'dashboard'
   | 'selfReview'
-  | 'storyline'
   | 'localStoryline'
-  | 'review'
+  | 'dashboard'
   | 'localReview'
   | 'settings';
 
 export function App() {
-  // `booting` covers the async session validation at startup (ADR-0013). We
-  // render nothing until it resolves so a returning, already-signed-in author
-  // never sees a flash of the SignIn screen.
+  // `booting` covers draining this launch's `stage open` intent before we pick a
+  // first screen, so a deep-link lands directly instead of flashing the picker.
   const [booting, setBooting] = useState(true);
-  const [view, setView] = useState<View>('signIn');
-  const [user, setUser] = useState<User | null>(null);
-  // Local-only mode (ADR-0013): the author chose "Stay offline", so the app
-  // runs with no Stage session — repo picker + Self-Review only, backend
-  // features disabled. Never persisted: it means "not signed in *yet*", is
-  // re-evaluated every launch, and upgrades to signed-in the moment a sign-in
-  // succeeds (any successful `onAuthenticated` clears it).
-  const [localOnly, setLocalOnly] = useState(false);
+  const [view, setView] = useState<View>('openRepo');
   const [hasRepo, setHasRepo] = useState(false);
-  const [storylineCtx, setStorylineCtx] = useState<StorylineCtx | null>(null);
-  // The published workspace being reviewed read-only (Step 2 reviewer flow).
-  const [reviewCtx, setReviewCtx] = useState<ReviewCtx | null>(null);
   // The PR opened for local-first read-only review via `stage open <pr-url>`
-  // (ADR-0022 §6, milestone F). Set from an `OpenMode::Review` open-intent.
+  // (ADR-0022 §6) or a dashboard row.
   const [localReviewPr, setLocalReviewPr] = useState<PrRef | null>(null);
-  // A `stage open` intent that arrived with no valid session (ADR-0013/0014):
-  // we show SignIn first and retain it here so the author's auth choice — sign
-  // in *or* "Stay offline" — then lands directly in Self-Review for the repo.
-  const [pendingOpen, setPendingOpen] = useState<OpenIntent | null>(null);
   // True when Self-Review was reached via `stage open`: seed its base from the
   // Debrief's base, overriding the per-repo localStorage default (ADR-0014).
   const [seedBase, setSeedBase] = useState(false);
-  // The view to return to when Settings is dismissed. Settings is reachable
-  // from any screen (native ⌘, menu item, or the Workspaces RepoMenu), so we
-  // stash where it was opened from rather than assume a fixed home.
-  const [returnView, setReturnView] = useState<View>('workspaces');
-  // Latest view, read by `openSettings` (a stable callback) so the menu-event
-  // listener can stash the current screen without re-subscribing every render.
+  // The view to return to when Settings is dismissed. Settings is reachable from
+  // any screen (native ⌘, menu item, or the RepoMenu), so we stash where it was
+  // opened from rather than assume a fixed home.
+  const [returnView, setReturnView] = useState<View>('repoHome');
   const viewRef = useRef(view);
   viewRef.current = view;
 
   // Set the active repo and route per the `stage open` intent's mode (ADR-0014,
   // ADR-0022 §6): `Review` opens the carried PR read-only; otherwise Self-Review.
-  // Fail-loud (CLAUDE.md): a bad repo path surfaces and falls back to the repo
-  // picker rather than wedging on a blank screen.
+  // Fail-loud (CLAUDE.md): a bad repo path surfaces and falls back to the picker.
   const routeToIntent = useCallback(async (intent: OpenIntent) => {
     try {
       await setActiveRepo(intent.repo);
@@ -94,39 +68,19 @@ export function App() {
     }
   }, []);
 
-  // Boot: validate any persisted session token, and drain any `stage open`
-  // intent for this (cold) launch. With a valid session an intent goes straight
-  // to Self-Review; with no session we land on SignIn and retain the intent
-  // (ADR-0013's boot table), honoring it after the auth choice. A plain launch
-  // with a valid token skips SignIn to the repo picker.
+  // Boot: drain any `stage open` intent for this (cold) launch and route to it;
+  // a plain launch lands on the repo picker. No session to validate (§5).
   useEffect(() => {
     (async () => {
-      let u: User | null = null;
-      try {
-        u = await authBootstrap();
-      } catch (e) {
-        // A connectivity failure at boot is the network axis, explicitly out of
-        // scope for local-only (the auth axis). Surface it for visibility and
-        // fall back to SignIn; the token stays on disk (only a 401 clears it,
-        // on the Rust side), so a later launch can still validate it.
-        console.warn('auth_bootstrap_failed', e);
-      }
       let intent: OpenIntent | null = null;
       try {
         intent = await takeOpenIntent();
       } catch (e) {
         console.warn('take_open_intent_failed', e);
       }
-      if (u) setUser(u);
       if (intent) {
-        if (u) {
-          await routeToIntent(intent);
-        } else {
-          // No session: SignIn is shown (its "Stay offline" path included); the
-          // intent waits to be honored once the author picks.
-          setPendingOpen(intent);
-        }
-      } else if (u) {
+        await routeToIntent(intent);
+      } else {
         setView('openRepo');
       }
       setBooting(false);
@@ -134,99 +88,45 @@ export function App() {
   }, [routeToIntent]);
 
   // Warm start: a later `stage open` forwards its intent to this running app.
-  // If the author has already chosen (signed-in or local-only), focus+navigate
-  // straight to Self-Review; if they're still on SignIn, retain it like a cold
-  // no-session launch.
   useEffect(() => {
     const unlisten = onOpenIntent((intent) => {
-      if (user || localOnly) {
-        void routeToIntent(intent);
-      } else {
-        setPendingOpen(intent);
-      }
+      void routeToIntent(intent);
     });
     return () => {
       void unlisten.then((f) => f());
     };
-  }, [user, localOnly, routeToIntent]);
-
-  const onAuthenticated = useCallback(
-    (u: User) => {
-      setUser(u);
-      setLocalOnly(false);
-      if (pendingOpen) {
-        const intent = pendingOpen;
-        setPendingOpen(null);
-        void routeToIntent(intent);
-      } else {
-        setView('openRepo');
-      }
-    },
-    [pendingOpen, routeToIntent],
-  );
-
-  // "Stay offline" from SignIn → local-only mode. A retained `stage open` intent
-  // routes straight to Self-Review; otherwise the home is the repo picker.
-  const enterLocalOnly = useCallback(() => {
-    setLocalOnly(true);
-    if (pendingOpen) {
-      const intent = pendingOpen;
-      setPendingOpen(null);
-      void routeToIntent(intent);
-    } else {
-      setView('openRepo');
-    }
-  }, [pendingOpen, routeToIntent]);
+  }, [routeToIntent]);
 
   const onRepoOpened = useCallback(() => {
     setHasRepo(true);
-    // Signed-in home is Workspaces; local-only lands on the Repo-home branch
-    // list (ADR-0016). `stage open` still deep-links straight to Self-Review.
-    setView(localOnly ? 'repoHome' : 'workspaces');
-  }, [localOnly]);
+    setView('repoHome');
+  }, []);
 
   const changeRepo = useCallback(() => setView('openRepo'), []);
-  // Manual entry from Workspaces: respect the author's persisted base (don't
+
+  // Manual entry from the Repo-home: respect the author's persisted base (don't
   // seed from the Debrief — that's only for the `stage open` path, ADR-0014).
   const startSelfReview = useCallback(() => {
     setSeedBase(false);
     setView('selfReview');
   }, []);
-  // Exit Self-Review: signed-in → Workspaces; local-only → repo picker (its home).
-  const exitSelfReview = useCallback(
-    () => setView(localOnly ? 'repoHome' : 'workspaces'),
-    [localOnly],
-  );
+  const exitSelfReview = useCallback(() => setView('repoHome'), []);
 
-  // Local, no-auth storyline (ADR-0022 §1/§3, milestone B): compose + preview the
-  // active repo+branch's storyline. Reached from the local-only Repo-home; its
-  // own "Ready to share" gate creates the draft. Returns to Repo-home.
   const enterLocalStoryline = useCallback(() => setView('localStoryline'), []);
   const exitLocalStoryline = useCallback(() => setView('repoHome'), []);
 
-  const openStoryline = useCallback((ctx: StorylineCtx) => {
-    setStorylineCtx(ctx);
-    setView('storyline');
-  }, []);
-
-  const backToWorkspaces = useCallback(() => {
-    setStorylineCtx(null);
-    setView('workspaces');
-  }, []);
-
-  // The local-first dashboard (milestone G): the per-repo overview assembled in
-  // Rust. Reachable from Workspaces; returns there.
   const openDashboard = useCallback(() => setView('dashboard'), []);
+  const backFromDashboard = useCallback(() => setView('repoHome'), []);
 
-  const openReview = useCallback((ctx: ReviewCtx) => {
-    setReviewCtx(ctx);
-    setView('review');
+  // Open a PR in the local-first reviewer (from a dashboard row, or `stage open`).
+  const openLocalReview = useCallback((pr: PrRef) => {
+    setLocalReviewPr(pr);
+    setView('localReview');
   }, []);
-
-  const backFromReview = useCallback(() => {
-    setReviewCtx(null);
-    setView('workspaces');
-  }, []);
+  const backFromLocalReview = useCallback(
+    () => setView(hasRepo ? 'repoHome' : 'openRepo'),
+    [hasRepo],
+  );
 
   // Open Settings, stashing the current screen to return to. No-op if already
   // there (so re-firing ⌘, doesn't lose the original return target).
@@ -237,8 +137,7 @@ export function App() {
   }, []);
   const closeSettings = useCallback(() => setView(returnView), [returnView]);
 
-  // The native app menu's "Settings…" item (⌘,) emits `open-settings`; route to
-  // the Settings view wherever the author is (signed-in or local-only).
+  // The native app menu's "Settings…" item (⌘,) emits `open-settings`.
   useEffect(() => {
     const unlisten = onOpenSettings(() => openSettings());
     return () => {
@@ -246,59 +145,23 @@ export function App() {
     };
   }, [openSettings]);
 
-  // Sign out: `auth_logout` revokes the session server-side and clears the
-  // persisted token (ADR-0013). It clears memory + disk even if the server call
-  // fails, so the author is locally signed out regardless; route back to SignIn
-  // either way and log a server-side failure for visibility.
-  const signOut = useCallback(async () => {
-    try {
-      await authLogout();
-    } catch (e) {
-      console.warn('auth_logout_failed', e);
-    }
-    setUser(null);
-    setHasRepo(false);
-    setStorylineCtx(null);
-    setReviewCtx(null);
-    setLocalReviewPr(null);
-    setView('signIn');
-  }, []);
-
   if (booting) return null;
-  // Settings is reachable from every screen (native ⌘, / RepoMenu), including
-  // local-only mode where `user` is null — so it sits ahead of the auth guards.
+
   if (view === 'settings') {
-    return (
-      <Settings
-        user={user}
-        onClose={closeSettings}
-        onSignOut={signOut}
-        onSignIn={() => setView('signIn')}
-      />
-    );
+    return <Settings onClose={closeSettings} />;
   }
-  if (view === 'signIn')
-    return <SignIn onAuthenticated={onAuthenticated} onStayOffline={enterLocalOnly} />;
   if (view === 'openRepo') {
-    // Offer Back only when a repo is already open (i.e. changing repos),
-    // not during first-run onboarding where there's nothing to go back to.
+    // Offer Back only when a repo is already open (i.e. changing repos), not
+    // during first-run onboarding where there's nothing to go back to.
     return (
       <OpenRepository
         onOpened={onRepoOpened}
-        onBack={hasRepo ? () => setView(localOnly ? 'repoHome' : 'workspaces') : undefined}
+        onBack={hasRepo ? () => setView('repoHome') : undefined}
       />
     );
   }
-  if (view === 'repoHome') {
-    return (
-      <RepoHome
-        onEnterSelfReview={startSelfReview}
-        onEnterStoryline={enterLocalStoryline}
-        onChangeRepo={changeRepo}
-        onOpenSettings={openSettings}
-        onSignIn={() => setView('signIn')}
-      />
-    );
+  if (view === 'localReview' && localReviewPr) {
+    return <LocalReview pr={localReviewPr} onBack={backFromLocalReview} />;
   }
   if (view === 'selfReview') {
     return <SelfReview onExit={exitSelfReview} seedBaseFromDebrief={seedBase} />;
@@ -306,36 +169,16 @@ export function App() {
   if (view === 'localStoryline') {
     return <LocalStoryline onBack={exitLocalStoryline} />;
   }
-  // Local-first reviewer entry (ADR-0022 §6, milestone F): reached via
-  // `stage open <pr-url>`. Local + `gh`, no Stage session — so it sits ahead of
-  // the auth guard, like Self-Review. Back returns to the repo picker.
-  if (view === 'localReview' && localReviewPr) {
-    return <LocalReview pr={localReviewPr} onBack={() => setView('openRepo')} />;
-  }
-  if (!user) {
-    // Defensive: should be unreachable (storyline/workspaces are signed-in
-    // only; local-only never routes here), but biome wants the null guard.
-    return null;
-  }
-  if (view === 'storyline' && storylineCtx) {
-    return <Storyline ctx={storylineCtx} user={user} onBack={backToWorkspaces} />;
-  }
-  if (view === 'review' && reviewCtx) {
-    return <ReviewStoryline ctx={reviewCtx} user={user} onBack={backFromReview} />;
-  }
   if (view === 'dashboard') {
-    return <Dashboard onBack={backToWorkspaces} />;
+    return <Dashboard onBack={backFromDashboard} onOpenReview={openLocalReview} />;
   }
   return (
-    <Workspaces
-      user={user}
-      onChangeRepo={changeRepo}
-      onStartSelfReview={startSelfReview}
-      onOpenStoryline={openStoryline}
-      onOpenReview={openReview}
+    <RepoHome
+      onEnterSelfReview={startSelfReview}
+      onEnterStoryline={enterLocalStoryline}
       onOpenDashboard={openDashboard}
+      onChangeRepo={changeRepo}
       onOpenSettings={openSettings}
-      onSignOut={signOut}
     />
   );
 }

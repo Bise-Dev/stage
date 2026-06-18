@@ -3,16 +3,32 @@ import { useCallback, useEffect, useState } from 'react';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
-import { type DashboardRow, type ReviewStatus, dashboardOverview, openUrl } from '../../tauri';
+import {
+  type DashboardRow,
+  type PrRef,
+  type ReviewStatus,
+  dashboardOverview,
+  openUrl,
+} from '../../tauri';
 
 /**
  * The per-repo dashboard (DB-1..5 #84–88, ADR-0022 §6/§7). A **pure renderer**:
  * Rust assembles the local-store draft scan + the `gh` PR search into view-ready
  * rows with all state already derived (status, signal, the Stage-vs-plain flag,
  * archived), and this screen only displays them. It derives nothing — no `gh`,
- * `git`, or `.stage` reads here. Opening a single PR/Review is milestone F's job;
- * here a row links out to GitHub.
+ * `git`, or `.stage` reads here. A published row opens in the local-first reviewer
+ * (milestone F); the external ↗ still links out to github.com.
  */
+
+/** Parse `{owner}/{name}#{number}` out of a PR's github.com URL
+ *  (`https://github.com/{owner}/{name}/pull/{n}`). Returns null on any shape we
+ *  don't recognise (fail-soft: the row falls back to the GitHub external link). */
+function prRefFromUrl(url: string | null): PrRef | null {
+  if (!url) return null;
+  const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+  if (!m) return null;
+  return { owner: m[1], name: m[2], number: Number(m[3]) };
+}
 
 /** Status badge text + colour. Status is derived in Rust (WS-5), never stored. */
 const STATUS_BADGE: Record<ReviewStatus, { label: string; color: string; bg: string }> = {
@@ -48,17 +64,21 @@ function StatusBadge({ status }: { status: ReviewStatus }) {
   );
 }
 
-function Row({ row }: { row: DashboardRow }) {
+function Row({ row, onOpenReview }: { row: DashboardRow; onOpenReview: (pr: PrRef) => void }) {
+  const pr = prRefFromUrl(row.url);
+  // A published row (has a PR) opens in the local-first reviewer; a pre-publish
+  // draft (no PR) isn't openable from here yet — compose it from its branch.
   const open = () => {
-    if (row.url) openUrl(row.url).catch((e) => console.warn('open_url_failed', e));
+    if (pr) onOpenReview(pr);
+    else if (row.url) openUrl(row.url).catch((e) => console.warn('open_url_failed', e));
   };
-  const clickable = row.url !== null;
+  const clickable = pr !== null || row.url !== null;
   return (
     <button
       type="button"
       onClick={clickable ? open : undefined}
       disabled={!clickable}
-      title={clickable ? 'Open on GitHub' : undefined}
+      title={pr ? 'Open in Stage' : clickable ? 'Open on GitHub' : undefined}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -155,7 +175,15 @@ function Row({ row }: { row: DashboardRow }) {
   );
 }
 
-function Group({ title, rows }: { title: string; rows: DashboardRow[] }) {
+function Group({
+  title,
+  rows,
+  onOpenReview,
+}: {
+  title: string;
+  rows: DashboardRow[];
+  onOpenReview: (pr: PrRef) => void;
+}) {
   return (
     <div style={{ marginBottom: 18 }}>
       <div
@@ -172,7 +200,11 @@ function Group({ title, rows }: { title: string; rows: DashboardRow[] }) {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {rows.map((row) => (
-            <Row key={`${row.role}:${row.prNumber ?? row.branch}`} row={row} />
+            <Row
+              key={`${row.role}:${row.prNumber ?? row.branch}`}
+              row={row}
+              onOpenReview={onOpenReview}
+            />
           ))}
         </div>
       )}
@@ -180,7 +212,13 @@ function Group({ title, rows }: { title: string; rows: DashboardRow[] }) {
   );
 }
 
-export function Dashboard({ onBack }: { onBack: () => void }) {
+export function Dashboard({
+  onBack,
+  onOpenReview,
+}: {
+  onBack: () => void;
+  onOpenReview: (pr: PrRef) => void;
+}) {
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -222,7 +260,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
               style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
             >
               <Icon name="chevron-left" size={12} />
-              Workspaces
+              Home
             </button>
           }
         />
@@ -273,8 +311,8 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
             </div>
           ) : (
             <>
-              <Group title="Authored by you" rows={yours} />
-              <Group title="Awaiting your review" rows={review} />
+              <Group title="Authored by you" rows={yours} onOpenReview={onOpenReview} />
+              <Group title="Awaiting your review" rows={review} onOpenReview={onOpenReview} />
             </>
           )}
         </div>

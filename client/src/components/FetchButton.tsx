@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
 
 // Auto-fetch interval options for the home-screen Fetch button. `seconds: 0`
-// means "off" (manual fetch only). Shared by the signed-in Workspaces home and
+// means "off" (manual fetch only). Shared by the Repo home and
 // the local-only Repo home, so the preference carries across both.
 const AUTO_FETCH_OPTIONS: { label: string; seconds: number }[] = [
   { label: 'Off', seconds: 0 },

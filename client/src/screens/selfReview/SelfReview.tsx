@@ -26,7 +26,7 @@ import { clearViewed, loadViewed, setViewed } from './viewedStore';
  * Reads the active repo + default branch on mount (Q11-B: not passed in;
  * truth lives on disk). Wires the diff hook, comments hook, mark-viewed
  * store, and the Subheader / FileList / DiffPane layout. ESC exits to
- * Workspaces.
+ * the Repo home.
  */
 const LAYOUT_KEY = 'selfReview:viewLayout';
 const BASE_KEY_PREFIX = 'selfReview:base:';
@@ -73,7 +73,7 @@ export function SelfReview({
       try {
         const r = await getActiveRepo();
         if (!r) {
-          setBootstrapError('No active repository — pick one from the Workspaces screen.');
+          setBootstrapError('No active repository — pick one from the Home screen.');
           return;
         }
         setRepoPath(r.path);
@@ -321,9 +321,10 @@ export function SelfReview({
   }, [diff, notes]);
 
   const onReadyToShare = useCallback(() => {
-    // Stubbed entry to the future Workspace-creation flow (see CONTEXT.md
-    // "Ready to share" gesture). The Storyline composer that this opens is
-    // a separate PR.
+    // Stubbed in-Self-Review entry to the Ready-to-share gesture. The real
+    // Ready-to-share + Storyline composer (ADR-0022 §3) now lives in the
+    // Storyline screen, reachable from the Repo home; wiring a direct jump from
+    // here is a follow-up.
     console.info('self_review_ready_to_share_stub', diff?.currentBranch ?? null);
   }, [diff]);
 

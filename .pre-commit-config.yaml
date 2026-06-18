@@ -1,20 +1,6 @@
 repos:
   - repo: local
     hooks:
-      - id: backend-lint
-        name: backend lint (ruff)
-        entry: bash -c 'cd backend && just lint'
-        language: system
-        pass_filenames: false
-        files: ^backend/.*\.py$
-
-      - id: backend-typecheck
-        name: backend typecheck (pyrefly)
-        entry: bash -c 'cd backend && just typecheck'
-        language: system
-        pass_filenames: false
-        files: ^backend/.*\.py$
-
       - id: client-lint
         name: client lint (biome + cargo fmt)
         entry: bash -c 'cd client && just lint'

@@ -1,6 +1,6 @@
 # ADR-0008 · GitHub as Stage's identity provider
 
-**Status:** accepted
+**Status:** superseded by [ADR-0022](0022-local-stage-folder-replaces-backend.md) (was: accepted)
 **Date:** 2026-05-26
 **Related:** [ADR-0001](./0001-three-tier-topology.md) (three-tier topology), [ADR-0007](./0007-github-app-user-to-server-loopback.md) (GitHub App + loopback + PKCE)
 

@@ -1,8 +1,7 @@
 use std::path::PathBuf;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use stage_core::diff::{default_base, DiffLineIndex};
 use stage_core::{
@@ -10,12 +9,10 @@ use stage_core::{
     Store, StorylinePreview, StorylineStep,
 };
 
-use crate::api;
 use crate::errors::AppError;
 use crate::git;
-use crate::oauth::{authorize_url, gen_state, pkce_pair, LoopbackListener};
 use crate::recents::RecentRepo;
-use crate::state::{ActiveRepo, AppState, AuthSession, OpenIntent};
+use crate::state::{ActiveRepo, AppState, OpenIntent};
 use crate::watcher;
 
 /// The active repo's working-tree path, or `NoActiveRepo`. The Self-Review
@@ -313,21 +310,6 @@ pub fn git_diff_files(
     git::diff_files(&path, &base_ref, &head_ref)
 }
 
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn repo_overview(
-    state: tauri::State<'_, AppState>,
-    owner: String,
-    repo: String,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let rows = state.api.repo_overview(&token, &owner, &repo).await?;
-    Ok(rows)
-}
-
 /// The local-first per-repo dashboard (DB-1..5 #84–88, ADR-0022 §6/§7): the
 /// local-store draft scan merged with a `gh` PR search, every row's state derived
 /// in Rust (TS only renders). The local-first replacement for `repo_overview` —
@@ -445,526 +427,6 @@ pub fn open_in_finder(path: PathBuf) -> Result<(), AppError> {
 pub fn open_url(url: String) -> Result<(), AppError> {
     tauri_plugin_opener::open_url(&url, None::<&str>)
         .map_err(|e| AppError::Backend(format!("open_url_failed: {e}")))
-}
-
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn auth_sign_in(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-) -> Result<api::User, AppError> {
-    // Reject a second concurrent sign-in.
-    {
-        let in_flight = state.auth_in_flight.lock();
-        if in_flight.is_some() {
-            return Err(AppError::Backend("oauth_in_flight".into()));
-        }
-    }
-
-    let (verifier, challenge) = pkce_pair();
-    let state_param = gen_state();
-    let listener = LoopbackListener::bind().await?;
-    let redirect_uri = listener.redirect_uri().to_string();
-
-    let client_id = state.github_app_client_id.clone();
-    let url = authorize_url(&client_id, &redirect_uri, &state_param, &challenge);
-    tauri_plugin_opener::open_url(&url, None::<String>)
-        .map_err(|e| AppError::Backend(format!("oauth_browser_open_failed: {e}")))?;
-
-    // Run the listener inside an abortable task so cancel works.
-    let state_param_owned = state_param.clone();
-    let handle = tokio::spawn(async move {
-        listener
-            .recv(Duration::from_secs(300), &state_param_owned)
-            .await
-    });
-    {
-        *state.auth_in_flight.lock() = Some(handle.abort_handle());
-    }
-
-    let recv_result = handle.await;
-    {
-        *state.auth_in_flight.lock() = None;
-    }
-
-    let params = match recv_result {
-        Ok(inner) => inner?,
-        Err(join_err) if join_err.is_cancelled() => return Err(AppError::Cancelled),
-        Err(other) => return Err(AppError::Backend(format!("oauth_join_error: {other}"))),
-    };
-
-    // The OAuth callback landed, so the user is done in the browser. Pull our
-    // window back to the foreground — browsers won't reliably let the loopback
-    // success page close its own tab (it wasn't opened by script), so refocusing
-    // Stage is what actually returns the user here. Mirrors lib.rs single-instance.
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.unminimize();
-        let _ = win.set_focus();
-    }
-
-    let session = state
-        .api
-        .web_exchange(&params.code, &verifier, &redirect_uri)
-        .await?;
-
-    // Persist the token so the next launch skips sign-in (ADR-0013). Disk is a
-    // write-through mirror of the in-memory token; if the write fails we fail
-    // loud rather than leave a signed-in session that silently won't survive
-    // restart.
-    state.sessions.save(&session.session_token)?;
-    *state.auth.lock() = Some(AuthSession {
-        token: session.session_token,
-    });
-    Ok(session.user)
-}
-
-/// Validate the persisted session token at boot (ADR-0013).
-///
-/// Returns the signed-in `User` when a stored token still resolves via
-/// `auth_me`, `None` when there is no token or the backend rejects it as
-/// unauthenticated (dead session → cleared from memory and disk so the app
-/// falls back to signed-out). Any other backend failure is surfaced verbatim.
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn auth_bootstrap(
-    state: tauri::State<'_, AppState>,
-) -> Result<Option<api::User>, AppError> {
-    let Some(token) = state.auth.lock().as_ref().map(|a| a.token.clone()) else {
-        return Ok(None);
-    };
-    match state.api.auth_me(&token).await {
-        Ok(user) => Ok(Some(user)),
-        Err(api::Error::Unauthenticated) => {
-            // Dead session: drop it everywhere so we don't show signed-in UI
-            // that would fail on the first real backend call.
-            *state.auth.lock() = None;
-            state.sessions.clear()?;
-            Ok(None)
-        }
-        Err(other) => Err(other.into()),
-    }
-}
-
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn auth_sign_in_cancel(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
-    if let Some(handle) = state.auth_in_flight.lock().take() {
-        handle.abort();
-    }
-    Ok(())
-}
-
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn auth_me(state: tauri::State<'_, AppState>) -> Result<api::User, AppError> {
-    let token = state.require_token()?;
-    let user = state.api.auth_me(&token).await?;
-    Ok(user)
-}
-
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn auth_logout(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
-    let token = state.require_token()?;
-    let result = state.api.logout(&token).await;
-    // Clear locally regardless of the server's response — the user asked to
-    // sign out. Drop the persisted copy too (ADR-0013) so the next launch
-    // doesn't resurrect the session.
-    *state.auth.lock() = None;
-    state.sessions.clear()?;
-    result.map_err(Into::into)
-}
-
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn workspace_create(
-    state: tauri::State<'_, AppState>,
-    repo_owner: String,
-    repo_name: String,
-    head_ref: String,
-    base_ref: String,
-    title: String,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let ws = state
-        .api
-        .workspace_create(
-            &token,
-            &repo_owner,
-            &repo_name,
-            &head_ref,
-            &base_ref,
-            &title,
-        )
-        .await?;
-    Ok(ws)
-}
-
-/// Update a pre-publish workspace's base/head ref. PATCH the backend; it 409s
-/// once a PR is open (refs are locked post-publish). Used by the storyline
-/// screen's base picker to re-target the comparison (and the eventual PR).
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn workspace_update(
-    state: tauri::State<'_, AppState>,
-    workspace_id: String,
-    head_ref: Option<String>,
-    base_ref: Option<String>,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let ws = state
-        .api
-        .workspace_update(
-            &token,
-            &workspace_id,
-            head_ref.as_deref(),
-            base_ref.as_deref(),
-        )
-        .await?;
-    Ok(ws)
-}
-
-/// Publish a workspace to GitHub: push its branch with the user's own git
-/// credentials (ADR-0016), then open or adopt its PR via the backend.
-///
-/// `already_published` short-circuits to a push-only "Push update" — the PR
-/// already exists, so we re-push the branch and skip `open-pr`. The push is
-/// idempotent (a no-op push still exits 0), so a first publish and a repeat
-/// "Push update" take the same code path up to the branch on `already_published`.
-/// Fail loud (CLAUDE.md): a push or `open-pr` failure surfaces verbatim via
-/// `AppError` and no PR state changes silently — the push must succeed before we
-/// ask the backend to open the PR (else GitHub 422s on a missing branch).
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn workspace_publish(
-    state: tauri::State<'_, AppState>,
-    workspace_id: String,
-    head_ref: String,
-    title: String,
-    body: Option<String>,
-    already_published: bool,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let repo = active_repo_path(&state)?;
-    // Sync subprocess git, called directly: brief network I/O on a user-initiated
-    // action (the webview shows a spinner), and the multi-threaded runtime keeps
-    // other work moving while this worker blocks.
-    git::push(&repo, &head_ref)?;
-    if already_published {
-        return Ok(serde_json::json!({ "pushed": true }));
-    }
-    let v = state
-        .api
-        .open_pr(&token, &workspace_id, &title, body.as_deref(), false)
-        .await?;
-    Ok(v)
-}
-
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn workspace_delete(
-    state: tauri::State<'_, AppState>,
-    workspace_id: String,
-) -> Result<(), AppError> {
-    let token = state.require_token()?;
-    state.api.workspace_delete(&token, &workspace_id).await?;
-    Ok(())
-}
-
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn storyline_get(
-    state: tauri::State<'_, AppState>,
-    workspace_id: String,
-) -> Result<api::StorylineDto, AppError> {
-    let token = state.require_token()?;
-    let dto = state.api.storyline_get(&token, &workspace_id).await?;
-    Ok(dto)
-}
-
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn storyline_update(
-    state: tauri::State<'_, AppState>,
-    workspace_id: String,
-    etag: String,
-    files: Vec<api::StorylineFileWrite>,
-) -> Result<api::StorylineDto, AppError> {
-    let token = state.require_token()?;
-    let dto = state
-        .api
-        .storyline_update(&token, &workspace_id, &etag, &files)
-        .await?;
-    Ok(dto)
-}
-
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn github_prs(
-    state: tauri::State<'_, AppState>,
-    role: String,
-) -> Result<Vec<api::GithubPrSearchItem>, AppError> {
-    let token = state.require_token()?;
-    let items = state.api.github_prs(&token, &role).await?;
-    Ok(items)
-}
-
-/// The GitHub file object for one path in a PR (patch + status + counts), read
-/// via the backend (ADR-0001). The reviewer storyline viewer calls this per
-/// step — the reviewer may not have the branch checked out, so the diff comes
-/// from the PR on GitHub rather than the local working tree.
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn pr_file_diff(
-    state: tauri::State<'_, AppState>,
-    owner: String,
-    repo: String,
-    pr_number: i64,
-    file_path: String,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let diff = state
-        .api
-        .pr_file_diff(&token, &owner, &repo, pr_number, &file_path)
-        .await?;
-    Ok(diff)
-}
-
-/// The PR's comments (`{ issue, review }`) from GitHub, via the backend
-/// (ADR-0001). The reviewer storyline viewer fetches these once per open/Refresh
-/// and anchors the review (line) comments inline in each step's diff — including
-/// comments left by non-Stage participants directly on github.com (ADR-0003).
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn pr_comments(
-    state: tauri::State<'_, AppState>,
-    owner: String,
-    repo: String,
-    pr_number: i64,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let comments = state
-        .api
-        .pr_comments(&token, &owner, &repo, pr_number)
-        .await?;
-    Ok(comments)
-}
-
-/// The PR's reviews from GitHub, via the backend (ADR-0001). The reviewer viewer
-/// computes the review-decision banner (latest non-pending state per reviewer)
-/// from these — non-Stage reviewers included (ADR-0003).
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn pr_reviews(
-    state: tauri::State<'_, AppState>,
-    owner: String,
-    repo: String,
-    pr_number: i64,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let reviews = state
-        .api
-        .pr_reviews(&token, &owner, &repo, pr_number)
-        .await?;
-    Ok(reviews)
-}
-
-/// Post a comment on a PR, write-through to GitHub as the signed-in user
-/// (ADR-0003 — non-Stage participants on the PR see it). `payload` is the full
-/// comment body the reviewer screen builds: `{ kind, body, path?, line?, side?,
-/// commit_id?, in_reply_to? }`. A fresh review line comment carries
-/// `path`+`line`+`side`+`commit_id`; a reply carries `in_reply_to`+`body`. A
-/// archived workspace (closed/merged PR) comes back as the backend's `409`,
-/// surfaced verbatim for the client banner.
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn pr_comment_create(
-    state: tauri::State<'_, AppState>,
-    owner: String,
-    repo: String,
-    pr_number: i64,
-    payload: serde_json::Value,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let created = state
-        .api
-        .pr_comment_create(&token, &owner, &repo, pr_number, payload)
-        .await?;
-    Ok(created)
-}
-
-/// Submit a review verdict on a PR, write-through to GitHub as the signed-in
-/// user (ADR-0003). `event` is `APPROVE | REQUEST_CHANGES | COMMENT`; `body` is
-/// the (non-empty) summary; `comments` is an optional array of line comments
-/// submitted with the review. The workspace state reflects the verdict on the
-/// next overview load.
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn pr_review_create(
-    state: tauri::State<'_, AppState>,
-    owner: String,
-    repo: String,
-    pr_number: i64,
-    body: String,
-    event: String,
-    comments: Option<serde_json::Value>,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let review = state
-        .api
-        .pr_review_create(&token, &owner, &repo, pr_number, &body, &event, comments)
-        .await?;
-    Ok(review)
-}
-
-// --- IntroComments (Stage-native storyline-intro discussion; ADR-0001) ---
-//
-// Unlike the PR-anchored `pr_*` commands above, these never touch GitHub — an
-// IntroComment is Stage's value-add narrative layer with no GitHub counterpart.
-// The backend enforces the rules (creator-only pre-publish, depth ≤ 2, creator
-// resolves roots, frozen → 409); these thin wrappers forward the verbatim
-// message through `AppError` for the client's banner (fail loud, CLAUDE.md).
-
-/// The intro-comment thread for one storyline step (roots, each with nested
-/// `replies`). `include_resolved=false` hides resolved roots.
-#[tauri::command]
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn intro_comments_list(
-    state: tauri::State<'_, AppState>,
-    workspace_id: String,
-    file_id: String,
-    include_resolved: bool,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let thread = state
-        .api
-        .intro_comments_list(&token, &workspace_id, &file_id, include_resolved)
-        .await?;
-    Ok(thread)
-}
-
-/// Post an intro-comment (root, or a reply when `parent_id` is set).
-#[tauri::command]
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn intro_comment_create(
-    state: tauri::State<'_, AppState>,
-    workspace_id: String,
-    file_id: String,
-    body: String,
-    parent_id: Option<String>,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let created = state
-        .api
-        .intro_comment_create(&token, &workspace_id, &file_id, &body, parent_id.as_deref())
-        .await?;
-    Ok(created)
-}
-
-/// Edit an intro-comment's body (author only — backend 403s otherwise).
-#[tauri::command]
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn intro_comment_update(
-    state: tauri::State<'_, AppState>,
-    comment_id: String,
-    body: String,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let updated = state
-        .api
-        .intro_comment_update(&token, &comment_id, &body)
-        .await?;
-    Ok(updated)
-}
-
-/// Soft-delete an intro-comment (author only). Returns () — backend replies 204.
-#[tauri::command]
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn intro_comment_delete(
-    state: tauri::State<'_, AppState>,
-    comment_id: String,
-) -> Result<(), AppError> {
-    let token = state.require_token()?;
-    state.api.intro_comment_delete(&token, &comment_id).await?;
-    Ok(())
-}
-
-/// Resolve a root intro-comment (workspace creator only; roots only).
-#[tauri::command]
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn intro_comment_resolve(
-    state: tauri::State<'_, AppState>,
-    comment_id: String,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let resolved = state.api.intro_comment_resolve(&token, &comment_id).await?;
-    Ok(resolved)
-}
-
-/// Unresolve a previously-resolved root intro-comment (workspace creator only).
-#[tauri::command]
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn intro_comment_unresolve(
-    state: tauri::State<'_, AppState>,
-    comment_id: String,
-) -> Result<serde_json::Value, AppError> {
-    let token = state.require_token()?;
-    let unresolved = state
-        .api
-        .intro_comment_unresolve(&token, &comment_id)
-        .await?;
-    Ok(unresolved)
 }
 
 // --- Self-Review Debrief (cycle 1: local agent↔author loop; ADR-0011) ---
@@ -1309,5 +771,281 @@ pub fn review_checkout_branch(
     let path = active_repo_path(&state)?;
     let repo_root = stage_core::repo_root_from_cwd(&path)?;
     stage_core::checkout_pr_branch(&state.github, &repo_root, &pr, &branch)?;
+    Ok(())
+}
+
+// --- Identity (ADR-0022 §5, milestone C) -------------------------------------
+//
+// Stage holds no account/session/token. "Who am I" is just the `gh` token owner,
+// resolved via `gh api user` and cached for the adapter's lifetime. The webview
+// reads this to label the active user; there is no sign-in.
+
+/// The `gh` token owner (ADR-0022 §5) — Stage's whole identity model: no Stage
+/// account, no session, just the local `gh`'s authenticated user. Fails loud with
+/// `gh`'s real message when `gh` is absent or unauthenticated (no broker fallback).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn gh_identity(state: State<'_, AppState>) -> Result<stage_core::GitHubUser, AppError> {
+    Ok(state.github.current_user()?)
+}
+
+// --- Publish (PUB-1..7, ADR-0022 §3/§7, milestone D) -------------------------
+//
+// The one-action publish: serialize the local draft storyline into
+// `.stage/<branch>/`, scoped-commit, push with the user's own git credentials,
+// and create/update/reopen the PR via `gh` (auto-posting the single "Open in
+// Stage" comment on first create). All lifecycle transitions are computed in Rust
+// (ADR-0022 §7); the gate and every gh/git failure fail loud (StageError →
+// AppError, message verbatim). Shells out to gh/git like the other networked
+// commands (Tauri runs it on a worker; the webview shows a spinner).
+
+/// Whether the active repo+branch's draft storyline is ready to publish (PUB-2
+/// #73): **≥1 step and every step has a non-empty intro**. Computed from the
+/// draft's storyline, never stored; `review_publish` enforces the same rule.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn publish_readiness(
+    state: State<'_, AppState>,
+) -> Result<stage_core::PublishReadiness, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    let steps = store.list_storyline_steps(&key)?;
+    Ok(stage_core::assess_publish_readiness(&steps))
+}
+
+/// Publish (or re-publish) the active repo+branch's draft Review to GitHub
+/// (PUB-1 #72): write the storyline into `.stage/<branch>/`, scoped-commit, push,
+/// and create/update/reopen the PR via `gh`. The PR title/body/base come from
+/// `req`; the Review title + draft state come from the local store. Fails loud on
+/// a not-ready draft (same gate as `publish_readiness`) or any gh/git failure.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn review_publish(
+    state: State<'_, AppState>,
+    req: stage_core::PublishRequest,
+) -> Result<stage_core::PublishOutcome, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    Ok(stage_core::publish_review(
+        &store,
+        &state.github,
+        &repo_root,
+        &key,
+        &req,
+    )?)
+}
+
+// --- Native GitHub review & verdict (RW-1..5, ADR-0022 §4/§8, milestone E) ----
+//
+// The reviewer's write-through to GitHub via the user's own `gh` (no backend).
+// All operate on the active repo's clone (`repo_root`) — the clone `stage open`
+// resolved for the PR — and a bare PR number; `gh` resolves owner/repo from the
+// repo's remote. Verdict/comment writes fail loud with `gh`'s message verbatim.
+
+/// Read everything the reviewer needs about a PR's existing activity in one shot
+/// (RW-4): state, verdict decision, reviews, conversation + line comments, checks.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_activity(
+    state: State<'_, AppState>,
+    pr_number: u32,
+) -> Result<stage_core::PrActivity, AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    Ok(state.github.read_pr_activity(&repo_root, pr_number)?)
+}
+
+/// Submit the overall review **verdict** (RW-3, ADR-0022 §8): `approve` /
+/// `requestChanges` / `comment`, with a summary `body` and an optional batch of
+/// line comments. `requestChanges`/`comment` require a non-empty body (enforced).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_submit_verdict(
+    state: State<'_, AppState>,
+    pr_number: u32,
+    verdict: stage_core::Verdict,
+    body: String,
+    comments: Vec<stage_core::DraftLineComment>,
+) -> Result<stage_core::SubmittedVerdict, AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    Ok(state
+        .github
+        .submit_verdict(&repo_root, pr_number, verdict, &body, &comments)?)
+}
+
+/// Post a single inline review comment anchored to a diff line (RW-2).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_comment_on_line(
+    state: State<'_, AppState>,
+    pr_number: u32,
+    comment: stage_core::DraftLineComment,
+) -> Result<stage_core::LineComment, AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    Ok(state
+        .github
+        .comment_on_line(&repo_root, pr_number, &comment)?)
+}
+
+/// Post a file-level review comment (RW-2) — not anchored to a specific line.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_comment_on_file(
+    state: State<'_, AppState>,
+    pr_number: u32,
+    path: String,
+    body: String,
+) -> Result<stage_core::LineComment, AppError> {
+    let repo = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&repo)?;
+    Ok(state
+        .github
+        .comment_on_file(&repo_root, pr_number, &path, &body)?)
+}
+
+/// Merge the PR (RW-5) with the given method (`merge`/`squash`/`rebase`).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_merge(
+    state: State<'_, AppState>,
+    pr_number: u32,
+    method: stage_core::MergeMethod,
+) -> Result<(), AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    state.github.merge_pr(&repo_root, pr_number, method)?;
+    Ok(())
+}
+
+/// Close the PR without merging (RW-5).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_close(state: State<'_, AppState>, pr_number: u32) -> Result<(), AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    state.github.close_pr(&repo_root, pr_number)?;
+    Ok(())
+}
+
+/// Flip the PR's draft status (RW-5): `true` → mark draft, `false` → ready.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_set_draft(
+    state: State<'_, AppState>,
+    pr_number: u32,
+    draft: bool,
+) -> Result<(), AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    state.github.set_pr_draft(&repo_root, pr_number, draft)?;
+    Ok(())
+}
+
+// --- Per-step PR discussion (IC-1..3, ADR-0022 §4, milestone E) ---------------
+//
+// Step discussion is GitHub PR review threads, code-anchored to each step's diff
+// location (IntroComment is removed, ADR-0022 §8). The reviewer/author read the
+// threads grouped by storyline step (passing the steps' anchors, already known
+// to the webview from the reviewer entry / draft storyline) and post/resolve via
+// `gh`. Edit/delete/resolve capabilities are GitHub-computed per comment (IC-3).
+
+/// The PR's review threads mapped onto the storyline (IC-1): each `step_anchor`
+/// gets the threads anchored at its diff location; threads anchored elsewhere
+/// land in `unanchored` (never dropped). `step_anchors` are the steps' diff paths
+/// the webview already holds (from the reviewer entry or the draft storyline).
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_discussion(
+    state: State<'_, AppState>,
+    pr_number: u32,
+    step_anchors: Vec<String>,
+) -> Result<stage_core::PrDiscussion, AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    let threads = state.github.read_pr_threads(&repo_root, pr_number)?;
+    Ok(stage_core::group_threads_by_step(&step_anchors, threads))
+}
+
+/// Start a new code-anchored discussion thread on a step (IC-1): a line comment
+/// when `line` is set, else a file-level comment. `anchor` is the step's diff path.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_start_thread(
+    state: State<'_, AppState>,
+    pr_number: u32,
+    anchor: String,
+    line: Option<u32>,
+    side: Option<stage_core::Side>,
+    body: String,
+) -> Result<stage_core::LineComment, AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    Ok(state
+        .github
+        .start_step_thread(&repo_root, pr_number, &anchor, line, side, &body)?)
+}
+
+/// Reply to an existing thread (IC-1), addressing its root comment id.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_reply_thread(
+    state: State<'_, AppState>,
+    pr_number: u32,
+    in_reply_to: u64,
+    body: String,
+) -> Result<stage_core::ThreadComment, AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    Ok(state
+        .github
+        .reply_to_thread(&repo_root, pr_number, in_reply_to, &body)?)
+}
+
+/// Resolve a review thread (IC-2), by its GraphQL node id. Returns whether the
+/// thread's resolution state changed.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_resolve_thread(state: State<'_, AppState>, thread_id: String) -> Result<bool, AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    Ok(state.github.resolve_thread(&repo_root, &thread_id)?)
+}
+
+/// Reopen a resolved review thread (IC-2), by its GraphQL node id.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_reopen_thread(state: State<'_, AppState>, thread_id: String) -> Result<bool, AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    Ok(state.github.reopen_thread(&repo_root, &thread_id)?)
+}
+
+/// Edit one's own thread comment (IC-3), by its REST comment id. GitHub enforces
+/// authorship; the webview shows the affordance only when `viewerCanUpdate`.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_edit_comment(
+    state: State<'_, AppState>,
+    comment_id: u64,
+    body: String,
+) -> Result<stage_core::ThreadComment, AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    Ok(state.github.edit_comment(&repo_root, comment_id, &body)?)
+}
+
+/// Delete one's own thread comment (IC-3), by its REST comment id. GitHub
+/// enforces authorship; gated in the webview by `viewerCanDelete`.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn pr_delete_comment(state: State<'_, AppState>, comment_id: u64) -> Result<(), AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    state.github.delete_comment(&repo_root, comment_id)?;
     Ok(())
 }

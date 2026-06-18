@@ -1,6 +1,6 @@
 # ADR-0014 · `stage open` — the CLI launches the GUI into Self-Review
 
-**Status:** accepted
+**Status:** accepted — amended by [ADR-0022](0022-local-stage-folder-replaces-backend.md)
 **Date:** 2026-06-05
 
 ## Context

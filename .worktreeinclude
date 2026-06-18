@@ -4,10 +4,6 @@
 # to run — never dependencies, build output, or caches (node_modules, .venv,
 # target/, *_cache, generated schemas), which are rebuilt in the worktree.
 
-# Backend secrets + Postgres credentials. Without this the backend starts with
-# placeholder creds and sign-in breaks.
-backend/.env
-
 # Local Claude Code permissions/settings, so worktree sessions reuse the same
 # allowlist instead of re-prompting.
 .claude/settings.local.json

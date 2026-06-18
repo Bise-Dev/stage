@@ -41,10 +41,5 @@
       "icons/icon.ico"
     ]
   },
-  "plugins": {
-    "stage": {
-      "backendUrl": "http://localhost:8000",
-      "githubAppClientId": "Iv23liDWVBHjBxUVEpgD"
-    }
-  }
+  "plugins": {}
 }

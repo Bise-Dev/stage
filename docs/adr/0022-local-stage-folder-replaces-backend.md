@@ -1,11 +1,12 @@
-# ADR-0019 · A local `.stage` folder replaces the backend
+# ADR-0022 · A local `.stage` folder replaces the backend
 
-**Status:** proposed
-**Date:** 2026-06-15
+**Status:** accepted
+**Date:** 2026-06-15 (accepted 2026-06-18)
 
-> Scope: this records the target architecture for the `.stage` refactor (integration branch
-> `main_refactor_local`). It is **proposed**, not adopted — `CONTEXT.md` and the live `backend/`
-> still describe the current three-tier system until this lands.
+> Scope: this records the architecture of the `.stage` refactor (integration branch
+> `main_refactor_local`). **Accepted** and landed: the `backend/` directory and the client's
+> backend SDK are deleted, `stage-core` is the whole engine, and `CONTEXT.md` describes this
+> no-backend system. The milestones (A–H) that implemented it are merged.
 
 ## Context
 

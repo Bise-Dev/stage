@@ -1,6 +1,6 @@
 # ADR-0001 · Three-tier topology: client ⇄ Stage Backend ⇄ GitHub
 
-**Status:** accepted
+**Status:** superseded by [ADR-0022](0022-local-stage-folder-replaces-backend.md) (was: accepted)
 **Date:** 2026-05-23
 
 ## Context

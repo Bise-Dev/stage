@@ -75,11 +75,11 @@ export function Subheader({
         type="button"
         className="btn btn-ghost"
         onClick={onExit}
-        title="Back to Workspaces — Esc"
+        title="Back to Home — Esc"
         style={{ padding: '0 8px' }}
       >
         <Icon name="chevron-right" size={12} color="var(--gray-500)" />
-        <span style={{ marginLeft: 4 }}>Workspaces</span>
+        <span style={{ marginLeft: 4 }}>Home</span>
       </button>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -202,7 +202,7 @@ export function Subheader({
         type="button"
         className="btn btn-primary"
         onClick={onReadyToShare}
-        title="Create a Workspace and start composing the storyline (coming soon)"
+        title="Mark ready to share and start composing the storyline (coming soon)"
       >
         <Icon name="gh" size={12} color="#fff" /> Ready to share
       </button>

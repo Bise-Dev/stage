@@ -4,7 +4,7 @@ import { Avatar } from '../../components/Avatar';
 import { Icon } from '../../components/Icon';
 import { StageLogo } from '../../components/StageLogo';
 import { TitleBar } from '../../components/TitleBar';
-import type { User } from '../../tauri';
+import { type GitHubUser, ghIdentity } from '../../tauri';
 
 type SectionId = 'account' | 'about';
 
@@ -14,24 +14,16 @@ const SECTIONS: { id: SectionId; label: string; icon: 'gh' | 'eye' }[] = [
 ];
 
 export function Settings({
-  user,
   onClose,
-  onSignOut,
-  onSignIn,
 }: {
-  /** The signed-in user, or `null` in local-only mode (no Stage session). */
-  user: User | null;
   /** Return to the screen Settings was opened from. */
   onClose: () => void;
-  onSignOut: () => void;
-  /** Route to the SignIn screen (the no-session Account CTA). */
-  onSignIn: () => void;
 }) {
   const [section, setSection] = useState<SectionId>('account');
 
   // Esc closes Settings, matching the dismiss pattern used by the app's other
-  // overlays (RepoMenu / NewWorkspaceModal). Ignored while typing so it can't
-  // eat an Escape meant for a focused field.
+  // overlays (RepoMenu). Ignored while typing so it can't eat an Escape meant
+  // for a focused field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
@@ -98,11 +90,7 @@ export function Settings({
 
           {/* Content */}
           <div style={{ flex: 1, overflow: 'auto', padding: '24px 32px' }}>
-            {section === 'account' ? (
-              <AccountSection user={user} onSignOut={onSignOut} onSignIn={onSignIn} />
-            ) : (
-              <AboutSection />
-            )}
+            {section === 'account' ? <AccountSection /> : <AboutSection />}
           </div>
         </div>
       </div>
@@ -152,23 +140,52 @@ function Card({ label, hint, children }: { label: string; hint?: string; childre
   );
 }
 
-function AccountSection({
-  user,
-  onSignOut,
-  onSignIn,
-}: {
-  user: User | null;
-  onSignOut: () => void;
-  onSignIn: () => void;
-}) {
+/**
+ * The GitHub identity Stage acts as — the local `gh` token owner (ADR-0022 §5).
+ * There is no Stage account, session, or sign-in/out: identity is whoever `gh`
+ * is authenticated as, resolved read-only via `gh api user`. A failure (gh
+ * absent/unauthenticated) surfaces verbatim with the `gh auth login` remedy.
+ */
+function AccountSection() {
+  const [user, setUser] = useState<GitHubUser | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    ghIdentity()
+      .then(setUser)
+      .catch((e) => {
+        console.warn('gh_identity_failed', e);
+        setError(String(e));
+      });
+  }, []);
+
   return (
     <>
-      <SectionHeader title="Account" hint="How Stage talks to GitHub on your behalf." />
+      <SectionHeader title="Account" hint="The GitHub identity Stage acts as on your behalf." />
 
-      {user ? (
+      {error ? (
+        <Card label="GitHub CLI not ready">
+          <div
+            style={{
+              padding: '14px',
+              background: '#fff',
+              border: '1px solid var(--hairline)',
+              borderRadius: 'var(--r-md)',
+              fontSize: 12.5,
+              color: 'var(--gray-700)',
+              lineHeight: 1.5,
+            }}
+          >
+            <div style={{ color: 'var(--red-d)', marginBottom: 6 }}>{error}</div>
+            Stage uses your local <span className="mono">gh</span> CLI for every GitHub action — it
+            stores no token of its own. Run <span className="mono">gh auth login</span> in a
+            terminal, then reopen Stage.
+          </div>
+        </Card>
+      ) : (
         <Card
-          label="Connected to GitHub"
-          hint="Stage uses this account to open PRs, post review comments, and read PR metadata."
+          label="Connected via the GitHub CLI"
+          hint="Stage uses your local `gh` credentials to open PRs, post reviews, and read PR state. It holds no token of its own."
         >
           <div
             style={{
@@ -181,40 +198,20 @@ function AccountSection({
               borderRadius: 'var(--r-md)',
             }}
           >
-            <Avatar name={user.display_name || user.github_login} size="lg" />
+            <Avatar name={user?.name || user?.login || '…'} size="lg" />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--gray-900)' }}>
-                {user.display_name || user.github_login}
+                {user ? user.name || user.login : 'Resolving…'}
               </div>
-              <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>@{user.github_login}</div>
+              <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+                {user ? `@${user.login}` : 'gh api user'}
+              </div>
             </div>
-            <span className="badge badge-green">
-              <Icon name="check" size={9} color="var(--green-d)" /> Connected
-            </span>
-            <button type="button" className="btn" onClick={onSignOut}>
-              Sign out
-            </button>
-          </div>
-        </Card>
-      ) : (
-        <Card label="Not signed in">
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 14,
-              padding: '14px',
-              background: '#fff',
-              border: '1px solid var(--hairline)',
-              borderRadius: 'var(--r-md)',
-            }}
-          >
-            <div style={{ flex: 1, fontSize: 12.5, color: 'var(--gray-600)' }}>
-              You're using Stage locally. Sign in to connect GitHub and share workspaces.
-            </div>
-            <button type="button" className="btn btn-primary" onClick={onSignIn}>
-              <Icon name="gh" size={12} color="#fff" /> Sign in with GitHub
-            </button>
+            {user && (
+              <span className="badge badge-green">
+                <Icon name="check" size={9} color="var(--green-d)" /> gh
+              </span>
+            )}
           </div>
         </Card>
       )}

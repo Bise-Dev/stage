@@ -1,13 +1,10 @@
 #[cfg(debug_assertions)]
 pub mod activity_log;
-pub mod api;
 mod commands;
 mod errors;
 mod git;
-pub mod oauth;
 mod recents;
 mod repo_activation;
-mod session;
 mod state;
 mod watcher;
 
@@ -22,8 +19,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use crate::recents::RecentsStore;
-use crate::session::SessionStore;
-use crate::state::{AppState, AuthSession, OpenIntent, OpenMode};
+use crate::state::{AppState, OpenIntent, OpenMode};
 
 /// Parse a `stage open <repo-root> [--review <owner>/<repo>#<n>]` invocation out
 /// of a process argv (the program name is `argv[0]`). Returns the open-intent, or
@@ -164,37 +160,6 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
 
             let recents = RecentsStore::open(&data_dir)?;
-            let sessions = SessionStore::open(&data_dir)?;
-            // Seed the runtime token from disk (ADR-0013). It's validated lazily
-            // via `auth_bootstrap` (auth_me); a dead token is cleared there.
-            let initial_token = sessions.token();
-
-            let backend_url = app
-                .config()
-                .plugins
-                .0
-                .get("stage")
-                .and_then(|v| v.get("backendUrl"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("http://localhost:8000")
-                .to_string();
-
-            let github_app_client_id = app
-                .config()
-                .plugins
-                .0
-                .get("stage")
-                .and_then(|v| v.get("githubAppClientId"))
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    std::io::Error::other(
-                        "plugins.stage.githubAppClientId not set in tauri.conf.json",
-                    )
-                })?
-                .to_string();
-
-            let api_client = api::Client::new(&backend_url)
-                .map_err(|e| std::io::Error::other(format!("api client: {e}")))?;
 
             // Cold start: this process *is* the primary, so parse our own argv
             // for a `stage open` request (ADR-0014). Warm starts arrive via the
@@ -204,14 +169,10 @@ pub fn run() {
             app.manage(AppState {
                 active: Mutex::new(None),
                 recents: Arc::new(recents),
-                sessions: Arc::new(sessions),
-                api: api_client,
                 // Shared credential-free GitHub adapter (ADR-0022 §5): its `gh`
-                // auth gate + identity resolve once and are reused by the dashboard.
+                // auth gate + `gh api user` identity resolve once and are reused by
+                // every GitHub command. Stage holds no token of its own.
                 github: stage_core::GitHub::new(),
-                auth: Mutex::new(initial_token.map(|token| AuthSession { token })),
-                auth_in_flight: Mutex::new(None),
-                github_app_client_id,
                 pending_open: Mutex::new(pending_open),
                 #[cfg(debug_assertions)]
                 activity_log,
@@ -235,36 +196,12 @@ pub fn run() {
             commands::storyline_diff,
             commands::self_review_diff,
             commands::self_review_base_options,
-            commands::repo_overview,
             commands::dashboard_overview,
             commands::storyline_staleness,
-            commands::workspace_create,
-            commands::workspace_update,
-            commands::workspace_publish,
-            commands::workspace_delete,
-            commands::storyline_get,
-            commands::storyline_update,
             commands::git_fetch,
             commands::git_push,
             commands::open_in_finder,
             commands::open_url,
-            commands::auth_sign_in,
-            commands::auth_sign_in_cancel,
-            commands::auth_me,
-            commands::auth_bootstrap,
-            commands::auth_logout,
-            commands::github_prs,
-            commands::pr_file_diff,
-            commands::pr_comments,
-            commands::pr_reviews,
-            commands::pr_comment_create,
-            commands::pr_review_create,
-            commands::intro_comments_list,
-            commands::intro_comment_create,
-            commands::intro_comment_update,
-            commands::intro_comment_delete,
-            commands::intro_comment_resolve,
-            commands::intro_comment_unresolve,
             commands::self_review_debrief_get,
             commands::repo_debrief_branches,
             commands::self_review_notes_list,
@@ -285,6 +222,23 @@ pub fn run() {
             commands::storyline_preview,
             commands::review_open,
             commands::review_checkout_branch,
+            commands::gh_identity,
+            commands::publish_readiness,
+            commands::review_publish,
+            commands::pr_activity,
+            commands::pr_submit_verdict,
+            commands::pr_comment_on_line,
+            commands::pr_comment_on_file,
+            commands::pr_merge,
+            commands::pr_close,
+            commands::pr_set_draft,
+            commands::pr_discussion,
+            commands::pr_start_thread,
+            commands::pr_reply_thread,
+            commands::pr_resolve_thread,
+            commands::pr_reopen_thread,
+            commands::pr_edit_comment,
+            commands::pr_delete_comment,
             #[cfg(debug_assertions)]
             activity_log::activity_log_snapshot,
             #[cfg(debug_assertions)]

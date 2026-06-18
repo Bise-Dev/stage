@@ -15,23 +15,37 @@ import type { ActivityLogPill } from './generated/ActivityLogPill';
 import type { BaseOptions } from './generated/BaseOptions';
 import type { BranchInfo } from './generated/BranchInfo';
 import type { ChangedFile } from './generated/ChangedFile';
+// New-engine DTOs (ADR-0022): identity (C), publish (D), verdict/review (E-RW),
+// discussion (E-IC). All generated from the Rust structs; the screens import them
+// from here like the rest of the IPC boundary.
+import type { CheckResult } from './generated/CheckResult';
+import type { CheckStatus } from './generated/CheckStatus';
 import type { CommittedDiff } from './generated/CommittedDiff';
 import type { DashboardRow } from './generated/DashboardRow';
 import type { DashboardView } from './generated/DashboardView';
 import type { Debrief } from './generated/Debrief';
 import type { DebriefStep } from './generated/DebriefStep';
 import type { DiffStats } from './generated/DiffStats';
+import type { DraftLineComment } from './generated/DraftLineComment';
 import type { FetchOutcome } from './generated/FetchOutcome';
 import type { FileStatus } from './generated/FileStatus';
-import type { GithubPrSearchItem } from './generated/GithubPrSearchItem';
-import type { GithubUserRef } from './generated/GithubUserRef';
+import type { GitHubUser } from './generated/GitHubUser';
+import type { IssueComment } from './generated/IssueComment';
+import type { LineComment } from './generated/LineComment';
 import type { LocalDefault } from './generated/LocalDefault';
+import type { MergeMethod } from './generated/MergeMethod';
 import type { NoteAnchor } from './generated/NoteAnchor';
 import type { NoteReply } from './generated/NoteReply';
 import type { NoteStatus } from './generated/NoteStatus';
 import type { OpenIntent } from './generated/OpenIntent';
 import type { OpenMode } from './generated/OpenMode';
+import type { PrActivity } from './generated/PrActivity';
+import type { PrDiscussion } from './generated/PrDiscussion';
 import type { PrRef } from './generated/PrRef';
+import type { PublishAction } from './generated/PublishAction';
+import type { PublishOutcome } from './generated/PublishOutcome';
+import type { PublishReadiness } from './generated/PublishReadiness';
+import type { PublishRequest } from './generated/PublishRequest';
 import type { PushOutcome } from './generated/PushOutcome';
 import type { RecentRepo } from './generated/RecentRepo';
 import type { ReplyAuthor } from './generated/ReplyAuthor';
@@ -41,6 +55,8 @@ import type { Review } from './generated/Review';
 import type { ReviewRole } from './generated/ReviewRole';
 import type { ReviewSignal } from './generated/ReviewSignal';
 import type { ReviewStatus } from './generated/ReviewStatus';
+import type { ReviewSummary } from './generated/ReviewSummary';
+import type { ReviewThread } from './generated/ReviewThread';
 import type { ReviewerEntry } from './generated/ReviewerEntry';
 import type { ReviewerPr } from './generated/ReviewerPr';
 import type { ReviewerStep } from './generated/ReviewerStep';
@@ -53,13 +69,13 @@ import type { SelfReviewStats } from './generated/SelfReviewStats';
 import type { Side } from './generated/Side';
 import type { StaleReason } from './generated/StaleReason';
 import type { StepStaleness } from './generated/StepStaleness';
-import type { Storyline } from './generated/Storyline';
-import type { StorylineFile } from './generated/StorylineFile';
-import type { StorylineFileWrite } from './generated/StorylineFileWrite';
+import type { StepThreads } from './generated/StepThreads';
 import type { StorylinePreview } from './generated/StorylinePreview';
 import type { StorylineStep } from './generated/StorylineStep';
 import type { StorylineStepView } from './generated/StorylineStepView';
-import type { User } from './generated/User';
+import type { SubmittedVerdict } from './generated/SubmittedVerdict';
+import type { ThreadComment } from './generated/ThreadComment';
+import type { Verdict } from './generated/Verdict';
 import type { WorktreeInfo } from './generated/WorktreeInfo';
 
 export type {
@@ -77,8 +93,6 @@ export type {
   DiffStats,
   FetchOutcome,
   FileStatus,
-  GithubPrSearchItem,
-  GithubUserRef,
   LocalDefault,
   NoteAnchor,
   NoteReply,
@@ -107,14 +121,29 @@ export type {
   Side,
   StaleReason,
   StepStaleness,
-  Storyline,
-  StorylineFile,
-  StorylineFileWrite,
   StorylinePreview,
   StorylineStep,
   StorylineStepView,
-  User,
   WorktreeInfo,
+  CheckResult,
+  CheckStatus,
+  DraftLineComment,
+  GitHubUser,
+  IssueComment,
+  LineComment,
+  MergeMethod,
+  PrActivity,
+  PrDiscussion,
+  PublishAction,
+  PublishOutcome,
+  PublishReadiness,
+  PublishRequest,
+  ReviewSummary,
+  ReviewThread,
+  StepThreads,
+  SubmittedVerdict,
+  ThreadComment,
+  Verdict,
 };
 
 // --- `stage open` boot intent (ADR-0014) ---
@@ -175,7 +204,7 @@ export const repoSummary = (path: string) => invoke<RepoSummary>('repo_summary',
 export const gitLocalBranches = () => invoke<BranchInfo[]>('git_local_branches');
 
 /** Remote branches (e.g. `origin/main`), recency-sorted, `origin/HEAD` skipped.
- *  The only valid PR base targets — sourced by the New Workspace base picker. */
+ *  The only valid PR base targets — sourced by the base picker. */
 export const gitRemoteBranches = () => invoke<BranchInfo[]>('git_remote_branches');
 
 export const gitDiffStats = (baseRef: string, headRef: string) =>
@@ -208,71 +237,12 @@ export const gitPush = (branch: string) => invoke<PushOutcome>('git_push', { bra
 
 export const selfReviewBaseOptions = () => invoke<BaseOptions>('self_review_base_options');
 
-// --- Repo overview (Stage + GitHub aggregation; see docs/adr/0009) ---
-// Tier 2: `repo_overview` proxies a raw `serde_json::Value` from the backend, so
-// these rows have no Rust struct to generate from and stay hand-written here.
-export type WorkspaceState =
-  | 'draft'
-  | 'ready_to_publish'
-  | 'in_review'
-  | 'changes_requested'
-  | 'approved'
-  | 'archived';
-
-export type OverviewWorkspaceRow = {
-  kind: 'workspace';
-  id: string;
-  title: string;
-  repo_owner: string;
-  repo_name: string;
-  head_ref: string;
-  base_ref: string;
-  pr_number: number | null;
-  created_by: { id: number; github_login: string };
-  last_active_at: string;
-  storyline_count: number;
-  state: WorkspaceState;
-  added: number | null;
-  removed: number | null;
-  comment_count: number | null;
-};
-
-export type OverviewOpenPrRow = {
-  kind: 'open_pr';
-  number: number;
-  title: string;
-  html_url: string;
-  repo_owner: string;
-  repo_name: string;
-  head_ref: string | null;
-  author: { login: string | null; avatar_url: string | null };
-  role: 'author' | 'reviewer';
-  updated_at: string | null;
-  added: number | null;
-  removed: number | null;
-};
-
-export type OverviewRow = OverviewWorkspaceRow | OverviewOpenPrRow;
-
-/** Structured rejection from `repoOverview` when Stage's GitHub App can't
- *  reach the repo (backend 403, code `github_app_no_access`; see docs/adr/0017).
- *  `install_url` is null when the app slug isn't configured (message-only
- *  fallback). All *other* command failures still reject with a bare string. */
-export type RepoAccessError = {
-  kind: 'github_app_no_access';
-  message: string;
-  install_url: string | null;
-};
-
-export const repoOverview = (owner: string, repo: string) =>
-  invoke<OverviewRow[]>('repo_overview', { owner, repo });
-
 /**
  * The local-first per-repo dashboard (DB-1..5, ADR-0022 §6/§7): the local-store
  * draft scan merged with a `gh` PR search, every row's state already derived in
- * Rust (this is the pure-render boundary — the screen only displays it). The
- * local-first replacement for {@link repoOverview}; repo + identity come from the
- * active repo + the user's own `gh`, so there are no owner/repo args.
+ * Rust (this is the pure-render boundary — the screen only displays it). Repo +
+ * identity come from the active repo + the user's own `gh`, so there are no
+ * owner/repo args.
  * `includeArchived` flips the DB-5 view filter (closed/merged PRs hidden by
  * default).
  */
@@ -290,284 +260,6 @@ export const storylineStaleness = () => invoke<StepStaleness[]>('storyline_stale
 export const openInFinder = (path: string) => invoke<void>('open_in_finder', { path });
 
 export const openUrl = (url: string) => invoke<void>('open_url', { url });
-
-// --- Auth wrappers ---
-export const authSignIn = () => invoke<User>('auth_sign_in');
-export const authSignInCancel = () => invoke<void>('auth_sign_in_cancel');
-export const authMe = () => invoke<User>('auth_me');
-/**
- * Validate a persisted session token at boot (ADR-0013). Resolves to the
- * signed-in `User` when a stored token is still valid, or `null` when there's
- * no token / the backend rejected it (dead session — cleared on the Rust side).
- * Rejects on other backend failures.
- */
-export const authBootstrap = () => invoke<User | null>('auth_bootstrap');
-export const authLogout = () => invoke<void>('auth_logout');
-
-// --- GitHub proxy ---
-export const githubPrs = (role: 'author' | 'reviewer') =>
-  invoke<GithubPrSearchItem[]>('github_prs', { role });
-
-/** The GitHub file object for one path in a PR, as the backend proxies it
- *  (raw GitHub shape; only the fields the reviewer viewer maps are typed).
- *  `status` is GitHub's vocabulary (`removed`, not `deleted`); `patch` is
- *  absent for binary files and oversize diffs.
- *  Tier 2: backend `serde_json::Value` passthrough — hand-written. */
-export type GithubPrFile = {
-  filename: string;
-  previous_filename?: string;
-  status: 'added' | 'removed' | 'modified' | 'renamed' | 'copied' | 'changed' | 'unchanged';
-  additions: number;
-  deletions: number;
-  patch?: string;
-};
-
-/** Fetch one file's diff from a PR on GitHub, via the backend (ADR-0001). The
- *  reviewer storyline viewer uses this because the reviewer may not have the
- *  branch checked out locally. A path no longer in the PR (a stale step)
- *  rejects with the backend's 404. */
-export const prFileDiff = (owner: string, repo: string, prNumber: number, filePath: string) =>
-  invoke<GithubPrFile>('pr_file_diff', { owner, repo, prNumber, filePath });
-
-/** Which side of the diff a review comment anchors to (GitHub's vocabulary).
- *  `RIGHT` = the new (head) version, `LEFT` = the old (base) version. */
-export type GithubCommentSide = 'LEFT' | 'RIGHT';
-
-/** A PR-level (issue) comment — not anchored to any line. Raw GitHub shape;
- *  only the fields the reviewer viewer renders are typed. */
-export type GithubIssueComment = {
-  id: number;
-  body: string;
-  user: GithubUserRef | null;
-  created_at: string;
-  html_url?: string;
-};
-
-/** A review (line-anchored) comment. `line`/`side` place it in the *current*
- *  diff; when the comment has slid off the current diff GitHub nulls `line` and
- *  keeps `original_line`/`original_side` (the viewer falls back to those and, if
- *  the line still isn't in the rendered hunk, lists it as off-diff rather than
- *  dropping it — fail loud). `in_reply_to_id` threads replies under their root. */
-export type GithubReviewComment = {
-  id: number;
-  in_reply_to_id: number | null;
-  path: string;
-  line: number | null;
-  original_line: number | null;
-  start_line: number | null;
-  side: GithubCommentSide | null;
-  original_side: GithubCommentSide | null;
-  body: string;
-  user: GithubUserRef | null;
-  created_at: string;
-  html_url?: string;
-};
-
-/** The `{ issue, review }` envelope the backend returns for a PR's comments. */
-export type PrComments = {
-  issue: GithubIssueComment[];
-  review: GithubReviewComment[];
-};
-
-/** All comments on a PR (issue + review), via the backend (ADR-0001). Includes
- *  activity left by non-Stage participants on github.com (ADR-0003). */
-export const prComments = (owner: string, repo: string, prNumber: number) =>
-  invoke<PrComments>('pr_comments', { owner, repo, prNumber });
-
-/** All submitted reviews on a PR, via the backend (ADR-0001). */
-export const prReviews = (owner: string, repo: string, prNumber: number) =>
-  invoke<GithubReview[]>('pr_reviews', { owner, repo, prNumber });
-
-export type GithubReviewState =
-  | 'APPROVED'
-  | 'CHANGES_REQUESTED'
-  | 'COMMENTED'
-  | 'DISMISSED'
-  | 'PENDING';
-
-/** A submitted review. `state` drives the review-decision banner; `body` is the
- *  review's summary text (may be empty for a bare approval). */
-export type GithubReview = {
-  id: number;
-  user: GithubUserRef | null;
-  body: string;
-  state: GithubReviewState;
-  submitted_at: string | null;
-  html_url?: string;
-};
-
-/** A review verdict the reviewer can submit (Step 4). GitHub's create-review
- *  `event` vocabulary; maps to the workspace states the overview shows. */
-export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
-
-/** The body for posting a PR comment write-through to GitHub (ADR-0003). A fresh
- *  review *line* comment carries `path`+`line`+`side`+`commit_id`; a reply
- *  carries `in_reply_to`+`body`; a PR-level note is just `kind:'issue'`+`body`.
- *  The backend validates the combination. */
-export type PrCommentCreateInput = {
-  kind: 'issue' | 'review';
-  body: string;
-  path?: string | null;
-  line?: number | null;
-  side?: GithubCommentSide | null;
-  commit_id?: string | null;
-  in_reply_to?: number | null;
-};
-
-/** Post a comment on a PR, write-through to GitHub as the signed-in user
- *  (ADR-0003). Resolves to the created `GithubReviewComment` (or issue comment).
- *  Rejects with the backend message verbatim — incl. `409` for an archived
- *  (closed/merged) workspace — which the caller renders in a red banner. */
-export const prCommentCreate = (
-  owner: string,
-  repo: string,
-  prNumber: number,
-  payload: PrCommentCreateInput,
-) => invoke<GithubReviewComment>('pr_comment_create', { owner, repo, prNumber, payload });
-
-/** Submit a review verdict on a PR, write-through to GitHub (ADR-0003). `body`
- *  must be non-empty (backend contract). `comments` optionally batches line
- *  comments into the review. Resolves to the created `GithubReview`. */
-export const prReviewCreate = (
-  owner: string,
-  repo: string,
-  prNumber: number,
-  body: string,
-  event: ReviewEvent,
-  comments?: PrCommentCreateInput[],
-) => invoke<GithubReview>('pr_review_create', { owner, repo, prNumber, body, event, comments });
-
-// --- IntroComments (Stage-native storyline-intro discussion; ADR-0001) ---
-// A threaded discussion on a storyline step's *intro* — Stage's value-add
-// narrative layer. Unlike PR comments, these have NO GitHub counterpart and
-// never write through. `replies` nests one level only (backend enforces
-// depth ≤ 2). `user`/`resolved_by` carry the backend user id (number) +
-// GitHub login; `resolved_*` are non-null only on a resolved root.
-// Tier 2: backend `serde_json::Value` passthrough — hand-written.
-export type IntroComment = {
-  id: string;
-  user: { id: number; github_login: string };
-  body: string;
-  parent_id: string | null;
-  created_at: string;
-  resolved_at: string | null;
-  resolved_by: { id: number; github_login: string } | null;
-  replies: IntroComment[];
-};
-
-/** List a storyline step's intro-comment thread (roots, each with nested
- *  `replies`). `includeResolved` (default false) reveals resolved roots. The
- *  `fileId` is the StorylineFile UUID (`Storyline.files[].id`), not the path. */
-export const introCommentsList = (workspaceId: string, fileId: string, includeResolved: boolean) =>
-  invoke<IntroComment[]>('intro_comments_list', { workspaceId, fileId, includeResolved });
-
-/** Post an intro-comment — a root, or a reply when `parentId` is set (depth ≤ 2,
- *  backend-enforced). Rejects with the backend message verbatim (incl. `409`
- *  for a frozen workspace), which the caller renders in a red banner. */
-export const introCommentCreate = (
-  workspaceId: string,
-  fileId: string,
-  body: string,
-  parentId: string | null,
-) => invoke<IntroComment>('intro_comment_create', { workspaceId, fileId, body, parentId });
-
-/** Edit an intro-comment's body (author only — backend 403s otherwise). */
-export const introCommentUpdate = (commentId: string, body: string) =>
-  invoke<IntroComment>('intro_comment_update', { commentId, body });
-
-/** Soft-delete an intro-comment (author only). Resolves to void (backend 204). */
-export const introCommentDelete = (commentId: string) =>
-  invoke<void>('intro_comment_delete', { commentId });
-
-/** Resolve a root intro-comment (workspace creator only; roots only). */
-export const introCommentResolve = (commentId: string) =>
-  invoke<IntroComment>('intro_comment_resolve', { commentId });
-
-/** Unresolve a previously-resolved root intro-comment (workspace creator only). */
-export const introCommentUnresolve = (commentId: string) =>
-  invoke<IntroComment>('intro_comment_unresolve', { commentId });
-
-/** Context for opening a published workspace in the read-only reviewer viewer
- *  (Step 2 of the reviewer flow). Built from an `OverviewWorkspaceRow` whose
- *  `pr_number` is non-null (only published workspaces are reviewable). Carries
- *  the overview row's display fields so the viewer's PR-context subheader
- *  renders without a second fetch. Client-only (assembled in the webview). */
-export type ReviewCtx = {
-  workspaceId: string;
-  owner: string;
-  repo: string;
-  prNumber: number;
-  headRef: string;
-  baseRef: string;
-  title: string;
-  /** GitHub login of the workspace author (whose storyline you're reviewing). */
-  author: string;
-  state: WorkspaceState;
-  /** PR-wide line counts from the overview (GitHub), or null if unavailable. */
-  added: number | null;
-  removed: number | null;
-};
-
-// --- Workspaces ---
-// Tier 2: `workspace_*` proxy the backend's `serde_json::Value` — hand-written.
-export type WorkspaceCreateInput = {
-  repoOwner: string;
-  repoName: string;
-  headRef: string;
-  baseRef: string;
-  title: string;
-};
-
-// The created workspace (subset of WorkspaceOutputSerializer we use to navigate
-// straight into storyline composition). The caller also re-fetches the overview.
-export type WorkspaceCreated = {
-  id: string;
-  repo_owner: string;
-  repo_name: string;
-  head_ref: string;
-  base_ref: string;
-  title: string;
-};
-export const workspaceCreate = (input: WorkspaceCreateInput) =>
-  invoke<WorkspaceCreated>('workspace_create', input);
-
-/** Update a pre-publish workspace's refs (only the given fields). The backend
- *  rejects this with 409 once a PR is open — refs are locked post-publish. */
-export const workspaceUpdate = (
-  workspaceId: string,
-  patch: { baseRef?: string; headRef?: string },
-) =>
-  invoke<WorkspaceCreated>('workspace_update', {
-    workspaceId,
-    baseRef: patch.baseRef ?? null,
-    headRef: patch.headRef ?? null,
-  });
-
-export const workspaceDelete = (workspaceId: string) =>
-  invoke<void>('workspace_delete', { workspaceId });
-
-/**
- * Publish a workspace to GitHub. Pushes its branch with the user's own git
- * credentials (ADR-0016), then — unless `alreadyPublished` — opens or adopts the
- * PR via the backend. With `alreadyPublished` it only re-pushes ("Push update").
- * The caller re-fetches the overview; the resolved value (the raw backend
- * `{workspace, pr, warnings}` envelope, or `{ pushed: true }` for a push-only
- * update) is not otherwise consumed.
- */
-export const workspacePublish = (input: {
-  workspaceId: string;
-  headRef: string;
-  title: string;
-  body: string | null;
-  alreadyPublished: boolean;
-}) => invoke<unknown>('workspace_publish', input);
-
-// --- Storyline ---
-export const storylineGet = (workspaceId: string) =>
-  invoke<Storyline>('storyline_get', { workspaceId });
-
-export const storylineUpdate = (workspaceId: string, etag: string, files: StorylineFileWrite[]) =>
-  invoke<Storyline>('storyline_update', { workspaceId, etag, files });
 
 // --- Local storyline (no auth/sign-in; ADR-0022 §1/§3, milestone B) ---
 // The author's pre-publish storyline lives in the local store, keyed by the
@@ -636,6 +328,106 @@ export const reviewOpen = (pr: PrRef) => invoke<ReviewerEntry>('review_open', { 
  *  dirty tree or a missing fetched head. */
 export const reviewCheckoutBranch = (pr: PrRef, branch: string) =>
   invoke<void>('review_checkout_branch', { pr, branch });
+
+// --- Identity (ADR-0022 §5, milestone C) ---
+// Stage holds no account/session. "Who am I" is just the local `gh` token owner.
+
+/** The `gh` token owner — Stage's whole identity (no account, no session, no
+ *  sign-in). Rejects with `gh`'s message verbatim if `gh` is absent or
+ *  unauthenticated (the caller renders it and points at `gh auth login`). */
+export const ghIdentity = () => invoke<GitHubUser>('gh_identity');
+
+// --- Publish (PUB-1..7, ADR-0022 §3/§7, milestone D) ---
+// The one-action publish: serialize the local draft into `.stage/<branch>/`,
+// commit, push, and create/update/reopen the PR via `gh`. All derived in Rust.
+
+/** Whether the active repo+branch draft is ready to publish (≥1 step, every step
+ *  has a non-empty intro). Render `ready` plus `stepsMissingIntro` as the gaps. */
+export const publishReadiness = () => invoke<PublishReadiness>('publish_readiness');
+
+/** Publish/re-publish the draft Review to GitHub: write `.stage/<branch>/`, scoped
+ *  commit, push (user's own git creds), and create/update/reopen the PR via `gh`
+ *  (auto-posting the one "Open in Stage" comment on first create). Rejects with the
+ *  fail-loud message (not-ready draft, or gh/git failure) for the caller's banner. */
+export const reviewPublish = (req: PublishRequest) =>
+  invoke<PublishOutcome>('review_publish', { req });
+
+// --- Native GitHub review & verdict (RW-1..5, ADR-0022 §4/§8, milestone E) ---
+// The reviewer's write-through to GitHub via the user's own `gh`. All take the PR
+// number; the active repo's clone is resolved on the Rust side.
+
+/** Read a PR's existing activity in one shot (RW-4): state, verdict decision,
+ *  reviews, conversation + line comments, and CI checks. */
+export const prActivity = (prNumber: number) => invoke<PrActivity>('pr_activity', { prNumber });
+
+/** Submit the overall review verdict (RW-3): `approve` / `requestChanges` /
+ *  `comment`, with a summary body and an optional batch of line comments.
+ *  `requestChanges`/`comment` require a non-empty body (Rust-enforced). */
+export const prSubmitVerdict = (
+  prNumber: number,
+  verdict: Verdict,
+  body: string,
+  comments: DraftLineComment[],
+) => invoke<SubmittedVerdict>('pr_submit_verdict', { prNumber, verdict, body, comments });
+
+/** Post a single inline review comment anchored to a diff line (RW-2). */
+export const prCommentOnLine = (prNumber: number, comment: DraftLineComment) =>
+  invoke<LineComment>('pr_comment_on_line', { prNumber, comment });
+
+/** Post a file-level review comment (RW-2) — not anchored to a specific line. */
+export const prCommentOnFile = (prNumber: number, path: string, body: string) =>
+  invoke<LineComment>('pr_comment_on_file', { prNumber, path, body });
+
+/** Merge the PR (RW-5) with the given method. */
+export const prMerge = (prNumber: number, method: MergeMethod) =>
+  invoke<void>('pr_merge', { prNumber, method });
+
+/** Close the PR without merging (RW-5). */
+export const prClose = (prNumber: number) => invoke<void>('pr_close', { prNumber });
+
+/** Flip the PR's draft status (RW-5): true → mark draft, false → ready. */
+export const prSetDraft = (prNumber: number, draft: boolean) =>
+  invoke<void>('pr_set_draft', { prNumber, draft });
+
+// --- Per-step PR discussion (IC-1..3, ADR-0022 §4, milestone E) ---
+// Step discussion is GitHub PR review threads, code-anchored to each step's diff
+// location (IntroComment is removed). Pass the steps' anchors (already known to
+// the screen) to group threads by step; threads elsewhere come back `unanchored`.
+
+/** The PR's review threads mapped onto the storyline (IC-1). `stepAnchors` are the
+ *  steps' diff paths the screen already holds (reviewer entry / draft storyline). */
+export const prDiscussion = (prNumber: number, stepAnchors: string[]) =>
+  invoke<PrDiscussion>('pr_discussion', { prNumber, stepAnchors });
+
+/** Start a code-anchored discussion thread on a step (IC-1): a line comment when
+ *  `line` is set, else a file-level comment. `anchor` is the step's diff path. */
+export const prStartThread = (
+  prNumber: number,
+  anchor: string,
+  line: number | null,
+  side: Side | null,
+  body: string,
+) => invoke<LineComment>('pr_start_thread', { prNumber, anchor, line, side, body });
+
+/** Reply to a thread (IC-1), addressing its root comment id. */
+export const prReplyThread = (prNumber: number, inReplyTo: number, body: string) =>
+  invoke<ThreadComment>('pr_reply_thread', { prNumber, inReplyTo, body });
+
+/** Resolve a review thread (IC-2) by its GraphQL node id. */
+export const prResolveThread = (threadId: string) =>
+  invoke<boolean>('pr_resolve_thread', { threadId });
+
+/** Reopen a resolved review thread (IC-2) by its GraphQL node id. */
+export const prReopenThread = (threadId: string) =>
+  invoke<boolean>('pr_reopen_thread', { threadId });
+
+/** Edit one's own thread comment (IC-3) by its REST id (gated by `viewerCanUpdate`). */
+export const prEditComment = (commentId: number, body: string) =>
+  invoke<ThreadComment>('pr_edit_comment', { commentId, body });
+
+/** Delete one's own thread comment (IC-3) by its REST id (gated by `viewerCanDelete`). */
+export const prDeleteComment = (commentId: number) =>
+  invoke<void>('pr_delete_comment', { commentId });
 
 // --- Self-Review Debrief (cycle 1: local agent↔author loop; see ADR-0011,
 // CONTEXT.md "Debrief" / "Review note"). All local + auth-free. ---
