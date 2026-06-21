@@ -48,7 +48,7 @@ function SignedInChip({
   onSignOut,
 }: {
   login: string;
-  name: string;
+  name: string | null;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
