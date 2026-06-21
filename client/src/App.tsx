@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { AuthProvider } from './lib/authContext';
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { SignIn } from './screens/onboarding/SignIn';
 import { RepoHome } from './screens/repo/RepoHome';
@@ -222,8 +223,10 @@ export function App() {
 
   // Sign out: `auth_logout` revokes the session server-side and clears the
   // persisted token (ADR-0013). It clears memory + disk even if the server call
-  // fails, so the author is locally signed out regardless; route back to SignIn
-  // either way and log a server-side failure for visibility.
+  // fails, so the author is locally signed out regardless. Per ADR-0017 we land
+  // in local-only IN PLACE rather than bouncing to the SignIn gate: drop the
+  // user, enter local-only, and only redirect when leaving a signed-in-only
+  // screen (Workspaces / Storyline / Review) — those are unreachable local-only.
   const signOut = useCallback(async () => {
     try {
       await authLogout();
@@ -231,70 +234,88 @@ export function App() {
       console.warn('auth_logout_failed', e);
     }
     setUser(null);
-    setHasRepo(false);
+    setLocalOnly(true);
     setStorylineCtx(null);
     setReviewCtx(null);
-    setView('signIn');
+    setView((v) => (v === 'workspaces' || v === 'storyline' || v === 'review' ? 'repoHome' : v));
   }, []);
 
-  if (booting) return null;
-  // Settings is reachable from every screen (native ⌘, / RepoMenu), including
-  // local-only mode where `user` is null — so it sits ahead of the auth guards.
-  if (view === 'settings') {
-    return (
-      <Settings
-        user={user}
-        onClose={closeSettings}
-        onSignOut={signOut}
-        onSignIn={() => setView('signIn')}
-      />
-    );
-  }
-  if (view === 'signIn')
-    return <SignIn onAuthenticated={onAuthenticated} onStayOffline={enterLocalOnly} />;
-  if (view === 'openRepo') {
-    // Offer Back only when a repo is already open (i.e. changing repos),
-    // not during first-run onboarding where there's nothing to go back to.
-    return (
-      <OpenRepository
-        onOpened={onRepoOpened}
-        onBack={hasRepo ? () => setView(localOnly ? 'repoHome' : 'workspaces') : undefined}
-      />
-    );
-  }
-  if (view === 'repoHome') {
-    return (
-      <RepoHome
-        onEnterSelfReview={startSelfReview}
-        onChangeRepo={changeRepo}
-        onOpenSettings={openSettings}
-        onSignIn={() => setView('signIn')}
-      />
-    );
-  }
-  if (view === 'selfReview') {
-    return <SelfReview onExit={exitSelfReview} seedBaseFromDebrief={seedBase} />;
-  }
-  if (!user) {
-    // Defensive: should be unreachable (storyline/workspaces are signed-in
-    // only; local-only never routes here), but biome wants the null guard.
-    return null;
-  }
-  if (view === 'storyline' && storylineCtx) {
-    return <Storyline ctx={storylineCtx} user={user} onBack={backToWorkspaces} />;
-  }
-  if (view === 'review' && reviewCtx) {
-    return <ReviewStoryline ctx={reviewCtx} user={user} onBack={backFromReview} />;
-  }
-  return (
-    <Workspaces
-      user={user}
-      onChangeRepo={changeRepo}
-      onStartSelfReview={startSelfReview}
-      onOpenStoryline={openStoryline}
-      onOpenReview={openReview}
-      onOpenSettings={openSettings}
-      onSignOut={signOut}
-    />
+  // Inline upgrade from the AuthStatus chip (ADR-0017): promote to signed-in
+  // without leaving the current screen. Distinct from `onAuthenticated`, which
+  // the boot SignIn screen uses to advance to the repo picker. `pendingOpen` is
+  // only ever set on the SignIn screen (where the chip is hidden), so there is
+  // nothing to route here.
+  const markAuthenticated = useCallback((u: User) => {
+    setUser(u);
+    setLocalOnly(false);
+  }, []);
+
+  const authValue = useMemo(
+    () => ({ user, localOnly, markAuthenticated, signOut }),
+    [user, localOnly, markAuthenticated, signOut],
   );
+
+  if (booting) return null;
+
+  const renderView = () => {
+    // Settings is reachable from every screen (native ⌘, / RepoMenu), including
+    // local-only mode where `user` is null — so it sits ahead of the auth guards.
+    if (view === 'settings') {
+      return (
+        <Settings
+          user={user}
+          onClose={closeSettings}
+          onSignOut={signOut}
+          onSignIn={() => setView('signIn')}
+        />
+      );
+    }
+    if (view === 'signIn')
+      return <SignIn onAuthenticated={onAuthenticated} onStayOffline={enterLocalOnly} />;
+    if (view === 'openRepo') {
+      // Offer Back only when a repo is already open (i.e. changing repos),
+      // not during first-run onboarding where there's nothing to go back to.
+      return (
+        <OpenRepository
+          onOpened={onRepoOpened}
+          onBack={hasRepo ? () => setView(localOnly ? 'repoHome' : 'workspaces') : undefined}
+        />
+      );
+    }
+    if (view === 'repoHome') {
+      return (
+        <RepoHome
+          onEnterSelfReview={startSelfReview}
+          onChangeRepo={changeRepo}
+          onOpenSettings={openSettings}
+        />
+      );
+    }
+    if (view === 'selfReview') {
+      return <SelfReview onExit={exitSelfReview} seedBaseFromDebrief={seedBase} />;
+    }
+    if (!user) {
+      // Defensive: should be unreachable (storyline/workspaces are signed-in
+      // only; local-only never routes here), but biome wants the null guard.
+      return null;
+    }
+    if (view === 'storyline' && storylineCtx) {
+      return <Storyline ctx={storylineCtx} user={user} onBack={backToWorkspaces} />;
+    }
+    if (view === 'review' && reviewCtx) {
+      return <ReviewStoryline ctx={reviewCtx} user={user} onBack={backFromReview} />;
+    }
+    return (
+      <Workspaces
+        user={user}
+        onChangeRepo={changeRepo}
+        onStartSelfReview={startSelfReview}
+        onOpenStoryline={openStoryline}
+        onOpenReview={openReview}
+        onOpenSettings={openSettings}
+      />
+    );
+  };
+
+  return <AuthProvider value={authValue}>{renderView()}</AuthProvider>;
 }
