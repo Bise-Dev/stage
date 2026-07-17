@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { Dashboard } from './screens/dashboard/Dashboard';
 import { OpenRepository } from './screens/onboarding/OpenRepository';
-import { RepoHome } from './screens/repo/RepoHome';
+import { Overview } from './screens/overview/Overview';
 import { LocalReview } from './screens/review/LocalReview';
 import { SelfReview } from './screens/selfReview/SelfReview';
 import { Settings } from './screens/settings/Settings';
-import { LocalStoryline } from './screens/storyline/LocalStoryline';
+import { Storyline } from './screens/storyline/Storyline';
 import {
   type OpenIntent,
   type PrRef,
@@ -18,16 +17,11 @@ import {
 
 // The single-mode, no-backend app (ADR-0022): there is no Stage account, session,
 // or sign-in (§5) — identity is the local `gh` user, resolved lazily where needed.
-// A repo is opened, then the author works locally (Self-Review → Storyline →
-// Publish) or reviews a PR read-only (LocalReview), all via `gh`/`git`.
-type View =
-  | 'openRepo'
-  | 'repoHome'
-  | 'selfReview'
-  | 'localStoryline'
-  | 'dashboard'
-  | 'localReview'
-  | 'settings';
+// A repo is opened onto ONE home screen — the unified Overview (local branches +
+// drafts + published Reviews + PRs, design v3 §1) — from which the author works
+// locally (Self-Review → Storyline → Publish) or reviews a PR read-only
+// (LocalReview), all via `gh`/`git`.
+type View = 'openRepo' | 'overview' | 'selfReview' | 'localStoryline' | 'localReview' | 'settings';
 
 export function App() {
   // `booting` covers draining this launch's `stage open` intent before we pick a
@@ -36,7 +30,7 @@ export function App() {
   const [view, setView] = useState<View>('openRepo');
   const [hasRepo, setHasRepo] = useState(false);
   // The PR opened for local-first read-only review via `stage open <pr-url>`
-  // (ADR-0022 §6) or a dashboard row.
+  // (ADR-0022 §6) or an overview row.
   const [localReviewPr, setLocalReviewPr] = useState<PrRef | null>(null);
   // True when Self-Review was reached via `stage open`: seed its base from the
   // Debrief's base, overriding the per-repo localStorage default (ADR-0014).
@@ -44,7 +38,7 @@ export function App() {
   // The view to return to when Settings is dismissed. Settings is reachable from
   // any screen (native ⌘, menu item, or the RepoMenu), so we stash where it was
   // opened from rather than assume a fixed home.
-  const [returnView, setReturnView] = useState<View>('repoHome');
+  const [returnView, setReturnView] = useState<View>('overview');
   const viewRef = useRef(view);
   viewRef.current = view;
 
@@ -99,32 +93,29 @@ export function App() {
 
   const onRepoOpened = useCallback(() => {
     setHasRepo(true);
-    setView('repoHome');
+    setView('overview');
   }, []);
 
   const changeRepo = useCallback(() => setView('openRepo'), []);
 
-  // Manual entry from the Repo-home: respect the author's persisted base (don't
+  // Manual entry from the Overview: respect the author's persisted base (don't
   // seed from the Debrief — that's only for the `stage open` path, ADR-0014).
   const startSelfReview = useCallback(() => {
     setSeedBase(false);
     setView('selfReview');
   }, []);
-  const exitSelfReview = useCallback(() => setView('repoHome'), []);
+  const exitSelfReview = useCallback(() => setView('overview'), []);
 
   const enterLocalStoryline = useCallback(() => setView('localStoryline'), []);
-  const exitLocalStoryline = useCallback(() => setView('repoHome'), []);
+  const exitLocalStoryline = useCallback(() => setView('overview'), []);
 
-  const openDashboard = useCallback(() => setView('dashboard'), []);
-  const backFromDashboard = useCallback(() => setView('repoHome'), []);
-
-  // Open a PR in the local-first reviewer (from a dashboard row, or `stage open`).
+  // Open a PR in the local-first reviewer (from an overview row, or `stage open`).
   const openLocalReview = useCallback((pr: PrRef) => {
     setLocalReviewPr(pr);
     setView('localReview');
   }, []);
   const backFromLocalReview = useCallback(
-    () => setView(hasRepo ? 'repoHome' : 'openRepo'),
+    () => setView(hasRepo ? 'overview' : 'openRepo'),
     [hasRepo],
   );
 
@@ -156,7 +147,7 @@ export function App() {
     return (
       <OpenRepository
         onOpened={onRepoOpened}
-        onBack={hasRepo ? () => setView('repoHome') : undefined}
+        onBack={hasRepo ? () => setView('overview') : undefined}
       />
     );
   }
@@ -164,20 +155,23 @@ export function App() {
     return <LocalReview pr={localReviewPr} onBack={backFromLocalReview} />;
   }
   if (view === 'selfReview') {
-    return <SelfReview onExit={exitSelfReview} seedBaseFromDebrief={seedBase} />;
+    return (
+      <SelfReview
+        onExit={exitSelfReview}
+        onEnterStoryline={enterLocalStoryline}
+        seedBaseFromDebrief={seedBase}
+      />
+    );
   }
   if (view === 'localStoryline') {
-    return <LocalStoryline onBack={exitLocalStoryline} />;
-  }
-  if (view === 'dashboard') {
-    return <Dashboard onBack={backFromDashboard} onOpenReview={openLocalReview} />;
+    return <Storyline onBack={exitLocalStoryline} />;
   }
   return (
-    <RepoHome
-      onEnterSelfReview={startSelfReview}
-      onEnterStoryline={enterLocalStoryline}
-      onOpenDashboard={openDashboard}
+    <Overview
       onChangeRepo={changeRepo}
+      onStartSelfReview={startSelfReview}
+      onOpenStoryline={enterLocalStoryline}
+      onOpenReview={openLocalReview}
       onOpenSettings={openSettings}
     />
   );

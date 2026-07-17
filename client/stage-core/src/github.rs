@@ -116,6 +116,10 @@ pub struct GhPullRequest {
     /// `comments` array; only its length is kept (see [`count_json_array`]).
     #[serde(rename = "comments", deserialize_with = "count_json_array")]
     pub comments: u32,
+    /// ISO-8601 last-update time (`updatedAt`) — the overview row's right-edge
+    /// relative timestamp. Defaulted (empty) so an older payload still parses.
+    #[serde(default)]
+    pub updated_at: String,
 }
 
 /// Deserialize a JSON array as just its length, discarding the elements — the
@@ -466,7 +470,7 @@ impl GitHub {
     ) -> Result<Vec<GhPullRequest>, StageError> {
         // Field set drives the JSON shape of [`GhPullRequest`]; keep them in sync.
         const FIELDS: &str = "number,title,state,url,headRefName,baseRefName,\
-isDraft,additions,deletions,reviewDecision,author,comments";
+isDraft,additions,deletions,reviewDecision,author,comments,updatedAt";
         // `--limit` wants a &str; PR_LIST_LIMIT is the matching numeric guard.
         const LIMIT_ARG: &str = "200";
         let mut args: Vec<&str> = vec![
