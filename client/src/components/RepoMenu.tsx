@@ -9,7 +9,7 @@ function basename(path: string): string {
 }
 
 /**
- * The bottom-left repository picker for the Repo home. A button showing the repo
+ * The bottom-left repository picker for the Overview. A button showing the repo
  * slug/path that opens an upward popover with Change repository… / Reveal in
  * Finder / Settings…. Stage has no Stage account or session (ADR-0022 §5), so
  * there is no sign-in/out item — identity is just the local `gh` token owner,

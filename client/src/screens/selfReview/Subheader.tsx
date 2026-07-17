@@ -9,8 +9,8 @@ import { relativeTimeFromEpoch } from '../../time';
  *  - base mode:    `[base] → [branch]` two-badge layout
  *
  * Layout matches the Stage v2 "Local review" subheader, with the Summarize
- * button removed and "Open PR…" rewritten as the (stubbed) "Ready to share"
- * action — see the grill session for the full mapping.
+ * button removed and "Open PR…" rewritten as the "Ready to share" action
+ * (WS-2 #60) — it creates the draft Review and jumps into the composer.
  */
 export function Subheader({
   diff,
@@ -75,11 +75,11 @@ export function Subheader({
         type="button"
         className="btn btn-ghost"
         onClick={onExit}
-        title="Back to Home — Esc"
+        title="Back to Reviews — Esc"
         style={{ padding: '0 8px' }}
       >
         <Icon name="chevron-right" size={12} color="var(--gray-500)" />
-        <span style={{ marginLeft: 4 }}>Home</span>
+        <span style={{ marginLeft: 4 }}>Reviews</span>
       </button>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -202,7 +202,7 @@ export function Subheader({
         type="button"
         className="btn btn-primary"
         onClick={onReadyToShare}
-        title="Mark ready to share and start composing the storyline (coming soon)"
+        title="Mark ready to share and start composing the storyline"
       >
         <Icon name="gh" size={12} color="#fff" /> Ready to share
       </button>

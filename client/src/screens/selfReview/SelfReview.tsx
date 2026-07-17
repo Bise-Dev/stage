@@ -8,6 +8,8 @@ import {
   gitFetch,
   gitLocalBranches,
   repoSummary,
+  reviewDraftCreate,
+  reviewDraftGet,
   selfReviewBaseOptions,
 } from '../../tauri';
 import { DebriefRail } from './DebriefRail';
@@ -26,7 +28,7 @@ import { clearViewed, loadViewed, setViewed } from './viewedStore';
  * Reads the active repo + default branch on mount (Q11-B: not passed in;
  * truth lives on disk). Wires the diff hook, comments hook, mark-viewed
  * store, and the Subheader / FileList / DiffPane layout. ESC exits to
- * the Repo home.
+ * the Overview.
  */
 const LAYOUT_KEY = 'selfReview:viewLayout';
 const BASE_KEY_PREFIX = 'selfReview:base:';
@@ -37,8 +39,15 @@ function loadLayout(): ViewLayout {
 
 export function SelfReview({
   onExit,
+  onEnterStoryline,
   seedBaseFromDebrief = false,
-}: { onExit: () => void; seedBaseFromDebrief?: boolean }) {
+}: {
+  onExit: () => void;
+  /** Enter the storyline composer after "Ready to share" creates the draft
+   *  (or when one already exists for this branch). */
+  onEnterStoryline: () => void;
+  seedBaseFromDebrief?: boolean;
+}) {
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
   // The base ref the `base`-scope diff compares against. Defaults to the
@@ -320,13 +329,28 @@ export function SelfReview({
     }
   }, [diff, notes]);
 
-  const onReadyToShare = useCallback(() => {
-    // Stubbed in-Self-Review entry to the Ready-to-share gesture. The real
-    // Ready-to-share + Storyline composer (ADR-0022 §3) now lives in the
-    // Storyline screen, reachable from the Repo home; wiring a direct jump from
-    // here is a follow-up.
-    console.info('self_review_ready_to_share_stub', diff?.currentBranch ?? null);
-  }, [diff]);
+  // "Ready to share" (WS-2 #60): the explicit transition out of private
+  // iteration. A branch with an existing draft jumps straight into the
+  // composer; otherwise the modal collects the Review title + base first.
+  const [readyToShareOpen, setReadyToShareOpen] = useState(false);
+  const [readyToShareError, setReadyToShareError] = useState<string | null>(null);
+  const onReadyToShare = useCallback(async () => {
+    try {
+      const existing = await reviewDraftGet();
+      if (existing) {
+        onEnterStoryline();
+        return;
+      }
+    } catch (e) {
+      // Fail loud, in the screen's error slot — don't open a modal that would
+      // fail again on create.
+      console.warn('self_review_draft_probe_failed', e);
+      setReadyToShareError(String(e));
+      return;
+    }
+    setReadyToShareError(null);
+    setReadyToShareOpen(true);
+  }, [onEnterStoryline]);
 
   return (
     <div className="stage">
@@ -355,6 +379,7 @@ export function SelfReview({
         {bootstrapError && <div style={errorBanner}>{bootstrapError}</div>}
         {error && <div style={errorBanner}>{error}</div>}
         {debriefError && <div style={errorBanner}>{debriefError}</div>}
+        {readyToShareError && <div style={errorBanner}>{readyToShareError}</div>}
 
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           <FileList
@@ -489,6 +514,168 @@ export function SelfReview({
               onClose={() => setRailOpen(false)}
             />
           )}
+        </div>
+      </div>
+      {readyToShareOpen && (
+        <ReadyToShareModal
+          branch={diff?.currentBranch ?? ''}
+          initialBase={baseRef ?? baseOptions?.recommended ?? 'origin/main'}
+          baseChoices={[
+            ...new Set(
+              [baseOptions?.recommended, baseOptions?.remoteDefault, baseRef ?? undefined].filter(
+                (b): b is string => Boolean(b),
+              ),
+            ),
+          ]}
+          onClose={() => setReadyToShareOpen(false)}
+          onCreated={onEnterStoryline}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The "Ready to share" gesture (WS-2 #60): name the Review (WS-3 #61), pick
+ * its base, and create the per-machine draft for the current branch — then
+ * drop straight into the storyline composer. Local-only: nothing reaches
+ * GitHub until Publish.
+ */
+function ReadyToShareModal({
+  branch,
+  initialBase,
+  baseChoices,
+  onClose,
+  onCreated,
+}: {
+  branch: string;
+  initialBase: string;
+  baseChoices: string[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [title, setTitle] = useState('');
+  const [base, setBase] = useState(initialBase);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await reviewDraftCreate(title.trim() || branch, base.trim() || 'main');
+      onClose();
+      onCreated();
+    } catch (e) {
+      // Fail loud (CLAUDE.md): surface the engine's message verbatim in the
+      // modal; never close on a swallowed error.
+      console.warn('review_draft_create_failed', e);
+      setError(String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: overlay modal, role="dialog" matches the app's existing modal pattern rather than a native <dialog>.
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Ready to share"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.28)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 50,
+      }}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        style={{
+          width: 420,
+          background: '#fff',
+          borderRadius: 'var(--r-lg)',
+          boxShadow: 'var(--sh-pop)',
+          padding: 18,
+        }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--gray-900)', marginBottom: 6 }}>
+          Ready to share
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--gray-600)', marginBottom: 14, lineHeight: 1.5 }}>
+          Start a storyline for <span className="mono">{branch}</span>. This stays local — nothing
+          is pushed to GitHub until you publish.
+        </div>
+
+        <label
+          htmlFor="rts-title"
+          style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--gray-600)' }}
+        >
+          Title (optional)
+        </label>
+        <input
+          id="rts-title"
+          className="input"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder={branch || 'Review title'}
+          style={{ display: 'block', width: '100%', margin: '4px 0 12px' }}
+        />
+
+        <label
+          htmlFor="rts-base"
+          style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--gray-600)' }}
+        >
+          Base branch
+        </label>
+        <input
+          id="rts-base"
+          list="rts-base-choices"
+          className="input mono"
+          value={base}
+          onChange={(e) => setBase(e.target.value)}
+          style={{ display: 'block', width: '100%', margin: '4px 0 14px' }}
+        />
+        <datalist id="rts-base-choices">
+          {baseChoices.map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
+
+        {error && (
+          <div
+            style={{
+              fontSize: 11.5,
+              color: 'var(--red-d)',
+              background: 'rgba(255,59,48,0.08)',
+              border: '1px solid rgba(255,59,48,0.20)',
+              borderRadius: 'var(--r-sm)',
+              padding: '6px 10px',
+              marginBottom: 8,
+            }}
+          >
+            Couldn't create the review: {error}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button type="button" className="btn" onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={submit}
+            disabled={submitting || base.trim().length === 0}
+            style={{ opacity: submitting ? 0.6 : 1 }}
+          >
+            {submitting ? 'Starting…' : 'Start storyline'}
+          </button>
         </div>
       </div>
     </div>

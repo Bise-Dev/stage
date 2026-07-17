@@ -311,36 +311,42 @@ pub fn git_diff_files(
     git::diff_files(&path, &base_ref, &head_ref)
 }
 
-/// The local-first per-repo dashboard (DB-1..5 #84–88, ADR-0022 §6/§7): the
-/// local-store draft scan merged with a `gh` PR search, every row's state derived
-/// in Rust (TS only renders). The local-first replacement for `repo_overview` —
-/// the repo + identity come from the active repo and the user's own `gh`, so
-/// there are no owner/repo args. `include_archived` flips the DB-5 view filter.
-/// Async (ADR-0023): the blocking `gh` PR search + `git`/store reads run in
-/// `spawn_blocking`, off the UI thread, so the window stays responsive while the
-/// webview shows its spinner.
+/// The unified per-repo overview (DB-1..5 #84–88 + the local branch list,
+/// ADR-0022 §6/§7): local branches with worktree annotations, per-machine
+/// drafts, published Reviews, and my GitHub PRs — one row list, every row's
+/// state derived in Rust (TS only buckets and renders).
+///
+/// `include_github: false` returns the purely-local view — the screen uses it
+/// after a loud `gh` failure so local work never needs auth (ID-3 #56), and the
+/// view says GitHub wasn't consulted rather than implying it was empty.
+/// `include_archived` flips the DB-5 view filter. Async (ADR-0023): the
+/// blocking `gh` PR search + `git`/store reads run in `spawn_blocking`, off
+/// the UI thread, so the window stays responsive while the webview shows its
+/// spinner.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn dashboard_overview(
+pub async fn overview(
     state: State<'_, AppState>,
     include_archived: bool,
-) -> Result<stage_core::DashboardView, AppError> {
+    include_github: bool,
+) -> Result<stage_core::OverviewView, AppError> {
     let path = active_repo_path(&state)?;
     let github = Arc::clone(&state.github);
-    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::DashboardView, AppError> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::OverviewView, AppError> {
         let key = repo_key_from_cwd(&path)?;
         let repo_root = stage_core::repo_root_from_cwd(&path)?;
         let store = Store::open_default()?;
-        Ok(stage_core::assemble_dashboard(
+        let gh = include_github.then_some(github.as_ref());
+        Ok(stage_core::assemble_overview(
             &store,
-            &github,
+            gh,
             &repo_root,
             &key,
             include_archived,
         )?)
     })
     .await
-    .map_err(|e| AppError::Backend(format!("dashboard_overview_join_error: {e}")))?
+    .map_err(|e| AppError::Backend(format!("overview_join_error: {e}")))?
 }
 
 /// The unified storyline-staleness check (ST-1 #89) for the active repo+branch:
@@ -658,13 +664,39 @@ pub fn review_draft_set_title(
 /// Discard the draft Review (GAP-1 #91): pre-publish only — deletes the draft row
 /// and its storyline steps cascade out of view. Idempotent (returns whether a row
 /// was removed). An *open PR* is closed/merged on GitHub, never "discarded".
+///
+/// `branch: None` targets the focused worktree's branch; `Some` overrides it so
+/// the overview can discard a draft for a branch that isn't checked out here
+/// (e.g. its worktree was removed) — otherwise abandoned prep would linger with
+/// no way to clear it (#91's whole point).
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn review_draft_discard(state: State<'_, AppState>) -> Result<bool, AppError> {
+pub fn review_draft_discard(
+    state: State<'_, AppState>,
+    branch: Option<String>,
+) -> Result<bool, AppError> {
+    let path = active_repo_path(&state)?;
+    let mut key = repo_key_from_cwd(&path)?;
+    if let Some(branch) = branch {
+        key.branch = branch;
+    }
+    let store = Store::open_default()?;
+    Ok(store.discard_review_draft(&key)?)
+}
+
+/// Change the draft Review's base (target) branch pre-publish (GAP-2 #92). The
+/// composer's base picker calls this; once published the base is the PR's merge
+/// target and is changed on GitHub, not here. Fails loud if no draft exists.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn review_draft_set_base(
+    state: State<'_, AppState>,
+    base_ref: String,
+) -> Result<Review, AppError> {
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
-    Ok(store.discard_review_draft(&key)?)
+    Ok(store.set_review_base_ref(&key, &base_ref)?)
 }
 
 /// The draft storyline steps for the active repo + branch, in author order

@@ -14,6 +14,7 @@ import type { ActivityLogLevel } from './generated/ActivityLogLevel';
 import type { ActivityLogPill } from './generated/ActivityLogPill';
 import type { BaseOptions } from './generated/BaseOptions';
 import type { BranchInfo } from './generated/BranchInfo';
+import type { BranchMeta } from './generated/BranchMeta';
 import type { ChangedFile } from './generated/ChangedFile';
 // New-engine DTOs (ADR-0022): identity (C), publish (D), verdict/review (E-RW),
 // discussion (E-IC). All generated from the Rust structs; the screens import them
@@ -21,8 +22,6 @@ import type { ChangedFile } from './generated/ChangedFile';
 import type { CheckResult } from './generated/CheckResult';
 import type { CheckStatus } from './generated/CheckStatus';
 import type { CommittedDiff } from './generated/CommittedDiff';
-import type { DashboardRow } from './generated/DashboardRow';
-import type { DashboardView } from './generated/DashboardView';
 import type { Debrief } from './generated/Debrief';
 import type { DebriefStep } from './generated/DebriefStep';
 import type { DiffStats } from './generated/DiffStats';
@@ -39,6 +38,9 @@ import type { NoteReply } from './generated/NoteReply';
 import type { NoteStatus } from './generated/NoteStatus';
 import type { OpenIntent } from './generated/OpenIntent';
 import type { OpenMode } from './generated/OpenMode';
+import type { OverviewKind } from './generated/OverviewKind';
+import type { OverviewRow } from './generated/OverviewRow';
+import type { OverviewView } from './generated/OverviewView';
 import type { PrActivity } from './generated/PrActivity';
 import type { PrDiscussion } from './generated/PrDiscussion';
 import type { PrRef } from './generated/PrRef';
@@ -77,6 +79,7 @@ import type { SubmittedVerdict } from './generated/SubmittedVerdict';
 import type { ThreadComment } from './generated/ThreadComment';
 import type { Verdict } from './generated/Verdict';
 import type { WorktreeInfo } from './generated/WorktreeInfo';
+import type { WorktreeMeta } from './generated/WorktreeMeta';
 
 export type {
   ActivityLogEntry,
@@ -84,10 +87,9 @@ export type {
   ActivityLogPill,
   BaseOptions,
   BranchInfo,
+  BranchMeta,
   ChangedFile,
   CommittedDiff,
-  DashboardRow,
-  DashboardView,
   Debrief,
   DebriefStep,
   DiffStats,
@@ -99,6 +101,9 @@ export type {
   NoteStatus,
   OpenIntent,
   OpenMode,
+  OverviewKind,
+  OverviewRow,
+  OverviewView,
   PrRef,
   PushOutcome,
   RecentRepo,
@@ -125,6 +130,7 @@ export type {
   StorylineStep,
   StorylineStepView,
   WorktreeInfo,
+  WorktreeMeta,
   CheckResult,
   CheckStatus,
   DraftLineComment,
@@ -238,16 +244,17 @@ export const gitPush = (branch: string) => invoke<PushOutcome>('git_push', { bra
 export const selfReviewBaseOptions = () => invoke<BaseOptions>('self_review_base_options');
 
 /**
- * The local-first per-repo dashboard (DB-1..5, ADR-0022 §6/§7): the local-store
- * draft scan merged with a `gh` PR search, every row's state already derived in
- * Rust (this is the pure-render boundary — the screen only displays it). Repo +
- * identity come from the active repo + the user's own `gh`, so there are no
- * owner/repo args.
+ * The unified per-repo overview (DB-1..5 + the local branch list, ADR-0022
+ * §6/§7): local branches with worktree annotations, per-machine drafts,
+ * published Reviews, and my GitHub PRs — one row list, every row's state
+ * derived in Rust (this is the pure-render boundary; the screen only buckets
+ * by `kind` and displays).
  * `includeArchived` flips the DB-5 view filter (closed/merged PRs hidden by
- * default).
+ * default). `includeGithub: false` asks for the purely-local view — used after
+ * a loud `gh` failure so local rows still render next to the error (ID-3 #56).
  */
-export const dashboardOverview = (includeArchived: boolean) =>
-  invoke<DashboardView>('dashboard_overview', { includeArchived });
+export const overview = (includeArchived: boolean, includeGithub: boolean) =>
+  invoke<OverviewView>('overview', { includeArchived, includeGithub });
 
 /**
  * The unified storyline-staleness check (ST-1, ADR-0022 §7) for the active
@@ -280,8 +287,16 @@ export const reviewDraftCreate = (title: string, baseRef: string) =>
 export const reviewDraftSetTitle = (title: string) =>
   invoke<Review>('review_draft_set_title', { title });
 
-/** Discard the draft Review and its storyline steps (GAP-1 #91). Idempotent. */
-export const reviewDraftDiscard = () => invoke<boolean>('review_draft_discard');
+/** Discard the draft Review and its storyline steps (GAP-1 #91). Idempotent.
+ *  `branch` targets a draft other than the focused worktree's (the overview's
+ *  discard action); omitted, the focused branch's draft is discarded. */
+export const reviewDraftDiscard = (branch?: string) =>
+  invoke<boolean>('review_draft_discard', { branch: branch ?? null });
+
+/** Change the draft's base (target) branch pre-publish (GAP-2 #92). Once
+ *  published the base is the PR's merge target — changed on GitHub, not here. */
+export const reviewDraftSetBase = (baseRef: string) =>
+  invoke<Review>('review_draft_set_base', { baseRef });
 
 /** The draft storyline steps for the active repo + branch, in author order. */
 export const storylineSteps = () => invoke<StorylineStep[]>('storyline_steps');

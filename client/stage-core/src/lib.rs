@@ -8,26 +8,24 @@
 //! `gh`/`git` (ADR-0022 §5); Stage itself holds **no stored credential**.
 
 pub mod base;
-pub mod dashboard;
 pub mod diff;
 pub mod discussion;
 pub mod domain;
 pub mod error;
 pub mod github;
+pub mod overview;
 pub mod pr;
 pub mod publish;
 pub mod repo_key;
 pub mod review_folder;
 pub mod reviewer;
 pub mod staleness;
+pub mod status;
 pub mod store;
 pub mod storyline;
 pub mod worktree;
 
 pub use base::{base_options, BaseOptions, LocalDefault};
-pub use dashboard::{
-    assemble_dashboard, DashboardRow, DashboardView, ReviewRole, ReviewSignal, ReviewStatus,
-};
 pub use diff::DiffLineIndex;
 pub use discussion::{
     group_threads_by_step, PrDiscussion, ReviewThread, StepThreads, ThreadComment,
@@ -38,6 +36,9 @@ pub use domain::{
 };
 pub use error::StageError;
 pub use github::{GhAuthor, GhPullRequest, GitHub, GitHubUser, PrFilter};
+pub use overview::{
+    assemble_overview, BranchMeta, OverviewKind, OverviewRow, OverviewView, WorktreeMeta,
+};
 pub use pr::{
     CheckResult, CheckStatus, DraftLineComment, IssueComment, LineComment, MergeMethod, PrActivity,
     ReviewSummary, SubmittedVerdict, Verdict,
@@ -57,6 +58,7 @@ pub use reviewer::{
     ReviewerStep,
 };
 pub use staleness::{assess_step_staleness, StaleReason, StepStaleness};
+pub use status::{ReviewRole, ReviewSignal, ReviewStatus};
 pub use store::{default_store_path, Store, STORE_PATH_ENV};
 pub use storyline::{
     add_step, assemble_preview, committed_diff_file_set, preview, StorylinePreview, StorylineStep,
