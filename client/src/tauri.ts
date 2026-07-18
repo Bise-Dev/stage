@@ -77,6 +77,8 @@ import type { StorylineStep } from './generated/StorylineStep';
 import type { StorylineStepView } from './generated/StorylineStepView';
 import type { SubmittedVerdict } from './generated/SubmittedVerdict';
 import type { ThreadComment } from './generated/ThreadComment';
+import type { UncommittedDisposition } from './generated/UncommittedDisposition';
+import type { UncommittedFile } from './generated/UncommittedFile';
 import type { Verdict } from './generated/Verdict';
 import type { WorktreeInfo } from './generated/WorktreeInfo';
 import type { WorktreeMeta } from './generated/WorktreeMeta';
@@ -129,6 +131,8 @@ export type {
   StorylinePreview,
   StorylineStep,
   StorylineStepView,
+  UncommittedDisposition,
+  UncommittedFile,
   WorktreeInfo,
   WorktreeMeta,
   CheckResult,
@@ -359,6 +363,11 @@ export const ghIdentity = () => invoke<GitHubUser>('gh_identity');
 /** Whether the active repo+branch draft is ready to publish (≥1 step, every step
  *  has a non-empty intro). Render `ready` plus `stepsMissingIntro` as the gaps. */
 export const publishReadiness = () => invoke<PublishReadiness>('publish_readiness');
+
+/** The uncommitted working-tree changes Publish would leave out of the PR
+ *  (ADR-0024): staged, unstaged, and untracked paths, `.stage/` excluded. The
+ *  publish modal lists these so the author picks an explicit disposition. */
+export const publishUncommitted = () => invoke<UncommittedFile[]>('publish_uncommitted');
 
 /** Publish/re-publish the draft Review to GitHub: write `.stage/<branch>/`, scoped
  *  commit, push (user's own git creds), and create/update/reopen the PR via `gh`

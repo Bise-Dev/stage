@@ -575,6 +575,26 @@ pub fn scoped_commit(repo_root: &Path, branch: &str, message: &str) -> Result<St
     Ok(head.trim().to_string())
 }
 
+/// Commit **everything but `.stage/`** — the ADR-0024 "commit everything"
+/// disposition an author can choose when Publish finds uncommitted work.
+/// Stages every change (tracked + untracked) outside `.stage/` on top of
+/// whatever was already staged, then makes a partial commit of exactly that
+/// pathspec with the author's `message`. `.stage/` is excluded because it is
+/// Stage's own domain — written during publish and committed by
+/// [`scoped_commit`], it must never ride the author's code commit. Returns the
+/// new commit's full SHA; any git failure (hooks, missing identity, nothing to
+/// commit) surfaces loud with git's own stderr.
+pub fn commit_all_except_stage(repo_root: &Path, message: &str) -> Result<String, StageError> {
+    let exclude = format!(":(exclude){STAGE_DIR}");
+    run_git(repo_root, &["add", "-A", "--", ".", &exclude])?;
+    // A pathspec on `git commit` implies `--only`: previously-staged `.stage`
+    // paths (if any) are excluded from this commit and left staged for the
+    // scoped commit to own.
+    run_git(repo_root, &["commit", "-m", message, "--", ".", &exclude])?;
+    let head = run_git(repo_root, &["rev-parse", "HEAD"])?;
+    Ok(head.trim().to_string())
+}
+
 /// Whether `.stage/<branch>/…` has uncommitted changes (new, modified, or
 /// deleted files) relative to `HEAD`. Drives Publish's idempotency (milestone D):
 /// the scoped commit is skipped when the folder is already committed, so a
