@@ -1,4 +1,0 @@
-title = "feat/unified-overview-parity"
-base_ref = "origin/main_refactor_local"
-head_ref = "feat/unified-overview-parity"
-pr_number = 124

@@ -1,4 +1,0 @@
-+++
-anchor = ".worktreeinclude"
-+++
-2
