@@ -2,53 +2,44 @@
 
 Forward-looking goals that we are deliberately *not* building yet, but are aiming for. Keep this list short — only items that change how we'd design today's code if we forgot about them.
 
-## Stage Backend (POC implemented; hardening to follow)
+## The near-term direction: v6 "Unified branch → review"
 
-**Today (POC):** The Stage Backend is a Django 5.2 + DRF service (see `docs/ARCHITECTURE.md`). It brokers GitHub API calls and persists Workspace + Storyline + IntroComment state in Postgres. Auth is **per-user GitHub App user-to-server tokens** — each action is attributed to the signed-in user, not a shared bot (ADR-0007 + ADR-0008 superseded the earlier device-flow + single-`GITHUB_ADMIN_PAT` design). The contract is the backend code itself (`apps/*/apis.py` + serializers); `just generate-schema` emits an OpenAPI dump.
+The decided next milestone (2026-07-26 session; durable parts in ADR-0025/0026/0027 + CONTEXT.md): a branch-table home replacing the Overview, one shared review shell with three modes (Debrief · Self-review · Review), a chapter-based create-review wizard, and confirmed git actions. This is active work, not a deferred goal — it's listed here only so the deferred items below read in context.
 
-**Next hardening goals (phase 2):**
-- **Bot / machine attribution (optional, not yet built).** Per-user user-to-server tokens already give correct attribution for user-initiated actions. *If* we later want certain backend actions to appear as a `stage-bot[bot]` machine identity (e.g. background reconciliation), that needs a GitHub App **installation token** minted from the app's private key (JWT-mint + installation-token-exchange + pre-expiry refresh cache). `GithubGateway` already takes a `token_getter`, so this slots in without touching call sites. ADR-required when undertaken. (`mint_installation_token` is currently `NotImplementedError` — see ADR-0017.)
-- **Broader per-user scopes (not yet built).** Today's scopes cover the implemented flows; widening them (e.g. for new write surfaces) means a scope upgrade + re-consent. ADR-required when undertaken.
-- Realtime push (SSE per workspace) to surface storyline edits / new IntroComments / github changes without client polling.
-- GitHub webhook ingress (smee.io for dev; public URL for prod) so PR-side state changes propagate without a client refresh.
-- Per-route conditional ETag cache on github read endpoints to reduce rate-limit pressure.
+## MCP as an agent interface
 
-## Workspaces-overview aggregation: GraphQL batch fan-out
+**Today:** the coding agent drives Stage through `stage-cli` against the shared local store (ADR-0011) — no server, no auth.
 
-**Today (POC):** The repo-scoped overview endpoint (see `docs/adr/0009-workspaces-overview-aggregation-endpoint.md`) enriches each PR-backed row by fanning out **parallel REST calls** through `GithubGateway` (review decision, additions/deletions, review-comment count), behind a short-TTL `(user, repo)` cache. This is N+1 GitHub calls per load — fine for POC-sized PR counts.
+**Goal:** optionally expose the same operations as an MCP server so MCP clients get typed tools + discoverability without shelling out.
 
-**Goal:** Replace the per-PR REST fan-out with a **single GitHub GraphQL query** that fetches `reviewDecision`, `additions`, `deletions`, and `comments.totalCount` for all the repo's relevant PRs at once. Cuts a screen load from N round-trips to one.
+**Why not now:** the CLI covers the loop end-to-end and adding a second protocol surface before the v6 domain model settles would freeze the wrong API. **Implication:** keep every agent-facing operation a thin wrapper over one stage-core function, so a future MCP server is a second frontend, not a second implementation.
 
-**Why we're not doing it now:** GraphQL is a new gateway capability (query + auth + response mapping + tests) and the REST fan-out is adequate at POC scale. Revisit when a repo's open-PR/workspace count makes the N+1 latency or rate-limit pressure bite.
+## Attachments in PR descriptions
 
-**Implication for today's design:** Keep the per-PR enrichment behind a single function in the aggregator selector so the REST fan-out can be swapped for one GraphQL call without touching the endpoint's response shape.
+**Today:** the create-review wizard's PR-description step is text-only.
 
-## Transactional outbox for github-coupled writes
+**Goal:** attach images/logs the way github.com's editor does.
 
-**Today (POC):** `pull_request_open` will land an **idempotent open** patch (look up by `head_ref` before creating, adopt an existing PR if found) — this closes the only currently-known stuck-state where a github write succeeds but the DB write fails afterward. See ADR-0019 (publish) and the Transactional-outbox entry below.
+**Why not now:** GitHub has **no public API for user-image uploads**; the only workaround is committing assets into the repo, which pollutes history. Revisit if GitHub ships an upload API. **Implication:** the PR body is plain markdown in `.stage/<branch>/pr.md` — nothing assumes attachment URLs.
 
-**Goal:** Move to a proper **two-phase / outbox** pattern for any operation that combines a github side-effect with Stage DB state. Pattern: write the *intent* to a Stage-owned outbox row inside the DB transaction, then attempt the github call from a worker; on success mark the outbox row done and apply downstream state; on failure retry with backoff. This eliminates the "github committed, DB rolled back" hazard for every coupled write, not just `open_pr`.
+## Debrief history
 
-**Why we're not doing it now:** The idempotent-open patch covers the only real stuck-state today. Other write-through paths (intro comments, reviews, PR actions) are caller-retry-safe because github itself is the source of truth for those — a failed write just means the user retries the action. Building an outbox + worker is a multi-week effort that earns its keep only once we have more coupled writes or move to local-first review actions (see below).
+**Today:** one Debrief per branch, overwritten on every agent pass, with the head SHA + timestamp of the pass recorded (CONTEXT.md → *Debrief*).
 
-**Implication for today's design:** Keep `pull_request_open` the only place doing multi-step github + DB orchestration. New features that combine a github write with a Stage DB mutation should be flagged in design review as "this needs the outbox before it ships."
+**Goal:** optionally retain prior debriefs so an author can see how the agent's account evolved across passes.
 
-## Local-first review actions with eventual sync to GitHub
+**Why not now:** no UI exists or is designed for history; the seen/outdated chips only need the latest. **Implication:** the store keys debriefs by branch — adding a version dimension later is a migration, not a redesign, and nothing should assume "exactly one debrief row per branch" outside the store layer.
 
-**Today (POC):** Review actions (per-line comments, threaded replies, approve / request changes / comment) are **write-through** — the client sends them to the Stage backend, which immediately writes them as native GitHub review activity. GitHub is the source of truth for review state. If GitHub is unreachable, Stage cannot accept review actions.
+## Decisions document
 
-**Goal:** Move to a **local-first** model where review actions are first-class Stage entities. Authoring is instant and offline-capable; the backend reconciles state with GitHub in the background and resolves conflicts (e.g. a reply made directly on github.com while the reviewer was offline). The user experience target is Linear-grade snappiness.
+**Today:** an archived Review (PR merged/closed) keeps its committed `.stage` storyline.
 
-**Why we're not doing it now:** Building a real sync engine (queues, conflict resolution, retry semantics, idempotency keys for GitHub writes) is a multi-week effort that does not earn its keep at POC stage. Write-through gets the storyline experience in front of users with a fraction of the code.
+**Goal:** export an archived Review — chapters, intros, resolved discussion — as a durable "why this change looks the way it does" document.
 
-**Implication for today's design:** Keep the client's review-action code path behind a thin interface in the backend client so that today's "POST and wait" can later be swapped for "enqueue, optimistically render, reconcile" without touching the UI.
+**Why not now:** the archive read-path barely exists; exporting before people archive reviews is speculative. **Implication:** never garbage-collect `.stage` folders of closed PRs.
 
-## Unify Debrief and Storyline terminology
+## Background sync
 
-**Today (POC):** Cycle-1 introduced the **Debrief** (agent → author, local, regenerated each pass; lives in `stage-core`) alongside the existing **Storyline** (author → reviewers, backend, hand-curated). They share the same shape — an ordered sequence of steps, each pointing at part of the diff and carrying an intro — but are separate types, stores, and glossary entries (see `CONTEXT.md`). Promotion (Debrief → Storyline) is deferred (ADR-0011).
+**Today:** landing separately (snapshot-serving overview + adaptive `gh` polling; see `docs/plans/background-sync-research.md`): the branch table renders from a snapshot and refreshes without user-initiated fetches.
 
-**Goal:** Once promotion exists, reconcile the two onto **shared terminology** (and likely a shared "ordered steps + intros over a diff" core type) so a Debrief can become a Storyline without a lossy translation, and the glossary stops carrying two near-parallel definitions.
-
-**Why we're not doing it now:** Producer, audience, storage, and lifecycle differ enough that forcing a shared abstraction before the promotion bridge exists would be premature — the overlap isn't concrete yet.
-
-**Implication for today's design:** Keep the Debrief step shape (`file` + `intro` + `order`) aligned with the Storyline step shape, so a future merge is a rename rather than a reshape.
+**Goal (beyond it):** push-style freshness (webhooks or notifications API) so remote review activity appears without polling pressure. **Implication:** UI reads snapshots; nothing in the webview assumes it triggered the fetch that produced the data it renders.
