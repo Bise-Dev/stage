@@ -47,6 +47,9 @@ pub use publish::{
     assess_publish_readiness, publish_review, PublishAction, PublishOutcome, PublishReadiness,
     PublishRequest,
 };
+pub use publish::{
+    assess_uncommitted_work, UncommittedDisposition, UncommittedFile, UncommittedState,
+};
 pub use repo_key::{origin_slug, repo_key_from_cwd, repo_root_from_cwd, slug_from_remote, RepoKey};
 pub use review_folder::{
     find_review, read_review_at, read_review_from_tree, resync_folder, review_committed_for_branch,

@@ -227,6 +227,7 @@ pub fn run() {
             commands::review_checkout_branch,
             commands::gh_identity,
             commands::publish_readiness,
+            commands::publish_uncommitted,
             commands::review_publish,
             commands::pr_activity,
             commands::pr_submit_verdict,

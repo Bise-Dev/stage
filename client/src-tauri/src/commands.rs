@@ -881,6 +881,20 @@ pub fn publish_readiness(
     Ok(stage_core::assess_publish_readiness(&steps))
 }
 
+/// The uncommitted working-tree changes Publish would leave out of the PR
+/// (ADR-0024): staged, unstaged-tracked, and untracked (non-ignored) paths,
+/// `.stage/` excluded. The publish modal lists these so the author picks an
+/// explicit disposition; `review_publish` enforces the same rule in the engine.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn publish_uncommitted(
+    state: State<'_, AppState>,
+) -> Result<Vec<stage_core::UncommittedFile>, AppError> {
+    let path = active_repo_path(&state)?;
+    let repo_root = stage_core::repo_root_from_cwd(&path)?;
+    Ok(stage_core::assess_uncommitted_work(&repo_root)?)
+}
+
 /// Publish (or re-publish) the active repo+branch's draft Review to GitHub
 /// (PUB-1 #72): write the storyline into `.stage/<branch>/`, scoped-commit, push,
 /// and create/update/reopen the PR via `gh`. The PR title/body/base come from

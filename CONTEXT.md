@@ -58,7 +58,7 @@ The author's explicit "I'm done iterating, now prepare what reviewers will see" 
 _Avoid_: "share" (overloaded), "publish" (the next step).
 
 **Ready to publish** (state, computed):
-The condition that gates Publish: the Storyline has ≥1 step and every step has a non-empty intro. **Computed in Rust, never stored** — the moment the last intro is written, the Review is ready to publish.
+The condition that gates Publish: the Storyline has ≥1 step, every step has a non-empty intro, and **no step is stale** against the current committed diff (a stale step narrates code the PR wouldn't contain, so it is never publishable — the author removes or re-anchors it, per *Stale step*). **Computed in Rust, never stored** — the moment the last gap is fixed, the Review is ready to publish.
 _Avoid_: "complete", "done".
 
 **Verdict** (the review decision, ADR-0022 §8):
@@ -73,6 +73,10 @@ _Avoid_: storing it; using "Ready to share" as a status (that's the creation ges
 The action that gets a Review's branch + PR onto GitHub. **There is no GitHub precondition before this** — the author works fully locally (Self-Review → Ready-to-share → storyline composition) without pushing. Publish serializes the draft storyline into `.stage/<branch>/`, makes a scoped commit, `git push`es the branch with the user's own credentials, and runs `gh pr create` (or edit/reopen) — auto-posting exactly one "Open in Stage" PR comment on first create. A branch that can't be pushed/opened surfaces `gh`/`git`'s error here, fail-loud. Re-publishing (push an update against the same PR) is the normal lifecycle.
 _Avoid_: "submit" (that's the verdict), "send".
 
+**Uncommitted work at Publish**:
+Publish refuses to run silently over a dirty working tree — *uncommitted work* is any staged, unstaged-tracked, or untracked (non-ignored) change, excluding Stage's own `.stage/<branch>/` writes. The author sees the affected paths and chooses a **disposition**: **commit everything** into the branch first (the one place Stage authors a commit of the author's code, with an author-editable message), **publish without it** (the committed branch is the whole change; the listed paths stay local), or cancel. The choice is per-publish, never remembered; the gate is enforced in Rust, so no entry path (app or CLI) can publish a dirty tree without an explicit disposition. Guards the failure where the change exists only in the working tree and Publish would ship a storyline with none of the code.
+_Avoid_: "dirty tree" in user-facing copy (say "uncommitted work"); treating Stage's scoped `.stage` commit as uncommitted work.
+
 **Review lifetime**:
 A Review outlives the GitHub PR it points to. PR close/merge does not delete it — the committed `.stage` stays on the branch, and the author can resume Self-Review, edit the Storyline, and re-publish (reopening a PR if needed). Archiving is **not** a manual action and is **never stored**: it follows the PR's GitHub state (closed/merged → archived; reopened → restored). See ADR-0002.
 
@@ -83,7 +87,7 @@ Native GitHub review activity (a PR-level issue comment, or an inline line comme
 Discussion on a storyline step is a **GitHub PR review thread**, code-anchored to the step's diff location (never to the intro paragraph). Resolve / reopen / edit / delete map to GitHub natives, gated per-comment by GitHub-computed viewer capabilities. **IntroComment is removed** (ADR-0022 §8) — there is no Stage-native intro-discussion entity. Pre-publish, the author's private annotations are **Self-Review notes**.
 
 **Stale step**:
-A Storyline step whose anchor is no longer part of the change set it composes against (file removed, renamed, or never present). **Computed in Rust** (never stored), two detection sites by phase: **pre-publish** against the local draft's committed diff; **post-publish** against the committed `.stage` storyline vs the current PR head. Surfaced as a per-step flag; nothing auto-fixes — the author edits the storyline. The two detectors can disagree (the local diff and the eventual PR diff need not match — see *Publish*), which is expected.
+A Storyline step whose anchor is no longer part of the change set it composes against (file removed, renamed, or never present). **Computed in Rust** (never stored), two detection sites by phase: **pre-publish** against the local draft's committed diff; **post-publish** against the committed `.stage` storyline vs the current PR head. Surfaced as a per-step flag; nothing auto-fixes — the author edits the storyline. Pre-publish, a stale step **blocks Publish** (see *Ready to publish*). The two detectors can disagree (the local diff and the eventual PR diff need not match — see *Publish*), which is expected.
 _Avoid_: "broken step", "outdated step", "orphaned step" (we say "stale" consistently).
 
 **Archived Review**:

@@ -22,6 +22,17 @@
 //! **Gated on a review-ready storyline (PUB-2):** ≥1 step and every step has an
 //! intro — computed here ([`assess_publish_readiness`]) so the webview can show
 //! the author what's missing *before* they publish (Rust computes, TS renders).
+//! Two further gates guard the dogfooding failures behind PR #124:
+//!
+//! - **stale steps block** (ST-1 joins Ready to publish, CONTEXT.md): every step
+//!   anchor is checked against the current committed diff; any stale step fails
+//!   the publish with no override — a stale step narrates code the PR wouldn't
+//!   contain.
+//! - **uncommitted work needs an explicit disposition** (ADR-0024): a dirty
+//!   working tree (staged / unstaged / untracked, `.stage/` excluded) fails loud
+//!   unless the request carries the author's per-publish
+//!   [`UncommittedDisposition`] — commit everything (Stage's one code commit,
+//!   author-editable message) or publish without it.
 //!
 //! **Fail loud, no half-updated state (PUB-4, CLAUDE.md):** a failed push or PR
 //! creation surfaces GitHub's own message verbatim (via [`crate::github`]'s
@@ -40,8 +51,10 @@ use crate::error::StageError;
 use crate::github::GitHub;
 use crate::repo_key::RepoKey;
 use crate::review_folder::{
-    scoped_commit, stage_folder_has_changes, write_review, ReviewMeta, ReviewStep, StageReview,
+    commit_all_except_stage, scoped_commit, stage_folder_has_changes, write_review, ReviewMeta,
+    ReviewStep, StageReview,
 };
+use crate::staleness::{assess_step_staleness, StaleReason, StepStaleness};
 use crate::store::Store;
 use crate::storyline::StorylineStep;
 
@@ -65,6 +78,44 @@ pub struct PublishReadiness {
     /// Ids of steps whose intro is empty/whitespace — the gaps to fill in. Empty
     /// when every step has an intro (or when there are no steps at all).
     pub steps_missing_intro: Vec<String>,
+}
+
+/// Coarse display state of one uncommitted path (ADR-0024), derived from git
+/// status bits. `New` covers untracked files and index-added files alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum UncommittedState {
+    New,
+    Modified,
+    Deleted,
+}
+
+/// One uncommitted working-tree change Publish would silently leave out of the
+/// PR (ADR-0024). Computed, never stored; the modal lists these so the author
+/// chooses a [`UncommittedDisposition`] with eyes open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UncommittedFile {
+    /// Repo-relative path.
+    pub path: String,
+    pub state: UncommittedState,
+}
+
+/// The author's explicit, per-publish choice for uncommitted work (ADR-0024,
+/// CONTEXT.md *Uncommitted work at Publish*). Never remembered across
+/// publishes; absent + dirty tree fails loud in [`publish_review`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(export)]
+pub enum UncommittedDisposition {
+    /// Commit every uncommitted change (everything but `.stage/`) with
+    /// `message`, then publish — the one place Stage authors a commit of the
+    /// author's code, taken only on this explicit choice.
+    CommitAll { message: String },
+    /// Publish only the committed branch; the uncommitted work stays local.
+    PublishWithout,
 }
 
 /// The author's publish request (PUB-7 #78 / GAP-2 #92). The PR title/body are
@@ -92,6 +143,10 @@ pub struct PublishRequest {
     /// Labels to apply, best-effort (PUB-7).
     #[serde(default)]
     pub labels: Vec<String>,
+    /// The author's choice for uncommitted working-tree changes (ADR-0024).
+    /// `None` with a dirty tree fails loud — the gate never defaults.
+    #[serde(default)]
+    pub uncommitted: Option<UncommittedDisposition>,
 }
 
 /// Which lifecycle transition a [`publish_review`] call performed, so the UI can
@@ -163,6 +218,131 @@ fn not_ready_message(readiness: &PublishReadiness) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Uncommitted work at Publish (ADR-0024) — detection + fail-loud messages
+// ---------------------------------------------------------------------------
+
+/// Every uncommitted working-tree change Publish must not silently leave
+/// behind (ADR-0024): staged, unstaged-tracked, and untracked (non-ignored)
+/// paths — **excluding `.stage/`**, which is Stage's own domain (written during
+/// publish and committed by the scoped commit, never "the author's uncommitted
+/// work"). Sorted by path. Pure detection; the UI renders it in the publish
+/// modal and [`publish_review`] enforces it.
+pub fn assess_uncommitted_work(repo_root: &Path) -> Result<Vec<UncommittedFile>, StageError> {
+    let repo = git2::Repository::open(repo_root)?;
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true).recurse_untracked_dirs(true);
+    let statuses = repo.statuses(Some(&mut opts))?;
+
+    let mut out = Vec::new();
+    for entry in statuses.iter() {
+        let Some(path) = entry.path() else {
+            // Fail loud (CLAUDE.md): a path we can't read is a change we can't
+            // show — never a silently shorter list.
+            return Err(StageError::Invalid(format!(
+                "uncommitted work: a changed path is not valid UTF-8: {:?}",
+                String::from_utf8_lossy(entry.path_bytes())
+            )));
+        };
+        if path == ".stage" || path.starts_with(".stage/") {
+            continue;
+        }
+        let s = entry.status();
+        if s.is_ignored() {
+            continue;
+        }
+        let state = if s.is_wt_new() || s.is_index_new() {
+            UncommittedState::New
+        } else if s.is_wt_deleted() || s.is_index_deleted() {
+            UncommittedState::Deleted
+        } else {
+            UncommittedState::Modified
+        };
+        out.push(UncommittedFile {
+            path: path.to_string(),
+            state,
+        });
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+/// The user-facing sentence for a dirty-tree publish with no disposition —
+/// the CLI-facing backstop (the app collects the choice in its modal first).
+fn uncommitted_message(files: &[UncommittedFile]) -> String {
+    let n = files.len();
+    let shown: Vec<&str> = files.iter().take(10).map(|f| f.path.as_str()).collect();
+    let more = if n > shown.len() {
+        format!(" (+{} more)", n - shown.len())
+    } else {
+        String::new()
+    };
+    format!(
+        "{n} uncommitted change{} would be left out of the pull request: {}{more}. \
+         Commit your work first, or publish with an explicit choice to commit \
+         everything or to publish without it.",
+        if n == 1 { "" } else { "s" },
+        shown.join(", "),
+    )
+}
+
+/// Fail loud when any storyline step is stale against the committed diff of
+/// `branch` vs `base_ref` (ST-1 joins the Ready-to-publish gate — CONTEXT.md:
+/// a stale step narrates code the PR wouldn't contain, so it is never
+/// publishable and there is no override). `after_commit` selects the message
+/// for the re-check after a [`UncommittedDisposition::CommitAll`] commit moved
+/// HEAD (the commit stays; only the publish aborts).
+fn ensure_steps_fresh(
+    repo_root: &Path,
+    base_ref: &str,
+    branch: &str,
+    steps: &[StorylineStep],
+    after_commit: bool,
+) -> Result<(), StageError> {
+    let anchors: Vec<String> = steps.iter().map(|s| s.anchor.clone()).collect();
+    let stale: Vec<StepStaleness> = assess_step_staleness(repo_root, base_ref, branch, &anchors)?
+        .into_iter()
+        .filter(|s| s.stale)
+        .collect();
+    if stale.is_empty() {
+        return Ok(());
+    }
+    let list = stale
+        .iter()
+        .map(|s| format!("'{}' ({})", s.anchor, stale_reason_label(s)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let n = stale.len();
+    let plural = if n == 1 { "" } else { "s" };
+    tracing::error!(stale = %list, after_commit, "publish_blocked_stale_steps");
+    let msg = if after_commit {
+        format!(
+            "The commit was made, but it changed the committed diff and left \
+             {n} storyline step{plural} stale: {list}. Remove or re-anchor \
+             the step{plural} in the storyline, then publish again."
+        )
+    } else {
+        format!(
+            "{n} storyline step{plural} {} stale against the committed diff of \
+             '{branch}' vs '{base_ref}': {list}. Remove or re-anchor the \
+             step{plural} before publishing.",
+            if n == 1 { "is" } else { "are" },
+        )
+    };
+    Err(StageError::Invalid(msg))
+}
+
+/// Human label for a stale step's reason, used in the publish gate's message.
+fn stale_reason_label(s: &StepStaleness) -> String {
+    match (s.reason, &s.renamed_to) {
+        (Some(StaleReason::Removed), _) => "file removed".to_string(),
+        (Some(StaleReason::Renamed), Some(to)) => format!("renamed to {to}"),
+        (Some(StaleReason::Renamed), None) => "renamed".to_string(),
+        (Some(StaleReason::NotInChangeSet), _) => "not part of the change".to_string(),
+        (None, _) => "fresh".to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The publish pipeline (PUB-1, PUB-3, PUB-5, GAP-2, GAP-5, WS-4)
 // ---------------------------------------------------------------------------
 
@@ -208,7 +388,46 @@ pub fn publish_review(
         _ => draft.base_ref.clone(),
     };
 
-    // 4. Serialize the draft into `.stage/<branch>/`. `pr_number` carries the
+    // 4. Stale-step gate (ST-1 joins Ready to publish, CONTEXT.md): a stale step
+    //    narrates code the PR wouldn't contain — never publishable, no override.
+    ensure_steps_fresh(repo_root, &base_ref, branch, &steps, false)?;
+
+    // 5. Uncommitted-work gate (ADR-0024): never publish silently over a dirty
+    //    tree. The author's explicit disposition rides the request; without one
+    //    the publish fails loud (the app collects the choice in its modal, the
+    //    CLI gets the message). The disposition is per-publish, never stored.
+    let uncommitted = assess_uncommitted_work(repo_root)?;
+    if !uncommitted.is_empty() {
+        match &req.uncommitted {
+            None => {
+                tracing::error!(
+                    count = uncommitted.len(),
+                    "publish_blocked_uncommitted_work"
+                );
+                return Err(StageError::Invalid(uncommitted_message(&uncommitted)));
+            }
+            Some(UncommittedDisposition::PublishWithout) => {
+                // The committed branch is the whole change; the listed paths
+                // stay local. Proceed.
+            }
+            Some(UncommittedDisposition::CommitAll { message }) => {
+                let message = message.trim();
+                if message.is_empty() {
+                    return Err(StageError::Invalid(
+                        "A commit message is required to commit everything at publish.".to_string(),
+                    ));
+                }
+                commit_all_except_stage(repo_root, message)?;
+                // The commit moved HEAD, so the committed diff changed — re-run
+                // the staleness gate against it (a committed revert can drop a
+                // step's file out of the diff). The commit stays either way;
+                // only the publish aborts, loud, with nothing half-published.
+                ensure_steps_fresh(repo_root, &base_ref, branch, &steps, true)?;
+            }
+        }
+    }
+
+    // 6. Serialize the draft into `.stage/<branch>/`. `pr_number` carries the
     //    draft's current value (None on a first publish; reconciled in step 9).
     let mut review = StageReview {
         meta: ReviewMeta {
@@ -221,7 +440,7 @@ pub fn publish_review(
     };
     write_review(repo_root, &review)?;
 
-    // 5. Look up the branch's PR *before* mutating git, so we pick the action and
+    // 7. Look up the branch's PR *before* mutating git, so we pick the action and
     //    the commit message up front (GitHub is the source of truth, §5).
     let existing = classify_branch_pr(github.prs_for_branch(repo_root, branch)?);
     let commit_message = match existing {
@@ -229,7 +448,7 @@ pub fn publish_review(
         _ => format!("stage: update review for {branch}"),
     };
 
-    // 6. Scoped commit — only if `.stage/<branch>/` actually changed. Skipping a
+    // 8. Scoped commit — only if `.stage/<branch>/` actually changed. Skipping a
     //    clean folder keeps re-publish (and a retry after a failed push)
     //    idempotent instead of failing on an empty commit.
     let mut last_commit: Option<String> = None;
@@ -237,11 +456,11 @@ pub fn publish_review(
         last_commit = Some(scoped_commit(repo_root, branch, &commit_message)?);
     }
 
-    // 7. Push the branch (PUB-1). Fails loud with git's stderr (auth, protected
+    // 9. Push the branch (PUB-1). Fails loud with git's stderr (auth, protected
     //    branch, no write access). Nothing past here ran, so no half state.
     github.git_push(repo_root, "origin", branch)?;
 
-    // 8. Create / reach / reopen the PR.
+    // 10. Create / reach / reopen the PR.
     let base_branch = pr_base_branch(&base_ref);
     let (pr_number, url, action) = match existing {
         BranchPrState::None => {
@@ -260,7 +479,7 @@ pub fn publish_review(
         }
     };
 
-    // 9. Record the PR number into `review.toml` and the draft — only now that the
+    // 11. Record the PR number into `review.toml` and the draft — only now that the
     //    PR is confirmed (PUB-4: nothing half-recorded on an earlier failure). On
     //    a re-publish where the number is already present this is a no-op.
     if review.meta.pr_number != Some(pr_number) {
@@ -277,7 +496,7 @@ pub fn publish_review(
     }
     store.set_review_pr_number(key, pr_number)?;
 
-    // 10. On a first publish only, auto-post exactly one discovery comment
+    // 12. On a first publish only, auto-post exactly one discovery comment
     //     (GAP-5). Re-publish/reopen never comment, so it stays exactly-once by
     //     construction (a PR now exists, so a later publish takes another branch).
     if action == PublishAction::Created {
@@ -567,8 +786,10 @@ mod tests {
     }
 
     /// A work repo on branch `feat/x` whose `origin` is a bare repo alongside it
-    /// (so `git push` works with no network). One commit on `main`, identity
-    /// configured. Returns the work-repo root.
+    /// (so `git push` works with no network). One commit on `main` (pushed, so
+    /// `origin/main` resolves for the staleness gate), then a committed branch
+    /// change adding `src/domain.rs` + `src/store.rs` — the files the test
+    /// storylines anchor. The tree is clean. Returns the work-repo root.
     fn repo_with_bare_remote(base: &Path) -> PathBuf {
         let remote = base.join("remote.git");
         git(base, &["init", "-q", "--bare", remote.to_str().unwrap()]);
@@ -585,7 +806,15 @@ mod tests {
             &work,
             &["remote", "add", "origin", remote.to_str().unwrap()],
         );
+        // Push main so origin/main exists locally (the staleness gate resolves
+        // the draft's `origin/main` base against it).
+        git(&work, &["push", "-q", "origin", "main"]);
         git(&work, &["checkout", "-q", "-b", "feat/x"]);
+        std::fs::create_dir_all(work.join("src")).unwrap();
+        std::fs::write(work.join("src/domain.rs"), "fn domain() {}\n").unwrap();
+        std::fs::write(work.join("src/store.rs"), "fn store() {}\n").unwrap();
+        git(&work, &["add", "-A"]);
+        git(&work, &["commit", "-q", "-m", "branch work"]);
         work
     }
 
@@ -662,6 +891,7 @@ exit 1
             base_ref: None,
             reviewers: vec![],
             labels: vec![],
+            uncommitted: None,
         }
     }
 
@@ -748,12 +978,15 @@ exit 1
         let store = ready_store(tmp.path());
         let k = key("feat/x");
 
-        // The user has an unrelated staged code change in flight — it must NOT be
-        // swept into the scoped commit.
+        // The user has an unrelated staged code change in flight — with the
+        // explicit publish-without disposition (ADR-0024) it must survive
+        // untouched and must NOT be swept into the scoped commit.
         std::fs::write(root.join("README.md"), "EDITED BY USER\n").unwrap();
         git(&root, &["add", "README.md"]);
 
-        let out = publish_review(&store, &gh, &root, &k, &request()).unwrap();
+        let mut req = request();
+        req.uncommitted = Some(UncommittedDisposition::PublishWithout);
+        let out = publish_review(&store, &gh, &root, &k, &req).unwrap();
         assert_eq!(out.action, PublishAction::Created);
         assert_eq!(out.pr_number, 7);
         assert_eq!(out.url, "https://github.com/o/r/pull/7");
@@ -915,6 +1148,11 @@ exit 1
         let store = ready_store(tmp.path());
         let k = key("feat/x");
 
+        // The develop branch must exist on the remote for the staleness gate to
+        // resolve the overridden base.
+        git(&root, &["branch", "develop", "main"]);
+        git(&root, &["push", "-q", "origin", "develop"]);
+
         let mut req = request();
         req.base_ref = Some("origin/develop".into());
         publish_review(&store, &gh, &root, &k, &req).unwrap();
@@ -972,20 +1210,13 @@ echo "unhandled: $*" >&2; exit 1
     #[test]
     fn push_failure_surfaces_and_records_nothing() {
         let tmp = tempfile::tempdir().unwrap();
-        // A repo whose `origin` points nowhere → `git push` fails.
-        let work = tmp.path().join("work");
-        std::fs::create_dir_all(&work).unwrap();
-        git(&work, &["init", "-q", "-b", "main"]);
-        git(&work, &["config", "user.email", "t@e.com"]);
-        git(&work, &["config", "user.name", "t"]);
-        std::fs::write(work.join("README.md"), "hi\n").unwrap();
-        git(&work, &["add", "."]);
-        git(&work, &["commit", "-q", "-m", "init"]);
+        // A normal repo (origin/main fetched, branch work committed) whose
+        // `origin` URL is then broken → the gates pass but `git push` fails.
+        let work = repo_with_bare_remote(tmp.path());
         git(
             &work,
-            &["remote", "add", "origin", "/nonexistent/remote.git"],
+            &["remote", "set-url", "origin", "/nonexistent/remote.git"],
         );
-        git(&work, &["checkout", "-q", "-b", "feat/x"]);
 
         let rec = tmp.path().join("rec");
         std::fs::create_dir_all(&rec).unwrap();
@@ -1007,6 +1238,250 @@ echo "unhandled: $*" >&2; exit 1
             matches!(err2, StageError::GitCli(_)),
             "retry still push-fails: {err2:?}"
         );
+    }
+
+    // ---- ADR-0024: the uncommitted-work gate --------------------------------
+
+    #[test]
+    fn assess_uncommitted_work_detects_and_excludes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = repo_with_bare_remote(tmp.path());
+
+        // Clean tree → nothing.
+        assert!(assess_uncommitted_work(&root).unwrap().is_empty());
+
+        // Unstaged edit, staged edit, untracked file, deleted file — all count.
+        std::fs::write(root.join("src/domain.rs"), "fn domain() { /* edit */ }\n").unwrap();
+        std::fs::write(root.join("README.md"), "staged edit\n").unwrap();
+        git(&root, &["add", "README.md"]);
+        std::fs::write(root.join("scratch.txt"), "notes\n").unwrap();
+        std::fs::remove_file(root.join("src/store.rs")).unwrap();
+        // `.stage/` and ignored files never count.
+        std::fs::create_dir_all(root.join(".stage/feat-x")).unwrap();
+        std::fs::write(root.join(".stage/feat-x/review.toml"), "x\n").unwrap();
+        std::fs::write(root.join(".gitignore"), "ignored.log\n").unwrap();
+        std::fs::write(root.join("ignored.log"), "noise\n").unwrap();
+
+        let got = assess_uncommitted_work(&root).unwrap();
+        let by = |p: &str| {
+            got.iter()
+                .find(|f| f.path == p)
+                .unwrap_or_else(|| panic!("missing {p} in {got:?}"))
+        };
+        assert_eq!(by("README.md").state, UncommittedState::Modified);
+        assert_eq!(by("src/domain.rs").state, UncommittedState::Modified);
+        assert_eq!(by("scratch.txt").state, UncommittedState::New);
+        assert_eq!(by("src/store.rs").state, UncommittedState::Deleted);
+        assert!(
+            !got.iter().any(|f| f.path.starts_with(".stage")),
+            ".stage is Stage's own domain: {got:?}"
+        );
+        assert!(
+            !got.iter().any(|f| f.path == "ignored.log"),
+            "ignored files never count: {got:?}"
+        );
+        // Sorted by path.
+        let paths: Vec<&str> = got.iter().map(|f| f.path.as_str()).collect();
+        let mut sorted = paths.clone();
+        sorted.sort();
+        assert_eq!(paths, sorted);
+    }
+
+    #[test]
+    fn dirty_publish_without_disposition_fails_loud_and_mutates_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = repo_with_bare_remote(tmp.path());
+        let rec = tmp.path().join("rec");
+        std::fs::create_dir_all(&rec).unwrap();
+        let gh = GitHub::with_bins(fake_gh(&rec), "git");
+        let store = ready_store(tmp.path());
+        let k = key("feat/x");
+
+        std::fs::write(root.join("forgotten.rs"), "fn missing_from_pr() {}\n").unwrap();
+
+        let head_before = git_head(&root);
+        let err = publish_review(&store, &gh, &root, &k, &request()).unwrap_err();
+        assert!(
+            err.to_string().contains("forgotten.rs"),
+            "the message names what would be left out: {err}"
+        );
+        assert!(
+            err.to_string().contains("uncommitted"),
+            "the message says why: {err}"
+        );
+        // Nothing was committed, written, or sent to gh.
+        assert_eq!(git_head(&root), head_before);
+        assert!(!review_dir(&root, "feat/x")
+            .unwrap()
+            .join("review.toml")
+            .exists());
+        assert!(!rec.join("calls").exists(), "no gh call before the gate");
+        assert_eq!(store.get_review_draft(&k).unwrap().unwrap().pr_number, None);
+    }
+
+    #[test]
+    fn commit_all_commits_code_with_message_then_publishes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = repo_with_bare_remote(tmp.path());
+        let rec = tmp.path().join("rec");
+        std::fs::create_dir_all(&rec).unwrap();
+        let gh = GitHub::with_bins(fake_gh(&rec), "git");
+        let store = ready_store(tmp.path());
+        let k = key("feat/x");
+
+        // The change exists partly as an unstaged edit and an untracked file —
+        // the PR-124 failure mode.
+        std::fs::write(
+            root.join("src/domain.rs"),
+            "fn domain() { /* full impl */ }\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/new_part.rs"), "fn new_part() {}\n").unwrap();
+
+        let mut req = request();
+        req.uncommitted = Some(UncommittedDisposition::CommitAll {
+            message: "finish the rename".into(),
+        });
+        let out = publish_review(&store, &gh, &root, &k, &req).unwrap();
+        assert_eq!(out.action, PublishAction::Created);
+
+        // HEAD and HEAD~1 are the two scoped .stage commits a first publish makes
+        // (publish + record-PR); beneath them sits the author-code commit with
+        // the author's message, carrying the code and no .stage paths.
+        let scoped_files = git_show_names(&root);
+        assert!(scoped_files.iter().all(|f| f.starts_with(".stage/")));
+        let code_msg = git_log_subject(&root, "HEAD~2");
+        assert_eq!(code_msg, "finish the rename");
+        let code_files = git_show_names_at(&root, "HEAD~2");
+        assert!(
+            code_files.contains(&"src/domain.rs".to_string()),
+            "{code_files:?}"
+        );
+        assert!(
+            code_files.contains(&"src/new_part.rs".to_string()),
+            "{code_files:?}"
+        );
+        assert!(
+            !code_files.iter().any(|f| f.starts_with(".stage/")),
+            "the code commit must not carry .stage: {code_files:?}"
+        );
+
+        // The tree is clean afterwards — everything reached the PR.
+        assert!(assess_uncommitted_work(&root).unwrap().is_empty());
+    }
+
+    #[test]
+    fn commit_all_requires_a_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = repo_with_bare_remote(tmp.path());
+        let rec = tmp.path().join("rec");
+        std::fs::create_dir_all(&rec).unwrap();
+        let gh = GitHub::with_bins(fake_gh(&rec), "git");
+        let store = ready_store(tmp.path());
+
+        std::fs::write(root.join("scratch.txt"), "x\n").unwrap();
+        let mut req = request();
+        req.uncommitted = Some(UncommittedDisposition::CommitAll {
+            message: "   ".into(),
+        });
+        let err = publish_review(&store, &gh, &root, &key("feat/x"), &req).unwrap_err();
+        assert!(err.to_string().contains("commit message"), "{err}");
+    }
+
+    // ---- ST-1 at publish: stale steps block ---------------------------------
+
+    #[test]
+    fn stale_step_blocks_publish_before_any_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = repo_with_bare_remote(tmp.path());
+        let rec = tmp.path().join("rec");
+        std::fs::create_dir_all(&rec).unwrap();
+        let gh = GitHub::with_bins(fake_gh(&rec), "git");
+        let store = ready_store(tmp.path());
+        let k = key("feat/x");
+
+        // A step anchoring a file that is not part of the committed diff — the
+        // PR-124 junk-step shape (added against a stale base, valid at the time).
+        store
+            .add_storyline_step(&k, "backend/ghost.py", None, "Narrates removed code.")
+            .unwrap();
+
+        let head_before = git_head(&root);
+        let err = publish_review(&store, &gh, &root, &k, &request()).unwrap_err();
+        assert!(err.to_string().contains("backend/ghost.py"), "{err}");
+        assert!(err.to_string().contains("stale"), "{err}");
+        assert!(
+            err.to_string().contains("not part of the change"),
+            "the reason is spelled out: {err}"
+        );
+        assert_eq!(git_head(&root), head_before);
+        assert!(!rec.join("calls").exists(), "no gh call before the gate");
+    }
+
+    #[test]
+    fn commit_all_that_stales_a_step_aborts_after_the_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = repo_with_bare_remote(tmp.path());
+        let rec = tmp.path().join("rec");
+        std::fs::create_dir_all(&rec).unwrap();
+        let gh = GitHub::with_bins(fake_gh(&rec), "git");
+        let store = ready_store(tmp.path());
+        let k = key("feat/x");
+
+        // The uncommitted work *reverts* the branch's addition of src/domain.rs —
+        // committing it drops the file from the committed diff, staling the step
+        // that anchors it.
+        std::fs::remove_file(root.join("src/domain.rs")).unwrap();
+
+        let mut req = request();
+        req.uncommitted = Some(UncommittedDisposition::CommitAll {
+            message: "drop the domain module".into(),
+        });
+        let err = publish_review(&store, &gh, &root, &k, &req).unwrap_err();
+        assert!(err.to_string().contains("src/domain.rs"), "{err}");
+        assert!(
+            err.to_string().contains("The commit was made"),
+            "the author is told the commit stands: {err}"
+        );
+        // The code commit stands (fail loud, not half-undone)…
+        assert_eq!(git_log_subject(&root, "HEAD"), "drop the domain module");
+        // …but nothing was published.
+        assert!(!rec.join("calls").exists(), "no gh call after the abort");
+        assert_eq!(store.get_review_draft(&k).unwrap().unwrap().pr_number, None);
+    }
+
+    fn git_head(repo: &Path) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn git_log_subject(repo: &Path, rev: &str) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["log", "-1", "--format=%s", rev])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn git_show_names_at(repo: &Path, rev: &str) -> Vec<String> {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["show", "--name-only", "--format=", rev])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect()
     }
 
     fn git_show_names(repo: &Path) -> Vec<String> {

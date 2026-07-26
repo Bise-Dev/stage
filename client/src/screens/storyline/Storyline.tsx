@@ -4,21 +4,28 @@ import { ErrorBanner } from '../../components/ErrorBanner';
 import { Icon } from '../../components/Icon';
 import { TitleBar } from '../../components/TitleBar';
 import {
+  type BaseOptions,
   type BranchInfo,
   type Review,
   type SelfReviewFileChange,
   type StorylinePreview,
+  type UncommittedDisposition,
+  type UncommittedFile,
   gitCurrentBranch,
+  gitFetch,
   gitRemoteBranches,
+  publishUncommitted,
   reviewDraftGet,
   reviewDraftSetBase,
   reviewPublish,
+  selfReviewBaseOptions,
   storylinePreview,
   storylineStepAdd,
   storylineStepEdit,
   storylineStepRemove,
   storylineStepsReorder,
 } from '../../tauri';
+import { relativeTimeFromEpoch } from '../../time';
 import { IntroStep } from './IntroStep';
 import { OrderStep } from './OrderStep';
 import { Stepper, type WizardStep } from './Stepper';
@@ -119,6 +126,13 @@ export function Storyline({ onBack }: { onBack: () => void }) {
   const [ordering, setOrdering] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
+  // Base freshness + dirty-tree signals (the PR-124 guardrails): last-fetch age
+  // for the toolbar widget, the background auto-fetch state, and the working
+  // tree's uncommitted changes for the composer notice + publish modal.
+  const [baseOptions, setBaseOptions] = useState<BaseOptions | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [uncommitted, setUncommitted] = useState<UncommittedFile[]>([]);
 
   const steps: Step[] = useMemo(
     () => (preview ? buildSteps(preview, buffered) : []),
@@ -141,9 +155,40 @@ export function Storyline({ onBack }: { onBack: () => void }) {
     }
   }, []);
 
+  // Base freshness + working-tree signals. Non-fatal to composing, but a
+  // failure still surfaces (fail loud) via the freshness banner.
+  const reloadSignals = useCallback(async () => {
+    const [opts, files] = await Promise.all([selfReviewBaseOptions(), publishUncommitted()]);
+    setBaseOptions(opts);
+    setUncommitted(files);
+  }, []);
+
+  // Refresh the remote-tracking base (`git fetch --prune` with the user's own
+  // git), then re-derive everything that depends on it: the freshness widget,
+  // the committed diff (and its stale flags), and the dirty-tree notice.
+  // Runs automatically on entry — composing against a weeks-stale
+  // `origin/<base>` is how PR #124 got 28 junk steps — and manually via the
+  // toolbar Refresh. Composing is never blocked while it runs.
+  const refreshBase = useCallback(async () => {
+    setFetching(true);
+    setFetchError(null);
+    try {
+      await gitFetch();
+      await Promise.all([reloadSignals(), reloadPreview()]);
+    } catch (e) {
+      // Fail loud (CLAUDE.md): the author must know they may be composing
+      // against a stale base — but they can keep composing.
+      console.warn('storyline_refresh_base_failed', e);
+      setFetchError(msgOf(e));
+    } finally {
+      setFetching(false);
+    }
+  }, [reloadSignals, reloadPreview]);
+
   // Boot: branch + draft (the composer requires one — "Ready to share" creates
   // it from the overview or Self-Review), then the preview. A published draft
-  // opens straight on the intro step, where "Push update" lives.
+  // opens straight on the intro step, where "Push update" lives. The base
+  // auto-fetch kicks off in the background once the composer is usable.
   useEffect(() => {
     (async () => {
       try {
@@ -152,7 +197,8 @@ export function Storyline({ onBack }: { onBack: () => void }) {
         setDraft(d);
         if (d) {
           if (d.prNumber !== null) setWizard('intro');
-          await reloadPreview();
+          await Promise.all([reloadPreview(), reloadSignals()]);
+          void refreshBase();
         }
       } catch (e) {
         console.warn('storyline_boot_failed', e);
@@ -161,7 +207,7 @@ export function Storyline({ onBack }: { onBack: () => void }) {
         setLoading(false);
       }
     })();
-  }, [reloadPreview]);
+  }, [reloadPreview, reloadSignals, refreshBase]);
 
   // Remote branches for the base picker (origin/*). Loaded once; a failure is
   // non-fatal — the picker still shows the current base.
@@ -279,15 +325,20 @@ export function Storyline({ onBack }: { onBack: () => void }) {
     () => steps.filter((s) => s.introText.trim().length > 0).length,
     [steps],
   );
-  // The publish gate (PUB-2 #73, mirrored from the engine's readiness rule —
-  // and re-enforced there at publish): ≥1 step, every step with an intro.
-  // Buffered (unsaved) intros count — Publish saves them first.
+  // The publish gate (PUB-2 #73 + the ST-1 stale rule, mirrored from the
+  // engine — and re-enforced there at publish): ≥1 step, no stale step, every
+  // step with an intro. A stale step narrates code the PR wouldn't contain, so
+  // there is no override — the author removes or re-anchors it (CONTEXT.md
+  // *Ready to publish*). Buffered (unsaved) intros count — Publish saves first.
+  const staleCount = useMemo(() => steps.filter((s) => s.stale).length, [steps]);
   const publishBlockedReason =
     steps.length === 0
       ? 'Add at least one step to the storyline to open a PR.'
-      : withIntro < steps.length
-        ? `${steps.length - withIntro} step${steps.length - withIntro === 1 ? '' : 's'} still need an intro.`
-        : null;
+      : staleCount > 0
+        ? `${staleCount} step${staleCount === 1 ? ' is' : 's are'} stale — the anchored file${staleCount === 1 ? ' is' : 's are'} no longer part of this change. Remove or re-anchor ${staleCount === 1 ? 'it' : 'them'} first.`
+        : withIntro < steps.length
+          ? `${steps.length - withIntro} step${steps.length - withIntro === 1 ? '' : 's'} still need an intro.`
+          : null;
   const readyToPublish = publishBlockedReason === null;
   const published = draft !== null && draft.prNumber !== null;
 
@@ -372,6 +423,11 @@ export function Storyline({ onBack }: { onBack: () => void }) {
               >
                 {branch}
               </span>
+              <ComposerFreshness
+                baseOptions={baseOptions}
+                fetching={fetching}
+                onRefresh={refreshBase}
+              />
             </div>
             {draft?.title && (
               <span
@@ -437,7 +493,13 @@ export function Storyline({ onBack }: { onBack: () => void }) {
             )}
           </div>
 
-          {(loadError || actionError || saveError || baseError || noCommittedChanges) && (
+          {(loadError ||
+            actionError ||
+            saveError ||
+            baseError ||
+            fetchError ||
+            noCommittedChanges ||
+            uncommitted.length > 0) && (
             <div style={{ padding: '10px 18px 0' }}>
               {loadError && (
                 <ErrorBanner
@@ -466,6 +528,23 @@ export function Storyline({ onBack }: { onBack: () => void }) {
                   detail={baseError}
                   onClose={() => setBaseError(null)}
                 />
+              )}
+              {fetchError && (
+                <ErrorBanner
+                  title="Couldn't refresh origin — the base may be stale"
+                  detail={fetchError}
+                  onClose={() => setFetchError(null)}
+                />
+              )}
+              {uncommitted.length > 0 && (
+                // Softer, non-gating counterpart of the publish gate: composing
+                // works against the committed diff, so uncommitted work simply
+                // isn't in the storyline. Publish is where it hard-gates.
+                <div style={infoBanner}>
+                  {uncommitted.length} uncommitted change
+                  {uncommitted.length === 1 ? ' isn’t' : 's aren’t'} part of this storyline — commit
+                  first if {uncommitted.length === 1 ? 'it belongs' : 'they belong'} in this change.
+                </div>
               )}
               {noCommittedChanges && (
                 <div style={infoBanner}>
@@ -507,6 +586,7 @@ export function Storyline({ onBack }: { onBack: () => void }) {
           draft={draft}
           branch={branch}
           published={published}
+          initialUncommitted={uncommitted}
           saveDirty={save}
           onClose={() => setPublishOpen(false)}
           onPublished={onBack}
@@ -566,6 +646,53 @@ export function Storyline({ onBack }: { onBack: () => void }) {
   );
 }
 
+/** Base freshness in the composer toolbar: the last `git fetch` age plus a
+ *  manual Refresh. The composed diff is computed against `origin/<base>`, so a
+ *  stale fetch means composing against code the PR won't contain (the PR-124
+ *  junk-step failure). An auto-fetch runs on entry; this keeps long composing
+ *  sessions honest. */
+function ComposerFreshness({
+  baseOptions,
+  fetching,
+  onRefresh,
+}: {
+  baseOptions: BaseOptions | null;
+  fetching: boolean;
+  onRefresh: () => void;
+}) {
+  if (!baseOptions) return null;
+  const fetched = baseOptions.lastFetchSecs
+    ? `fetched ${relativeTimeFromEpoch(baseOptions.lastFetchSecs)}`
+    : 'never fetched';
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, flexShrink: 0 }}>
+      <span style={{ color: 'var(--gray-500)' }}>{fetched}</span>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        onClick={onRefresh}
+        disabled={fetching}
+        style={{ padding: '0 6px', opacity: fetching ? 0.5 : 1 }}
+        title="git fetch --prune"
+      >
+        {fetching ? 'Refreshing…' : 'Refresh'}
+      </button>
+    </span>
+  );
+}
+
+// Strong amber warning block for the publish modal's uncommitted-work gate —
+// interruptive by design, unlike `infoBanner` (the composer's soft notice).
+const warnBox: React.CSSProperties = {
+  fontSize: 12,
+  color: 'var(--gray-900)',
+  background: 'rgba(255,149,0,0.08)',
+  border: '1px solid rgba(255,149,0,0.35)',
+  borderRadius: 'var(--r-sm)',
+  padding: '10px 12px',
+  marginBottom: 14,
+};
+
 /**
  * Publish confirmation (PUB-1..7 #72–78): PR title + markdown description
  * become the GitHub PR's title/body — distinct from the Review title, which
@@ -573,11 +700,19 @@ export function Storyline({ onBack }: { onBack: () => void }) {
  * serializes the draft into `.stage/<branch>/`, pushes with the user's own git
  * credentials, and opens/updates the PR via `gh` (ADR-0022 §3). On success the
  * composer closes back to the overview, which re-fetches and shows the PR row.
+ *
+ * **Uncommitted-work gate (ADR-0024):** when the working tree is dirty the
+ * modal warns strongly, lists every affected path, and requires an explicit
+ * per-publish disposition — commit everything (the primary fix; Stage's one
+ * code commit, message pre-filled from the PR title) or publish without the
+ * changes (de-emphasized). The engine enforces the same rule, so the modal is
+ * only the renderer of the choice.
  */
 function PublishModal({
   draft,
   branch,
   published,
+  initialUncommitted,
   saveDirty,
   onClose,
   onPublished,
@@ -585,6 +720,8 @@ function PublishModal({
   draft: Review;
   branch: string;
   published: boolean;
+  /** The composer's last-known uncommitted changes; re-checked on mount. */
+  initialUncommitted: UncommittedFile[];
   /** Persist any buffered intro edits; resolves false on failure (abort). */
   saveDirty: () => Promise<boolean>;
   onClose: () => void;
@@ -594,6 +731,26 @@ function PublishModal({
   const [prBody, setPrBody] = useState('');
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uncommitted, setUncommitted] = useState<UncommittedFile[]>(initialUncommitted);
+  const [choice, setChoice] = useState<'commitAll' | 'publishWithout'>('commitAll');
+  // `null` = untouched → the commit message follows the PR title live.
+  const [commitMessage, setCommitMessage] = useState<string | null>(null);
+
+  // Re-check on open: the composer's snapshot may predate recent edits. A
+  // failure surfaces in the modal's banner (the engine re-enforces the gate
+  // regardless, so publishing stays safe either way).
+  useEffect(() => {
+    publishUncommitted()
+      .then(setUncommitted)
+      .catch((e) => {
+        console.warn('publish_uncommitted_failed', e);
+        setError(msgOf(e));
+      });
+  }, []);
+
+  const dirty = uncommitted.length > 0;
+  const effectiveMessage = (commitMessage ?? prTitle).trim();
+  const commitAllChosen = dirty && choice === 'commitAll';
 
   const publish = async () => {
     setPublishing(true);
@@ -605,12 +762,20 @@ function PublishModal({
         setError('Saving the storyline failed — fix that first, then publish.');
         return;
       }
+      // The disposition is per-publish and explicit (ADR-0024): only sent when
+      // the tree is dirty; a clean tree publishes with none.
+      const disposition: UncommittedDisposition | null = !dirty
+        ? null
+        : choice === 'commitAll'
+          ? { kind: 'commitAll', message: effectiveMessage }
+          : { kind: 'publishWithout' };
       await reviewPublish({
         prTitle: prTitle.trim() || branch,
         prBody,
         baseRef: null,
         reviewers: [],
         labels: [],
+        uncommitted: disposition,
       });
     } catch (e) {
       // Fail loud (CLAUDE.md): surface git's / gh's message verbatim; nothing
@@ -699,6 +864,83 @@ function PublishModal({
           }}
         />
 
+        {dirty && (
+          <div style={warnBox} role="alert">
+            <div style={{ fontWeight: 700, color: 'var(--orange)', marginBottom: 6 }}>
+              {uncommitted.length} uncommitted change{uncommitted.length === 1 ? '' : 's'}{' '}
+              {uncommitted.length === 1 ? 'is' : 'are'} not part of this PR
+            </div>
+            <ul
+              className="mono"
+              style={{
+                listStyle: 'none',
+                margin: '0 0 10px',
+                padding: '6px 8px',
+                maxHeight: 110,
+                overflowY: 'auto',
+                background: 'rgba(255,255,255,0.6)',
+                borderRadius: 'var(--r-sm)',
+                fontSize: 11,
+              }}
+            >
+              {uncommitted.map((f) => (
+                <li key={f.path} style={{ display: 'flex', gap: 8, lineHeight: 1.7 }}>
+                  <span style={{ color: 'var(--gray-500)', width: 58, flexShrink: 0 }}>
+                    {f.state}
+                  </span>
+                  <span
+                    style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  >
+                    {f.path}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 6 }}>
+              <input
+                type="radio"
+                name="uncommitted-choice"
+                checked={choice === 'commitAll'}
+                onChange={() => setChoice('commitAll')}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <strong>Commit everything and publish</strong> — all listed changes join the PR in
+                one commit.
+              </span>
+            </label>
+            {choice === 'commitAll' && (
+              <input
+                className="input"
+                aria-label="Commit message"
+                value={commitMessage ?? prTitle}
+                onChange={(e) => setCommitMessage(e.target.value)}
+                placeholder="Commit message"
+                style={{ display: 'block', width: '100%', margin: '0 0 8px 22px', maxWidth: 380 }}
+              />
+            )}
+            <label
+              style={{
+                display: 'flex',
+                gap: 8,
+                alignItems: 'flex-start',
+                color: 'var(--gray-600)',
+              }}
+            >
+              <input
+                type="radio"
+                name="uncommitted-choice"
+                checked={choice === 'publishWithout'}
+                onChange={() => setChoice('publishWithout')}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                Publish without these changes — the listed files stay local and out of the PR.
+              </span>
+            </label>
+          </div>
+        )}
+
         {error && (
           <div style={{ marginBottom: 12 }}>
             <ErrorBanner title="Couldn't publish" detail={error} onClose={() => setError(null)} />
@@ -713,16 +955,29 @@ function PublishModal({
             type="button"
             className="btn btn-primary"
             onClick={publish}
-            disabled={publishing || prTitle.trim().length === 0}
+            disabled={
+              publishing ||
+              prTitle.trim().length === 0 ||
+              (commitAllChosen && effectiveMessage.length === 0)
+            }
             style={{ opacity: publishing ? 0.6 : 1 }}
+            title={
+              commitAllChosen && effectiveMessage.length === 0
+                ? 'Write a commit message first'
+                : undefined
+            }
           >
             {publishing
               ? published
                 ? 'Pushing…'
                 : 'Opening PR…'
-              : published
-                ? 'Push update'
-                : 'Open PR'}
+              : commitAllChosen
+                ? published
+                  ? 'Commit all & push update'
+                  : 'Commit all & open PR'
+                : published
+                  ? 'Push update'
+                  : 'Open PR'}
           </button>
         </div>
       </div>
