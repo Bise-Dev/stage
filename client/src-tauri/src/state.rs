@@ -23,6 +23,10 @@ pub struct AppState {
     /// callback writes it here and emits `open-intent`. The webview drains it
     /// once via `take_open_intent` and routes per its mode.
     pub pending_open: Mutex<Option<OpenIntent>>,
+    /// The desired background `git fetch` cadence in seconds (0 = off). Owned
+    /// here (not on the engine) so it survives repo switches — each new
+    /// [`crate::sync`] engine is seeded from it.
+    pub auto_fetch_secs: Mutex<u32>,
     /// Dev-only Activity log ring (decision #6). The `tracing` layer in
     /// `lib.rs` holds the same `Arc`, so both the layer and the IPC commands
     /// read/write one buffer. Absent from release builds — see `activity_log.rs`.
@@ -66,4 +70,8 @@ pub struct ActiveRepo {
     pub common_dir: PathBuf,
     #[allow(dead_code)]
     pub watcher: WatcherHandle,
+    /// This repo's background sync engine — owns the overview snapshot and the
+    /// GitHub poller. One per active repo (only one repo is open at a time);
+    /// dropped (task aborted) together with the rest of the activation.
+    pub sync: crate::sync::SyncHandle,
 }

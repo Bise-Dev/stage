@@ -37,7 +37,8 @@ pub use domain::{
 pub use error::StageError;
 pub use github::{GhAuthor, GhPullRequest, GitHub, GitHubUser, PrFilter};
 pub use overview::{
-    assemble_overview, BranchMeta, OverviewKind, OverviewRow, OverviewView, WorktreeMeta,
+    assemble_overview, assemble_overview_with, fetch_overview_github, BranchMeta,
+    OverviewGithubData, OverviewKind, OverviewRow, OverviewView, SignalCache, WorktreeMeta,
 };
 pub use pr::{
     CheckResult, CheckStatus, DraftLineComment, IssueComment, LineComment, MergeMethod, PrActivity,
