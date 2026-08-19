@@ -14,6 +14,7 @@ import {
   type ReviewerEntry,
   type SelfReviewFileChange,
   type Verdict,
+  onSyncUpdated,
   openUrl,
   prActivity,
   prDiscussion,
@@ -24,6 +25,8 @@ import {
   prSubmitVerdict,
   reviewCheckoutBranch,
   reviewOpen,
+  syncUnwatchPr,
+  syncWatchPr,
 } from '../../tauri';
 import { inferDiffLanguage } from '../selfReview/markdown';
 
@@ -425,10 +428,17 @@ export function LocalReview({ pr, onBack }: { pr: PrRef; onBack: () => void }) {
 
   // Refresh the GitHub-sourced activity + discussion after any write. `anchors`
   // groups threads onto the steps; computed from the entry's storyline.
+  // `preferCached` is passed on the sync-event reload path only — the engine
+  // just deep-polled the PR, so `pr_activity` can serve its cache; a reload
+  // after the viewer's own write must re-fetch (a pre-write cache would hide
+  // the action).
   const reloadActivity = useCallback(
-    async (anchors: string[]) => {
+    async (anchors: string[], preferCached = false) => {
       try {
-        const [a, d] = await Promise.all([prActivity(pr.number), prDiscussion(pr.number, anchors)]);
+        const [a, d] = await Promise.all([
+          prActivity(pr.number, preferCached),
+          prDiscussion(pr.number, anchors),
+        ]);
         setActivity(a);
         setDiscussion(d);
       } catch (e) {
@@ -451,6 +461,9 @@ export function LocalReview({ pr, onBack }: { pr: PrRef; onBack: () => void }) {
         // Activity + discussion are best-effort context: a failure here surfaces
         // in the write-error banner but doesn't block reading the storyline.
         await reloadActivity(e.steps.map((s) => s.anchor));
+        // Now that the first fetch seeded the engine's cache, have it deep-poll
+        // this PR so new reviews/comments/checks land while the screen is open.
+        syncWatchPr(pr.number).catch((err) => console.warn('sync_watch_pr_failed', err));
       } catch (e) {
         console.warn('review_open_failed', e);
         if (alive) setLoadError(msgOf(e));
@@ -463,7 +476,26 @@ export function LocalReview({ pr, onBack }: { pr: PrRef; onBack: () => void }) {
     };
   }, [pr, reloadActivity]);
 
+  // Stop the deep-poll when the screen closes.
+  useEffect(
+    () => () => {
+      syncUnwatchPr().catch((e) => console.warn('sync_unwatch_pr_failed', e));
+    },
+    [],
+  );
+
   const anchors = useMemo(() => entry?.steps.map((s) => s.anchor) ?? [], [entry]);
+
+  // Live refresh: the engine pings when the watched PR's activity changed on
+  // GitHub — reload from its fresh cache (no extra `gh pr view`).
+  useEffect(() => {
+    const off = onSyncUpdated((u) => {
+      if (u.scope === 'pr' && u.prNumber === pr.number) void reloadActivity(anchors, true);
+    });
+    return () => {
+      void off.then((f) => f());
+    };
+  }, [pr.number, anchors, reloadActivity]);
 
   const fileFor = useCallback(
     (path: string): SelfReviewFileChange | null =>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { syncSetAutoFetch } from '../tauri';
 import { Icon } from './Icon';
 
 // Auto-fetch interval options for the Overview's Fetch button. `seconds: 0`
@@ -23,13 +24,10 @@ function loadAutoFetchSeconds(): number {
 /**
  * The home-screen Fetch control: a "Fetch" button plus an attached caret that
  * opens a menu to pick a periodic auto-fetch interval (Off / 10s / 30s / 2m).
- * Clicking Fetch runs `onFetch` once; choosing an interval arms a timer that
- * calls the same handler on a schedule. The two read as one split control.
- *
- * The timer reads `onFetch` and `fetching` through refs so it re-arms only when
- * the chosen interval changes — not on every render (the caller's handler is a
- * fresh closure each render). A tick is skipped while a fetch is already in
- * flight, so timers never stack concurrent git fetches.
+ * Clicking Fetch runs `onFetch` once; the chosen interval is handed to the
+ * background sync engine (`sync_set_auto_fetch`), which owns the timer and
+ * runs the periodic `git fetch --prune` off the UI thread — results land via
+ * the watcher → `sync-updated`, never through this component.
  */
 export function FetchButton({
   onFetch,
@@ -41,11 +39,6 @@ export function FetchButton({
   const [open, setOpen] = useState(false);
   const [seconds, setSeconds] = useState(loadAutoFetchSeconds);
   const ref = useRef<HTMLDivElement>(null);
-
-  const onFetchRef = useRef(onFetch);
-  onFetchRef.current = onFetch;
-  const fetchingRef = useRef(fetching);
-  fetchingRef.current = fetching;
 
   // Close the popover on outside click / Escape (mirrors RepoMenu).
   useEffect(() => {
@@ -64,15 +57,10 @@ export function FetchButton({
     };
   }, [open]);
 
-  // Periodic fetch. Re-armed only on interval change; the tick skips while a
-  // fetch is already running so it never stacks concurrent git fetches.
+  // Hand the cadence to the sync engine on mount (the persisted value) and on
+  // every change — the engine owns the periodic fetch, this is just the knob.
   useEffect(() => {
-    if (seconds <= 0) return;
-    const id = setInterval(() => {
-      if (fetchingRef.current) return;
-      void onFetchRef.current();
-    }, seconds * 1000);
-    return () => clearInterval(id);
+    syncSetAutoFetch(seconds).catch((e) => console.warn('sync_set_auto_fetch_failed', e));
   }, [seconds]);
 
   const choose = (next: number) => {

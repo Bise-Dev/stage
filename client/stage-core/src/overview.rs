@@ -35,7 +35,7 @@ use ts_rs::TS;
 use crate::diff::diff_stats;
 use crate::domain::Review;
 use crate::error::StageError;
-use crate::github::{GitHub, PrFilter};
+use crate::github::{GhPullRequest, GitHub, PrFilter};
 use crate::repo_key::RepoKey;
 use crate::review_folder::{read_review_from_tree, StageReview};
 use crate::status::{is_archived, status_from_pr, ReviewRole, ReviewSignal, ReviewStatus};
@@ -156,15 +156,158 @@ struct LocalBranch {
     last_commit: Option<String>,
 }
 
+/// The GitHub half of the overview, fetched separately from the assembly so a
+/// long-lived caller (the background sync engine) can keep the last successful
+/// fetch and re-assemble against it when only local state moved — instead of
+/// re-asking `gh` on every recompute.
+#[derive(Debug, Clone)]
+pub struct OverviewGithubData {
+    /// My PRs, deduped (authored ordering wins over review-requested), each with
+    /// the role it was found under.
+    pub prs: Vec<(GhPullRequest, ReviewRole)>,
+    /// The `gh` token owner's login — attributes local draft rows.
+    pub me: Option<String>,
+}
+
+/// Fetch the GitHub half of the overview: the two `gh` PR searches (authored +
+/// review-requested, DB-1/DB-3) and the token owner's identity. Fail loud —
+/// any `gh` failure fails the whole call, never a partial result.
+pub fn fetch_overview_github(
+    gh: &GitHub,
+    repo_key: &RepoKey,
+) -> Result<OverviewGithubData, StageError> {
+    let repo_slug = format!("{}/{}", repo_key.repo_owner, repo_key.repo_name);
+    let authored = gh.list_repo_prs(&repo_slug, PrFilter::Authored)?;
+    let review_requested = gh.list_repo_prs(&repo_slug, PrFilter::ReviewRequested)?;
+    let me = gh.current_user()?.login;
+
+    let mut seen_numbers: HashSet<u32> = HashSet::new();
+    let mut prs = Vec::new();
+    for (pr, role) in authored.into_iter().map(|p| (p, ReviewRole::Author)).chain(
+        review_requested
+            .into_iter()
+            .map(|p| (p, ReviewRole::Reviewer)),
+    ) {
+        if seen_numbers.insert(pr.number) {
+            prs.push((pr, role));
+        }
+    }
+    Ok(OverviewGithubData { prs, me: Some(me) })
+}
+
+/// Memoizes the per-branch ± signals across overview recomputes, keyed by the
+/// commit OIDs the diff actually depends on: `(head, base)`. Resolving OIDs is
+/// cheap; the `diff_tree_to_tree` behind each signal is not — with the cache a
+/// branch only pays for a diff when its tip (or the base) moves. Hold one per
+/// repo (the sync engine does) and pass it to [`assemble_overview_with`]; a
+/// throwaway `SignalCache::default()` gives the uncached behaviour.
+#[derive(Default)]
+pub struct SignalCache {
+    branch: HashMap<(git2::Oid, git2::Oid), Option<ReviewSignal>>,
+    draft: HashMap<(git2::Oid, git2::Oid), ReviewSignal>,
+}
+
+impl SignalCache {
+    /// Cached [`branch_signal`]: same semantics (`None` for no comparable
+    /// base / no merge base), memoized on `(head, base)` commit OIDs.
+    fn branch_signal(
+        &mut self,
+        repo: &git2::Repository,
+        base: Option<&str>,
+        branch: &str,
+    ) -> Result<Option<ReviewSignal>, StageError> {
+        let Some(base) = base else { return Ok(None) };
+        let Ok(base_commit) = repo.revparse_single(base).and_then(|o| o.peel_to_commit()) else {
+            return Ok(None); // default base not resolvable in this clone
+        };
+        let head_commit = repo.revparse_single(branch)?.peel_to_commit()?;
+        let key = (head_commit.id(), base_commit.id());
+        if let Some(signal) = self.branch.get(&key) {
+            return Ok(*signal);
+        }
+        let signal = branch_signal(repo, Some(base), branch)?;
+        self.branch.insert(key, signal);
+        Ok(signal)
+    }
+
+    /// Cached [`draft_signal`]: memoized on the draft's resolved `(head, base)`
+    /// commit OIDs. When either ref can't be resolved for a key, fall through to
+    /// the uncached path so its behaviour (skip-row `None`, or the loud diff
+    /// failure) is preserved exactly.
+    fn draft_signal(
+        &mut self,
+        repo_root: &Path,
+        draft: &Review,
+    ) -> Result<Option<ReviewSignal>, StageError> {
+        let key = draft_oids(repo_root, draft)?;
+        if let Some(key) = key {
+            if let Some(signal) = self.draft.get(&key) {
+                return Ok(Some(*signal));
+            }
+        }
+        let signal = draft_signal(repo_root, draft)?;
+        if let (Some(key), Some(signal)) = (key, signal) {
+            self.draft.insert(key, signal);
+        }
+        Ok(signal)
+    }
+}
+
+/// The `(head, base)` commit OIDs a draft's signal depends on, or `None` when
+/// they don't both resolve (the uncached path then decides what that means).
+fn draft_oids(
+    repo_root: &Path,
+    draft: &Review,
+) -> Result<Option<(git2::Oid, git2::Oid)>, StageError> {
+    let repo = git2::Repository::discover(repo_root)?;
+    let resolve = |name: &str| {
+        repo.revparse_single(name)
+            .and_then(|o| o.peel_to_commit())
+            .map(|c| c.id())
+            .ok()
+    };
+    let head = resolve(&draft.head_ref).or_else(|| resolve(&format!("origin/{}", draft.head_ref)));
+    let base = resolve(&draft.base_ref);
+    Ok(head.zip(base))
+}
+
 /// Assemble the unified overview. With `github: Some`, any `gh` failure fails
 /// the whole call (fail loud — the caller may re-ask with `None` and surface
 /// the error next to the local view). `include_archived` flips the DB-5 filter.
+///
+/// A convenience wrapper over [`fetch_overview_github`] +
+/// [`assemble_overview_with`] for one-shot callers; the sync engine calls the
+/// parts separately so it can cache the GitHub half and the signal diffs.
 pub fn assemble_overview(
     store: &Store,
     github: Option<&GitHub>,
     repo_root: &Path,
     repo_key: &RepoKey,
     include_archived: bool,
+) -> Result<OverviewView, StageError> {
+    let data = github
+        .map(|gh| fetch_overview_github(gh, repo_key))
+        .transpose()?;
+    assemble_overview_with(
+        store,
+        repo_root,
+        repo_key,
+        data.as_ref(),
+        include_archived,
+        &mut SignalCache::default(),
+    )
+}
+
+/// Assemble the unified overview from already-fetched parts. `github: None`
+/// marks the purely-local view (`github_included: false`); `Some` merges the
+/// given PR search results without touching the network.
+pub fn assemble_overview_with(
+    store: &Store,
+    repo_root: &Path,
+    repo_key: &RepoKey,
+    github: Option<&OverviewGithubData>,
+    include_archived: bool,
+    cache: &mut SignalCache,
 ) -> Result<OverviewView, StageError> {
     let repo = git2::Repository::discover(repo_root)
         .map_err(|_| StageError::NotARepo(repo_root.to_path_buf()))?;
@@ -216,20 +359,9 @@ pub fn assemble_overview(
 
     // --- Source 2 (when included): my PRs via `gh` search --------------------
     let mut pr_heads: HashSet<String> = HashSet::new();
-    if let Some(gh) = github {
-        let repo_slug = format!("{}/{}", repo_key.repo_owner, repo_key.repo_name);
-        let authored = gh.list_repo_prs(&repo_slug, PrFilter::Authored)?;
-        let review_requested = gh.list_repo_prs(&repo_slug, PrFilter::ReviewRequested)?;
-
-        let mut seen_numbers: HashSet<u32> = HashSet::new();
-        for (pr, role) in authored
-            .iter()
-            .map(|p| (p, ReviewRole::Author))
-            .chain(review_requested.iter().map(|p| (p, ReviewRole::Reviewer)))
-        {
-            if !seen_numbers.insert(pr.number) {
-                continue; // deduped — authored ordering wins over review-requested
-            }
+    if let Some(data) = github {
+        for (pr, role) in &data.prs {
+            let role = *role;
             pr_heads.insert(pr.head_ref_name.clone());
             let status = status_from_pr(pr);
             // Checkout-free probe: the committed Review at the head, if any —
@@ -265,10 +397,7 @@ pub fn assemble_overview(
     }
 
     // --- Source 1: pre-publish drafts (this machine) -------------------------
-    let me = github
-        .map(|gh| gh.current_user())
-        .transpose()?
-        .map(|u| u.login);
+    let me = github.and_then(|data| data.me.clone());
     let mut draft_heads: HashSet<String> = HashSet::new();
     for draft in store.list_review_drafts(&repo_key.repo_owner, &repo_key.repo_name)? {
         if pr_heads.contains(&draft.head_ref) {
@@ -276,7 +405,7 @@ pub fn assemble_overview(
         }
         // Accepted DB-1 risk: a draft only appears for a branch present in this
         // clone (documented per-machine behaviour, mirrors the dashboard).
-        let Some(signal) = draft_signal(repo_root, &draft)? else {
+        let Some(signal) = cache.draft_signal(repo_root, &draft)? else {
             tracing::debug!(
                 branch = %draft.head_ref,
                 "overview_draft_branch_absent: skipped (not present in this clone)"
@@ -333,7 +462,7 @@ pub fn assemble_overview(
                 base_ref: Some(committed.meta.base_ref.clone()),
                 status: None,
                 role: ReviewRole::Author,
-                signal: branch_signal(&repo, signal_base.as_deref(), &b.name)?,
+                signal: cache.branch_signal(&repo, signal_base.as_deref(), &b.name)?,
                 stage_guided: true,
                 archived: false,
                 pr_number: committed.meta.pr_number,
@@ -356,7 +485,7 @@ pub fn assemble_overview(
             signal: if meta.as_ref().is_some_and(|m| m.is_default) {
                 None // the default branch has no base to compare against
             } else {
-                branch_signal(&repo, signal_base.as_deref(), &b.name)?
+                cache.branch_signal(&repo, signal_base.as_deref(), &b.name)?
             },
             stage_guided: false,
             archived: false,
@@ -604,6 +733,91 @@ mod tests {
             .iter()
             .find(|r| r.branch == b)
             .unwrap_or_else(|| panic!("no row for {b}: {:#?}", view.rows))
+    }
+
+    /// A PR surfaced by both searches keeps one entry, with the Author role
+    /// (authored ordering wins over review-requested).
+    #[cfg(unix)]
+    #[test]
+    fn fetch_overview_github_dedupes_authored_over_review_requested() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // The same PR #1 comes back from both searches (e.g. self-requested
+        // review); #3 is review-requested only.
+        let authored = r#"[
+          {"number":1,"title":"Mine","state":"OPEN","url":"https://gh/1","headRefName":"feat/mine","baseRefName":"main","isDraft":false,"additions":5,"deletions":2,"reviewDecision":"","author":{"login":"me"},"comments":[]}
+        ]"#;
+        let reviewer = r#"[
+          {"number":1,"title":"Mine","state":"OPEN","url":"https://gh/1","headRefName":"feat/mine","baseRefName":"main","isDraft":false,"additions":5,"deletions":2,"reviewDecision":"","author":{"login":"me"},"comments":[]},
+          {"number":3,"title":"Their PR","state":"OPEN","url":"https://gh/3","headRefName":"feat/their","baseRefName":"main","isDraft":false,"additions":7,"deletions":1,"reviewDecision":"","author":{"login":"them"},"comments":[]}
+        ]"#;
+        std::fs::write(dir.join("authored.json"), authored).unwrap();
+        std::fs::write(dir.join("reviewer.json"), reviewer).unwrap();
+        let body = format!(
+            "#!/usr/bin/env bash\n\
+             if [ \"$1\" = auth ] && [ \"$2\" = status ]; then exit 0; fi\n\
+             if [ \"$1\" = api ] && [ \"$2\" = user ]; then echo '{{\"login\":\"me\",\"id\":1,\"name\":\"Me\"}}'; exit 0; fi\n\
+             case \"$*\" in\n\
+               *review-requested*) cat {reviewer:?} ;;\n\
+               *) cat {authored:?} ;;\n\
+             esac\n\
+             exit 0\n",
+            reviewer = dir.join("reviewer.json").to_string_lossy(),
+            authored = dir.join("authored.json").to_string_lossy(),
+        );
+        let gh = GitHub::with_bins(write_script(dir, "gh", &body), "git");
+
+        let data = fetch_overview_github(&gh, &key()).unwrap();
+        assert_eq!(data.me.as_deref(), Some("me"));
+        assert_eq!(data.prs.len(), 2, "PR #1 deduped: {:#?}", data.prs);
+        let one = data.prs.iter().find(|(p, _)| p.number == 1).unwrap();
+        assert_eq!(one.1, ReviewRole::Author, "authored wins the role");
+        let three = data.prs.iter().find(|(p, _)| p.number == 3).unwrap();
+        assert_eq!(three.1, ReviewRole::Reviewer);
+    }
+
+    /// The signal memo never serves a stale diff: a new commit moves the
+    /// branch tip (a new cache key), so the recomputed signal reflects it —
+    /// while an untouched branch's signal stays identical across recomputes.
+    #[test]
+    fn signal_cache_recomputes_when_the_tip_moves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        setup_repo(root);
+        let store = Store::open(&root.join("store.sqlite3")).unwrap();
+        store
+            .create_review_draft(
+                &RepoKey {
+                    repo_owner: "octo".into(),
+                    repo_name: "stage".into(),
+                    branch: "feat/draft".into(),
+                },
+                "Draft work",
+                "main",
+            )
+            .unwrap();
+
+        let mut cache = SignalCache::default();
+        let first = assemble_overview_with(&store, root, &key(), None, false, &mut cache).unwrap();
+        let s1 = by_branch(&first, "feat/draft").signal.unwrap();
+
+        // Grow the draft branch: the tip moves, the cache key changes.
+        git(root, &["checkout", "-q", "feat/draft"]);
+        std::fs::write(root.join("more.rs"), "fn more() {}\nfn lines() {}\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "grow"]);
+        git(root, &["checkout", "-q", "main"]);
+
+        let second = assemble_overview_with(&store, root, &key(), None, false, &mut cache).unwrap();
+        let s2 = by_branch(&second, "feat/draft").signal.unwrap();
+        assert!(
+            s2.added > s1.added,
+            "the new commit must show up, never a stale cached signal: {s1:?} → {s2:?}"
+        );
+
+        // And a third pass with nothing changed serves the same values.
+        let third = assemble_overview_with(&store, root, &key(), None, false, &mut cache).unwrap();
+        assert_eq!(second, third);
     }
 
     #[test]

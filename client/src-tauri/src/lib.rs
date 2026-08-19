@@ -6,6 +6,7 @@ mod git;
 mod recents;
 mod repo_activation;
 mod state;
+mod sync;
 mod watcher;
 
 use std::path::PathBuf;
@@ -138,6 +139,24 @@ pub fn run() {
                 .items(&[&app_menu, &edit_menu, &window_menu])
                 .build()
         })
+        // The sync engine adapts its GitHub poll cadence to window focus
+        // (~30s focused, minutes unfocused, an immediate poll on regain).
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(focused) = event {
+                use tauri::Manager;
+                if let Some(active) = window
+                    .app_handle()
+                    .state::<AppState>()
+                    .active
+                    .lock()
+                    .as_ref()
+                {
+                    active
+                        .sync
+                        .send(crate::sync::SyncMsg::WindowFocus(*focused));
+                }
+            }
+        })
         .on_menu_event(|app, event| {
             if event.id().as_ref() == "settings" {
                 // Fail-loud (CLAUDE.md): a failed emit means the menu item is
@@ -169,6 +188,8 @@ pub fn run() {
             app.manage(AppState {
                 active: Mutex::new(None),
                 recents: Arc::new(recents),
+                // Off until the webview seeds it from its persisted setting.
+                auto_fetch_secs: Mutex::new(0),
                 // Shared credential-free GitHub adapter (ADR-0022 §5): its `gh`
                 // auth gate + `gh api user` identity resolve once and are reused by
                 // every GitHub command. Stage holds no token of its own. `Arc` so
@@ -199,6 +220,11 @@ pub fn run() {
             commands::self_review_diff,
             commands::self_review_base_options,
             commands::overview,
+            commands::sync_status,
+            commands::sync_now,
+            commands::sync_watch_pr,
+            commands::sync_unwatch_pr,
+            commands::sync_set_auto_fetch,
             commands::storyline_staleness,
             commands::git_fetch,
             commands::git_push,

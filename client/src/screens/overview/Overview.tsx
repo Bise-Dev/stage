@@ -11,18 +11,20 @@ import {
   type OverviewRow,
   type PrRef,
   type ReviewStatus,
+  type SyncStatus,
   getActiveRepo,
   ghIdentity,
   gitFetch,
   gitRemoteBranches,
-  onRepoChanged,
-  onWorktreesChanged,
+  onSyncUpdated,
   openUrl,
   overview,
   repoSummary,
   reviewDraftCreate,
   reviewDraftDiscard,
   setFocusedWorktree,
+  syncNow,
+  syncStatus,
 } from '../../tauri';
 import { relativeTime, relativeTimeFromEpoch } from '../../time';
 
@@ -95,8 +97,9 @@ export function Overview({
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [rows, setRows] = useState<OverviewRow[]>([]);
   const [githubIncluded, setGithubIncluded] = useState(true);
-  // `gh` failed: the local view still renders, this carries the loud cause.
-  const [githubError, setGithubError] = useState<string | null>(null);
+  // The sync engine's status: freshness timestamps + the loud, verbatim causes
+  // of a degraded GitHub poll / failed local assembly / failed auto-fetch.
+  const [sync, setSync] = useState<SyncStatus | null>(null);
   // Even the local assembly failed: nothing renders but this banner.
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [me, setMe] = useState<GitHubUser | null>(null);
@@ -118,35 +121,24 @@ export function Overview({
     setNewReviewOpen(true);
   }, []);
 
-  // One load in flight at a time: the repo watcher fires on *any* common-dir
-  // activity (commits, fetches — an over-eager signal), and every load hits
-  // `gh`. Overlapping calls are dropped, not queued; the next event reloads.
+  // One load in flight at a time. Loads are snapshot reads (the sync engine
+  // owns freshness — `gh` is never on this path), so this guard only drops
+  // redundant event-driven reloads; the next event reloads.
   const loadInFlight = useRef(false);
   const load = useCallback(async (withArchived: boolean) => {
     if (loadInFlight.current) return;
     loadInFlight.current = true;
     try {
-      const view = await overview(withArchived, true);
+      const view = await overview(withArchived);
       setRows(view.rows);
       setGithubIncluded(view.githubIncluded);
-      setGithubError(null);
       setOverviewError(null);
     } catch (e) {
-      // Fail loud (CLAUDE.md): surface the `gh` failure verbatim — then re-ask
-      // for the purely-local view so local work still renders next to the
-      // error (ID-3 #56). If even that fails, the whole screen says so.
-      console.warn('overview_github_failed', e);
-      setGithubError(String(e));
-      try {
-        const view = await overview(withArchived, false);
-        setRows(view.rows);
-        setGithubIncluded(false);
-        setOverviewError(null);
-      } catch (e2) {
-        console.warn('overview_local_failed', e2);
-        setOverviewError(String(e2));
-        setRows([]);
-      }
+      // Fail loud (CLAUDE.md): only the local assembly can fail this call now
+      // (a `gh` outage degrades the sync status chip instead) — say so.
+      console.warn('overview_load_failed', e);
+      setOverviewError(String(e));
+      setRows([]);
     } finally {
       loadInFlight.current = false;
     }
@@ -170,21 +162,26 @@ export function Overview({
     ghIdentity()
       .then(setMe)
       .catch(() => setMe(null));
+    // Seed the freshness/degraded chips; live values ride on `sync-updated`.
+    syncStatus()
+      .then(setSync)
+      .catch((e) => console.warn('sync_status_failed', e));
   }, []);
 
   useEffect(() => {
     void load(showArchived);
   }, [load, showArchived]);
 
-  // Live refresh on repo / worktree changes (an externally created worktree or
-  // commit appears without a manual fetch). `load` is idempotent.
+  // Live refresh: the sync engine pings whenever the snapshot changed (a local
+  // commit/branch/worktree/draft change, or a GitHub poll landing new rows).
+  // Every event carries the current SyncStatus for the chips.
   useEffect(() => {
-    const offs = [
-      onRepoChanged(() => void load(showArchived)),
-      onWorktreesChanged(() => void load(showArchived)),
-    ];
+    const off = onSyncUpdated((u) => {
+      setSync(u.status);
+      if (u.scope === 'overview') void load(showArchived);
+    });
     return () => {
-      for (const off of offs) void off.then((f) => f());
+      void off.then((f) => f());
     };
   }, [load, showArchived]);
 
@@ -205,7 +202,9 @@ export function Overview({
         setFetchError(String(e));
         return;
       }
-      await load(showArchived);
+      // The fetched refs land via the watcher; this also re-polls GitHub now.
+      // Row updates arrive through `sync-updated` — nothing to await here.
+      await syncNow();
     } finally {
       setFetching(false);
     }
@@ -434,6 +433,7 @@ export function Overview({
                   onChange={(e) => setQuery(e.target.value)}
                 />
               </div>
+              <SyncedAgo status={sync} />
               <FetchButton onFetch={runFetch} fetching={fetching} />
               <button
                 type="button"
@@ -445,8 +445,16 @@ export function Overview({
             </div>
 
             {fetchError && <ErrorNote>Fetch failed: {fetchError}</ErrorNote>}
-            {githubError && (
-              <ErrorNote>Couldn't reach GitHub — showing local work only: {githubError}</ErrorNote>
+            {sync?.githubState === 'degraded' && sync.githubError && (
+              <ErrorNote>
+                GitHub sync degraded — showing the last synced state: {sync.githubError}
+              </ErrorNote>
+            )}
+            {sync?.autoFetchError && (
+              <ErrorNote>Background fetch failed: {sync.autoFetchError}</ErrorNote>
+            )}
+            {sync?.localError && (
+              <ErrorNote>Couldn't refresh the overview: {sync.localError}</ErrorNote>
             )}
             {overviewError && <ErrorNote>Couldn't load the overview: {overviewError}</ErrorNote>}
 
@@ -681,6 +689,26 @@ function useRailResize(setRailWidth: (fn: (w: number) => number) => void) {
     else if (e.key === 'ArrowRight') setRailWidth((w) => clampRail(w + 16));
   };
   return { railRef, handleRef, startResize, onResizeKey };
+}
+
+/** "Updated 12s ago" — when the GitHub side last synced, ticking every 10s so
+ *  the relative time stays honest. Quiet until the first poll lands; a
+ *  degraded poll gets its own banner instead. */
+function SyncedAgo({ status }: { status: SyncStatus | null }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 10_000);
+    return () => clearInterval(id);
+  }, []);
+  if (!status?.githubSyncedAt) return null;
+  return (
+    <span
+      title="Last successful GitHub sync"
+      style={{ fontSize: 11, color: 'var(--gray-500)', flex: '0 0 auto', whiteSpace: 'nowrap' }}
+    >
+      Updated {relativeTimeFromEpoch(Math.floor(status.githubSyncedAt / 1000))}
+    </span>
+  );
 }
 
 function ErrorNote({ children }: { children: ReactNode }) {

@@ -14,6 +14,7 @@ use crate::errors::AppError;
 use crate::git;
 use crate::recents::RecentRepo;
 use crate::state::{ActiveRepo, AppState, OpenIntent};
+use crate::sync::{self, SyncMsg, SyncStatus};
 use crate::watcher;
 
 /// The active repo's working-tree path, or `NoActiveRepo`. The Self-Review
@@ -26,6 +27,26 @@ fn active_repo_path(state: &State<'_, AppState>) -> Result<PathBuf, AppError> {
         .lock()
         .as_ref()
         .map(|a| a.path.clone())
+        .ok_or(AppError::NoActiveRepo)
+}
+
+/// Nudge the active repo's sync engine. A no-op without an active repo — the
+/// nudge is best-effort freshness, never a correctness dependency.
+fn nudge_sync(state: &State<'_, AppState>, msg: SyncMsg) {
+    if let Some(active) = state.active.lock().as_ref() {
+        active.sync.send(msg);
+    }
+}
+
+/// A snapshot receiver for the active repo's sync engine.
+fn sync_snapshot_rx(
+    state: &State<'_, AppState>,
+) -> Result<tokio::sync::watch::Receiver<sync::Snapshot>, AppError> {
+    state
+        .active
+        .lock()
+        .as_ref()
+        .map(|a| a.sync.snapshot_rx())
         .ok_or(AppError::NoActiveRepo)
 }
 
@@ -58,14 +79,30 @@ pub fn set_active_repo(
     // worktree (root or linked) touches one entry, not one per directory.
     state.recents.touch(&activation.root)?;
 
+    // The background sync engine owns this repo's overview snapshot + GitHub
+    // poller; the watchers feed it. One engine at a time — replacing the
+    // activation drops (aborts) the previous one.
+    let engine = sync::spawn(
+        app.clone(),
+        Arc::clone(&state.github),
+        activation.focused.clone(),
+        *state.auto_fetch_secs.lock(),
+    );
+
     // Watch the focused worktree (diff refresh). The focused path drives every
     // path-keyed command.
-    let watcher = watcher::spawn(app.clone(), activation.focused.clone(), common_dir.clone())?;
+    let watcher = watcher::spawn(
+        app.clone(),
+        activation.focused.clone(),
+        common_dir.clone(),
+        engine.sender(),
+    )?;
 
     *state.active.lock() = Some(ActiveRepo {
         path: activation.focused.clone(),
         common_dir,
         watcher,
+        sync: engine,
     });
 
     Ok(RepoInfo {
@@ -220,11 +257,25 @@ pub fn set_focused_worktree(
         ))
     })?;
 
-    let watcher = watcher::spawn(app.clone(), focused.clone(), common_dir.clone())?;
+    // Re-spawn the engine on the newly focused worktree (its HEAD drives the
+    // `is_current` flag and the draft keying). GitHub state re-polls promptly.
+    let engine = sync::spawn(
+        app.clone(),
+        Arc::clone(&state.github),
+        focused.clone(),
+        *state.auto_fetch_secs.lock(),
+    );
+    let watcher = watcher::spawn(
+        app.clone(),
+        focused.clone(),
+        common_dir.clone(),
+        engine.sender(),
+    )?;
     *state.active.lock() = Some(ActiveRepo {
         path: focused.clone(),
         common_dir,
         watcher,
+        sync: engine,
     });
 
     Ok(RepoInfo { path: focused })
@@ -316,37 +367,95 @@ pub fn git_diff_files(
 /// drafts, published Reviews, and my GitHub PRs — one row list, every row's
 /// state derived in Rust (TS only buckets and renders).
 ///
-/// `include_github: false` returns the purely-local view — the screen uses it
-/// after a loud `gh` failure so local work never needs auth (ID-3 #56), and the
-/// view says GitHub wasn't consulted rather than implying it was empty.
-/// `include_archived` flips the DB-5 view filter. Async (ADR-0023): the
-/// blocking `gh` PR search + `git`/store reads run in `spawn_blocking`, off
-/// the UI thread, so the window stays responsive while the webview shows its
-/// spinner.
+/// Served **from the sync engine's snapshot** — a microsecond read, never a
+/// `gh` round-trip. GitHub rows are whatever the engine's last successful poll
+/// merged (its degraded state is on [`SyncStatus`], surfaced as a chip, not a
+/// failed overview); `github_included: false` still marks a session where
+/// GitHub has never been consulted so local work needs no auth (ID-3 #56).
+/// `include_archived` flips the DB-5 view filter. Async only to await the
+/// engine's **first** pass right after activation.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn overview(
     state: State<'_, AppState>,
     include_archived: bool,
-    include_github: bool,
 ) -> Result<stage_core::OverviewView, AppError> {
-    let path = active_repo_path(&state)?;
-    let github = Arc::clone(&state.github);
-    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::OverviewView, AppError> {
-        let key = repo_key_from_cwd(&path)?;
-        let repo_root = stage_core::repo_root_from_cwd(&path)?;
-        let store = Store::open_default()?;
-        let gh = include_github.then_some(github.as_ref());
-        Ok(stage_core::assemble_overview(
-            &store,
-            gh,
-            &repo_root,
-            &key,
-            include_archived,
-        )?)
-    })
+    let mut rx = sync_snapshot_rx(&state)?;
+    let snap = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        rx.wait_for(|s| s.overview.is_some() || s.status.local_error.is_some()),
+    )
     .await
-    .map_err(|e| AppError::Backend(format!("overview_join_error: {e}")))?
+    .map_err(|_| {
+        AppError::Backend("overview: timed out waiting for the sync engine's first pass".into())
+    })?
+    .map_err(|_| AppError::Backend("overview: the sync engine stopped".into()))?
+    .clone();
+
+    match snap.overview {
+        Some(mut view) => {
+            if !include_archived {
+                // DB-5 #88: a *view* filter — the snapshot always carries all.
+                view.rows.retain(|r| !r.archived);
+            }
+            Ok(view)
+        }
+        // First assembly failed: fail loud with the engine's verbatim cause.
+        None => {
+            Err(AppError::Backend(snap.status.local_error.unwrap_or_else(
+                || "overview: no snapshot available".to_string(),
+            )))
+        }
+    }
+}
+
+// --- Sync engine surface (freshness status + nudges) --------------------------
+
+/// The sync engine's current status — freshness timestamps, degraded state,
+/// the watched PR. The same payload rides on every `sync-updated` event; this
+/// command seeds a screen's initial render.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus, AppError> {
+    Ok(sync_snapshot_rx(&state)?.borrow().status.clone())
+}
+
+/// Sync now: re-assemble local state and poll GitHub immediately (the manual
+/// Fetch action, focus-independent). Returns immediately; results arrive via
+/// `sync-updated`.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn sync_now(state: State<'_, AppState>) -> Result<(), AppError> {
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    nudge_sync(&state, SyncMsg::PollGithubNow);
+    Ok(())
+}
+
+/// Local Review opened `pr_number` — deep-poll its activity on the poll cadence
+/// and push `sync-updated {scope: "pr"}` when it changes.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn sync_watch_pr(state: State<'_, AppState>, pr_number: u32) -> Result<(), AppError> {
+    nudge_sync(&state, SyncMsg::WatchPr(pr_number));
+    Ok(())
+}
+
+/// Local Review closed — stop deep-polling.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn sync_unwatch_pr(state: State<'_, AppState>) -> Result<(), AppError> {
+    nudge_sync(&state, SyncMsg::UnwatchPr);
+    Ok(())
+}
+
+/// Set the background `git fetch` cadence (seconds; 0 = off). Persisted on app
+/// state so a repo switch re-seeds the new engine with it.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn sync_set_auto_fetch(state: State<'_, AppState>, seconds: u32) -> Result<(), AppError> {
+    *state.auto_fetch_secs.lock() = seconds;
+    nudge_sync(&state, SyncMsg::SetAutoFetch(seconds));
+    Ok(())
 }
 
 /// The unified storyline-staleness check (ST-1 #89) for the active repo+branch:
@@ -431,6 +540,8 @@ pub async fn git_push(
     tauri::async_runtime::spawn_blocking(move || git::push(&repo, &branch))
         .await
         .map_err(|e| AppError::Backend(format!("git_push_join_error: {e}")))?
+        // A successful GitHub write: re-poll so the overview reflects it promptly.
+        .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 #[tauri::command]
@@ -644,7 +755,10 @@ pub fn review_draft_create(
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
-    Ok(store.create_review_draft(&key, &title, &base_ref)?)
+    let review = store.create_review_draft(&key, &title, &base_ref)?;
+    // Skip the store watcher's debounce so the new draft row lands promptly.
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    Ok(review)
 }
 
 /// Rename the draft Review (WS-3 #61) — the human-readable title only. Fails loud
@@ -658,7 +772,9 @@ pub fn review_draft_set_title(
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
-    Ok(store.set_review_title(&key, &title)?)
+    let review = store.set_review_title(&key, &title)?;
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    Ok(review)
 }
 
 /// Discard the draft Review (GAP-1 #91): pre-publish only — deletes the draft row
@@ -681,7 +797,9 @@ pub fn review_draft_discard(
         key.branch = branch;
     }
     let store = Store::open_default()?;
-    Ok(store.discard_review_draft(&key)?)
+    let removed = store.discard_review_draft(&key)?;
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    Ok(removed)
 }
 
 /// Change the draft Review's base (target) branch pre-publish (GAP-2 #92). The
@@ -696,7 +814,9 @@ pub fn review_draft_set_base(
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
-    Ok(store.set_review_base_ref(&key, &base_ref)?)
+    let review = store.set_review_base_ref(&key, &base_ref)?;
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    Ok(review)
 }
 
 /// The draft storyline steps for the active repo + branch, in author order
@@ -918,6 +1038,8 @@ pub async fn review_publish(
     })
     .await
     .map_err(|e| AppError::Backend(format!("review_publish_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 // --- Native GitHub review & verdict (RW-1..5, ADR-0022 §4/§8, milestone E) ----
@@ -929,20 +1051,48 @@ pub async fn review_publish(
 
 /// Read everything the reviewer needs about a PR's existing activity in one shot
 /// (RW-4): state, verdict decision, reviews, conversation + line comments, checks.
+///
+/// `prefer_cached: true` serves the sync engine's deep-poll cache when it holds
+/// this PR (the event-driven reload path — the engine literally just fetched
+/// it). `false` always re-fetches (mount, and after the viewer's own writes,
+/// where serving a pre-write cache would hide their action) and feeds the
+/// result back to the engine so its change detection has the newest baseline.
 #[tauri::command]
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
 pub async fn pr_activity(
     state: State<'_, AppState>,
     pr_number: u32,
+    prefer_cached: bool,
 ) -> Result<stage_core::PrActivity, AppError> {
+    if prefer_cached {
+        if let Ok(rx) = sync_snapshot_rx(&state) {
+            let cached = rx.borrow().pr.clone();
+            if let Some(entry) = cached {
+                // The sanity bound keeps a long-dormant cache from serving (the
+                // engine polls far more often than this while watching).
+                if entry.number == pr_number
+                    && entry.fetched_at.elapsed() < std::time::Duration::from_secs(60)
+                {
+                    return Ok(entry.activity);
+                }
+            }
+        }
+    }
     let path = active_repo_path(&state)?;
     let github = Arc::clone(&state.github);
-    tauri::async_runtime::spawn_blocking(move || -> Result<stage_core::PrActivity, AppError> {
-        let repo_root = stage_core::repo_root_from_cwd(&path)?;
-        Ok(github.read_pr_activity(&repo_root, pr_number)?)
-    })
+    let activity = tauri::async_runtime::spawn_blocking(
+        move || -> Result<stage_core::PrActivity, AppError> {
+            let repo_root = stage_core::repo_root_from_cwd(&path)?;
+            Ok(github.read_pr_activity(&repo_root, pr_number)?)
+        },
+    )
     .await
-    .map_err(|e| AppError::Backend(format!("pr_activity_join_error: {e}")))?
+    .map_err(|e| AppError::Backend(format!("pr_activity_join_error: {e}")))??;
+    nudge_sync(
+        &state,
+        SyncMsg::PrFetched(pr_number, Box::new(activity.clone())),
+    );
+    Ok(activity)
 }
 
 /// Submit the overall review **verdict** (RW-3, ADR-0022 §8): `approve` /
@@ -967,6 +1117,8 @@ pub async fn pr_submit_verdict(
     )
     .await
     .map_err(|e| AppError::Backend(format!("pr_submit_verdict_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 /// Post a single inline review comment anchored to a diff line (RW-2).
@@ -985,6 +1137,8 @@ pub async fn pr_comment_on_line(
     })
     .await
     .map_err(|e| AppError::Backend(format!("pr_comment_on_line_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 /// Post a file-level review comment (RW-2) — not anchored to a specific line.
@@ -1004,6 +1158,8 @@ pub async fn pr_comment_on_file(
     })
     .await
     .map_err(|e| AppError::Backend(format!("pr_comment_on_file_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 /// Merge the PR (RW-5) with the given method (`merge`/`squash`/`rebase`).
@@ -1023,6 +1179,8 @@ pub async fn pr_merge(
     })
     .await
     .map_err(|e| AppError::Backend(format!("pr_merge_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 /// Close the PR without merging (RW-5).
@@ -1038,6 +1196,8 @@ pub async fn pr_close(state: State<'_, AppState>, pr_number: u32) -> Result<(), 
     })
     .await
     .map_err(|e| AppError::Backend(format!("pr_close_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 /// Flip the PR's draft status (RW-5): `true` → mark draft, `false` → ready.
@@ -1057,6 +1217,8 @@ pub async fn pr_set_draft(
     })
     .await
     .map_err(|e| AppError::Backend(format!("pr_set_draft_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 // --- Per-step PR discussion (IC-1..3, ADR-0022 §4, milestone E) ---------------
@@ -1109,6 +1271,8 @@ pub async fn pr_start_thread(
     })
     .await
     .map_err(|e| AppError::Backend(format!("pr_start_thread_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 /// Reply to an existing thread (IC-1), addressing its root comment id.
@@ -1128,6 +1292,8 @@ pub async fn pr_reply_thread(
     })
     .await
     .map_err(|e| AppError::Backend(format!("pr_reply_thread_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 /// Resolve a review thread (IC-2), by its GraphQL node id. Returns whether the
@@ -1146,6 +1312,8 @@ pub async fn pr_resolve_thread(
     })
     .await
     .map_err(|e| AppError::Backend(format!("pr_resolve_thread_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 /// Reopen a resolved review thread (IC-2), by its GraphQL node id.
@@ -1163,6 +1331,8 @@ pub async fn pr_reopen_thread(
     })
     .await
     .map_err(|e| AppError::Backend(format!("pr_reopen_thread_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 /// Edit one's own thread comment (IC-3), by its REST comment id. GitHub enforces
@@ -1182,6 +1352,8 @@ pub async fn pr_edit_comment(
     })
     .await
     .map_err(|e| AppError::Backend(format!("pr_edit_comment_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 /// Delete one's own thread comment (IC-3), by its REST comment id. GitHub
@@ -1201,4 +1373,6 @@ pub async fn pr_delete_comment(
     })
     .await
     .map_err(|e| AppError::Backend(format!("pr_delete_comment_join_error: {e}")))?
+    // A successful GitHub write: re-poll so the overview reflects it promptly.
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }

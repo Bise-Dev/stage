@@ -29,6 +29,7 @@ import type { DraftLineComment } from './generated/DraftLineComment';
 import type { FetchOutcome } from './generated/FetchOutcome';
 import type { FileStatus } from './generated/FileStatus';
 import type { GitHubUser } from './generated/GitHubUser';
+import type { GithubSyncState } from './generated/GithubSyncState';
 import type { IssueComment } from './generated/IssueComment';
 import type { LineComment } from './generated/LineComment';
 import type { LocalDefault } from './generated/LocalDefault';
@@ -76,6 +77,9 @@ import type { StorylinePreview } from './generated/StorylinePreview';
 import type { StorylineStep } from './generated/StorylineStep';
 import type { StorylineStepView } from './generated/StorylineStepView';
 import type { SubmittedVerdict } from './generated/SubmittedVerdict';
+import type { SyncScope } from './generated/SyncScope';
+import type { SyncStatus } from './generated/SyncStatus';
+import type { SyncUpdate } from './generated/SyncUpdate';
 import type { ThreadComment } from './generated/ThreadComment';
 import type { UncommittedDisposition } from './generated/UncommittedDisposition';
 import type { UncommittedFile } from './generated/UncommittedFile';
@@ -152,6 +156,10 @@ export type {
   ReviewThread,
   StepThreads,
   SubmittedVerdict,
+  SyncScope,
+  SyncStatus,
+  SyncUpdate,
+  GithubSyncState,
   ThreadComment,
   Verdict,
 };
@@ -253,12 +261,49 @@ export const selfReviewBaseOptions = () => invoke<BaseOptions>('self_review_base
  * published Reviews, and my GitHub PRs — one row list, every row's state
  * derived in Rust (this is the pure-render boundary; the screen only buckets
  * by `kind` and displays).
- * `includeArchived` flips the DB-5 view filter (closed/merged PRs hidden by
- * default). `includeGithub: false` asks for the purely-local view — used after
- * a loud `gh` failure so local rows still render next to the error (ID-3 #56).
+ *
+ * Served from the background sync engine's snapshot — effectively instant, and
+ * kept fresh by the engine (watchers + adaptive GitHub polling). Reload it when
+ * {@link onSyncUpdated} fires with the `overview` scope. A `gh` outage never
+ * fails this call: the last good GitHub rows keep serving and the degraded
+ * state rides on {@link SyncStatus}. `includeArchived` flips the DB-5 view
+ * filter (closed/merged PRs hidden by default).
  */
-export const overview = (includeArchived: boolean, includeGithub: boolean) =>
-  invoke<OverviewView>('overview', { includeArchived, includeGithub });
+export const overview = (includeArchived: boolean) =>
+  invoke<OverviewView>('overview', { includeArchived });
+
+// --- Background sync engine (freshness status + nudges) ---
+// One engine per active repo owns the overview snapshot, polls GitHub on an
+// adaptive cadence, and emits `sync-updated` events; screens re-invoke the
+// cheap snapshot reads on their scope.
+
+/** The engine's current status (freshness timestamps, degraded state, watched
+ *  PR) — the same payload every `sync-updated` event carries; call once on
+ *  mount to seed the chips. */
+export const syncStatus = () => invoke<SyncStatus>('sync_status');
+
+/** Sync now: re-assemble local state and poll GitHub immediately (the manual
+ *  refresh action). Fire-and-forget — results arrive via `sync-updated`. */
+export const syncNow = () => invoke<void>('sync_now');
+
+/** Local Review opened this PR — deep-poll its activity on the poll cadence;
+ *  changes arrive as `sync-updated {scope: 'pr'}`. */
+export const syncWatchPr = (prNumber: number) => invoke<void>('sync_watch_pr', { prNumber });
+
+/** Local Review closed — stop deep-polling. */
+export const syncUnwatchPr = () => invoke<void>('sync_unwatch_pr');
+
+/** Set the background `git fetch` cadence (seconds; 0 = off). Survives repo
+ *  switches (held on app state, re-seeds each engine). */
+export const syncSetAutoFetch = (seconds: number) =>
+  invoke<void>('sync_set_auto_fetch', { seconds });
+
+/** Fires whenever the sync engine changed something: `overview` (rows), `pr`
+ *  (the watched PR's activity), or `status` (freshness/degraded only). The
+ *  payload carries the full current {@link SyncStatus}. Returns the unlisten
+ *  handle. */
+export const onSyncUpdated = (cb: (update: SyncUpdate) => void): Promise<UnlistenFn> =>
+  listen<SyncUpdate>('sync-updated', (event) => cb(event.payload));
 
 /**
  * The unified storyline-staleness check (ST-1, ADR-0022 §7) for the active
@@ -381,8 +426,13 @@ export const reviewPublish = (req: PublishRequest) =>
 // number; the active repo's clone is resolved on the Rust side.
 
 /** Read a PR's existing activity in one shot (RW-4): state, verdict decision,
- *  reviews, conversation + line comments, and CI checks. */
-export const prActivity = (prNumber: number) => invoke<PrActivity>('pr_activity', { prNumber });
+ *  reviews, conversation + line comments, and CI checks.
+ *  `preferCached: true` serves the sync engine's deep-poll cache when it holds
+ *  this PR — the event-driven reload path (`sync-updated {scope:'pr'}` means
+ *  the engine just fetched it). Pass `false` on mount and after the viewer's
+ *  own writes, where a pre-write cache would hide their action. */
+export const prActivity = (prNumber: number, preferCached = false) =>
+  invoke<PrActivity>('pr_activity', { prNumber, preferCached });
 
 /** Submit the overall review verdict (RW-3): `approve` / `requestChanges` /
  *  `comment`, with a summary body and an optional batch of line comments.
