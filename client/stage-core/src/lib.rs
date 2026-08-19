@@ -24,6 +24,7 @@ pub mod staleness;
 pub mod status;
 pub mod store;
 pub mod storyline;
+pub mod viewed;
 pub mod worktree;
 
 pub use base::{base_options, branch_head_sha, BaseOptions, LocalDefault};
@@ -40,7 +41,8 @@ pub use error::StageError;
 pub use github::{GhAuthor, GhPullRequest, GitHub, GitHubUser, PrFilter};
 pub use overview::{
     assemble_overview, assemble_overview_with, fetch_overview_github, BranchMeta,
-    OverviewGithubData, OverviewKind, OverviewRow, OverviewView, SignalCache, WorktreeMeta,
+    OverviewGithubData, OverviewKind, OverviewRow, OverviewView, SelfReviewProgress, SignalCache,
+    WorktreeMeta,
 };
 pub use pr::{
     CheckResult, CheckStatus, DraftLineComment, IssueComment, LineComment, MergeMethod, PrActivity,
@@ -69,5 +71,8 @@ pub use store::{default_store_path, Store, STORE_PATH_ENV};
 pub use storyline::{
     add_step, assemble_preview, committed_diff_file_set, preview, StorylinePreview, StorylineStep,
     StorylineStepView,
+};
+pub use viewed::{
+    current_post_image_oid, import_legacy_viewed, SelfReviewDone, ViewedMark, ABSENT_POST_IMAGE,
 };
 pub use worktree::{list_worktrees, repo_common_dir, WorktreeInfo};

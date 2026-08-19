@@ -22,6 +22,7 @@ use crate::domain::{
 use crate::error::StageError;
 use crate::repo_key::RepoKey;
 use crate::storyline::StorylineStep;
+use crate::viewed::{SelfReviewDone, ViewedMark};
 
 /// Env override for the store location — handy for tests and for pointing the
 /// CLI and app at the same dev DB. When unset, [`default_store_path`] is used.
@@ -191,6 +192,200 @@ impl Store {
             .query_map(params![repo_owner, repo_name], |r| r.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(branches)
+    }
+
+    /// Freshness inputs of every stored Debrief for a repo, keyed by branch:
+    /// `(head_sha, seen_at)` — what [`crate::domain::Debrief::freshness`]
+    /// derives from, without deserializing chapter bodies per branch.
+    pub fn list_debrief_freshness_inputs(
+        &self,
+        repo_owner: &str,
+        repo_name: &str,
+    ) -> Result<std::collections::HashMap<String, (String, Option<i64>)>, StageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT branch, head_sha, seen_at FROM debrief \
+             WHERE repo_owner = ?1 AND repo_name = ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![repo_owner, repo_name], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    (r.get::<_, String>(1)?, r.get::<_, Option<i64>>(2)?),
+                ))
+            })?
+            .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+        Ok(rows)
+    }
+
+    // --- Self-Review viewed marks + done state (v6-light L2; F2/F2b/F3) -----
+
+    /// Upsert a viewed mark, anchored to `blob_oid` (the post-image the author
+    /// saw — see [`crate::viewed`]). Re-marking refreshes both anchor and time.
+    pub fn set_viewed(&self, key: &RepoKey, file: &str, blob_oid: &str) -> Result<(), StageError> {
+        self.conn.execute(
+            "INSERT INTO self_review_viewed \
+                 (repo_owner, repo_name, branch, file, blob_oid, viewed_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT (repo_owner, repo_name, branch, file) \
+             DO UPDATE SET blob_oid = excluded.blob_oid, viewed_at = excluded.viewed_at",
+            params![
+                key.repo_owner,
+                key.repo_name,
+                key.branch,
+                file,
+                blob_oid,
+                now_epoch()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Remove one viewed mark. Idempotent.
+    pub fn unset_viewed(&self, key: &RepoKey, file: &str) -> Result<(), StageError> {
+        self.conn.execute(
+            "DELETE FROM self_review_viewed \
+             WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3 AND file = ?4",
+            params![key.repo_owner, key.repo_name, key.branch, file],
+        )?;
+        Ok(())
+    }
+
+    /// Remove every viewed mark for a branch ("Clear viewed").
+    pub fn clear_viewed(&self, key: &RepoKey) -> Result<(), StageError> {
+        self.conn.execute(
+            "DELETE FROM self_review_viewed \
+             WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
+            params![key.repo_owner, key.repo_name, key.branch],
+        )?;
+        Ok(())
+    }
+
+    /// All stored viewed marks for a branch — anchors included, validity is
+    /// the caller's derivation (`crate::viewed`).
+    pub fn list_viewed(&self, key: &RepoKey) -> Result<Vec<ViewedMark>, StageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT file, blob_oid, viewed_at FROM self_review_viewed \
+             WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3 \
+             ORDER BY file",
+        )?;
+        let marks = stmt
+            .query_map(params![key.repo_owner, key.repo_name, key.branch], |r| {
+                Ok(ViewedMark {
+                    file: r.get(0)?,
+                    blob_oid: r.get(1)?,
+                    viewed_at: r.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(marks)
+    }
+
+    /// All stored viewed marks for a repo, keyed by branch — one query for the
+    /// overview assembly instead of a per-branch round-trip.
+    pub fn list_viewed_by_branch(
+        &self,
+        repo_owner: &str,
+        repo_name: &str,
+    ) -> Result<std::collections::HashMap<String, Vec<ViewedMark>>, StageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT branch, file, blob_oid, viewed_at FROM self_review_viewed \
+             WHERE repo_owner = ?1 AND repo_name = ?2 \
+             ORDER BY branch, file",
+        )?;
+        let mut out: std::collections::HashMap<String, Vec<ViewedMark>> =
+            std::collections::HashMap::new();
+        let rows = stmt.query_map(params![repo_owner, repo_name], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                ViewedMark {
+                    file: r.get(1)?,
+                    blob_oid: r.get(2)?,
+                    viewed_at: r.get(3)?,
+                },
+            ))
+        })?;
+        for row in rows {
+            let (branch, mark) = row?;
+            out.entry(branch).or_default().push(mark);
+        }
+        Ok(out)
+    }
+
+    /// Record the explicit "Mark reviewed" action (F3), bound to `head_sha`.
+    /// Overwrites a previous mark — re-marking after new commits rebinds it.
+    pub fn set_self_review_done(&self, key: &RepoKey, head_sha: &str) -> Result<(), StageError> {
+        self.conn.execute(
+            "INSERT INTO self_review_done \
+                 (repo_owner, repo_name, branch, head_sha, done_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT (repo_owner, repo_name, branch) \
+             DO UPDATE SET head_sha = excluded.head_sha, done_at = excluded.done_at",
+            params![
+                key.repo_owner,
+                key.repo_name,
+                key.branch,
+                head_sha,
+                now_epoch()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Withdraw the "Mark reviewed" state. Idempotent.
+    pub fn clear_self_review_done(&self, key: &RepoKey) -> Result<(), StageError> {
+        self.conn.execute(
+            "DELETE FROM self_review_done \
+             WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
+            params![key.repo_owner, key.repo_name, key.branch],
+        )?;
+        Ok(())
+    }
+
+    /// The stored done state (raw — SHA validity is the caller's derivation).
+    pub fn get_self_review_done(
+        &self,
+        key: &RepoKey,
+    ) -> Result<Option<SelfReviewDone>, StageError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT head_sha, done_at FROM self_review_done \
+                 WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
+                params![key.repo_owner, key.repo_name, key.branch],
+                |r| {
+                    Ok(SelfReviewDone {
+                        head_sha: r.get(0)?,
+                        done_at: r.get(1)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// All stored done states for a repo, keyed by branch — one query for the
+    /// overview assembly.
+    pub fn list_self_review_done_by_branch(
+        &self,
+        repo_owner: &str,
+        repo_name: &str,
+    ) -> Result<std::collections::HashMap<String, SelfReviewDone>, StageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT branch, head_sha, done_at FROM self_review_done \
+             WHERE repo_owner = ?1 AND repo_name = ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![repo_owner, repo_name], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    SelfReviewDone {
+                        head_sha: r.get(1)?,
+                        done_at: r.get(2)?,
+                    },
+                ))
+            })?
+            .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+        Ok(rows)
     }
 
     /// Delete the Debrief for `key`. Returns whether a row was removed.
@@ -1089,6 +1284,32 @@ const MIGRATIONS: &[&str] = &[
         updated_at    INTEGER NOT NULL,
         PRIMARY KEY (repo_owner, repo_name, branch)
     ) WITHOUT ROWID;",
+    // v7 — Self-Review viewed marks + done state (v6-light L2; flags F2/F2b/F3).
+    // Viewed marks migrate here from the webview-only plugin-store so the
+    // engine (overview rows) and later the CLI can read them. `blob_oid` is the
+    // content anchor (the post-image the author saw); validity is derived at
+    // read time against the file's current post-image — stale rows are ignored,
+    // never pruned (content-addressed like git: undoing the edit restores the
+    // mark). `self_review_done` mirrors the debrief-freshness pattern: the
+    // stored `head_sha` is compared with the branch's current head at read
+    // time; a moved head invalidates it. Neither table stores a derived flag.
+    "CREATE TABLE IF NOT EXISTS self_review_viewed (
+        repo_owner TEXT    NOT NULL,
+        repo_name  TEXT    NOT NULL,
+        branch     TEXT    NOT NULL,
+        file       TEXT    NOT NULL,
+        blob_oid   TEXT    NOT NULL,
+        viewed_at  INTEGER NOT NULL,
+        PRIMARY KEY (repo_owner, repo_name, branch, file)
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS self_review_done (
+        repo_owner TEXT    NOT NULL,
+        repo_name  TEXT    NOT NULL,
+        branch     TEXT    NOT NULL,
+        head_sha   TEXT    NOT NULL,
+        done_at    INTEGER NOT NULL,
+        PRIMARY KEY (repo_owner, repo_name, branch)
+    ) WITHOUT ROWID;",
 ];
 
 fn migrate(conn: &Connection) -> Result<(), StageError> {
@@ -1137,6 +1358,105 @@ mod tests {
 
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn viewed_marks_round_trip_and_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("debrief.sqlite3")).unwrap();
+        let k = key();
+
+        store.set_viewed(&k, "src/a.rs", SHA_A).unwrap();
+        store.set_viewed(&k, "src/b.rs", SHA_B).unwrap();
+        let marks = store.list_viewed(&k).unwrap();
+        assert_eq!(
+            marks
+                .iter()
+                .map(|m| (m.file.as_str(), m.blob_oid.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("src/a.rs", SHA_A), ("src/b.rs", SHA_B)]
+        );
+
+        // Re-marking rebinds the anchor (upsert, no duplicate row).
+        store.set_viewed(&k, "src/a.rs", SHA_B).unwrap();
+        let marks = store.list_viewed(&k).unwrap();
+        assert_eq!(marks.len(), 2);
+        assert_eq!(marks[0].blob_oid, SHA_B);
+
+        store.unset_viewed(&k, "src/a.rs").unwrap();
+        assert_eq!(store.list_viewed(&k).unwrap().len(), 1);
+
+        store.clear_viewed(&k).unwrap();
+        assert!(store.list_viewed(&k).unwrap().is_empty());
+    }
+
+    #[test]
+    fn viewed_marks_scope_by_branch_and_group_repo_wide() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("debrief.sqlite3")).unwrap();
+        let k1 = key();
+        let k2 = RepoKey {
+            branch: "feat/y".into(),
+            ..key()
+        };
+
+        store.set_viewed(&k1, "src/a.rs", SHA_A).unwrap();
+        store.set_viewed(&k2, "src/a.rs", SHA_B).unwrap();
+
+        assert_eq!(store.list_viewed(&k1).unwrap()[0].blob_oid, SHA_A);
+        let by_branch = store
+            .list_viewed_by_branch(&k1.repo_owner, &k1.repo_name)
+            .unwrap();
+        assert_eq!(by_branch.len(), 2);
+        assert_eq!(by_branch["feat/x"][0].blob_oid, SHA_A);
+        assert_eq!(by_branch["feat/y"][0].blob_oid, SHA_B);
+    }
+
+    #[test]
+    fn self_review_done_round_trips_and_rebinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("debrief.sqlite3")).unwrap();
+        let k = key();
+
+        assert!(store.get_self_review_done(&k).unwrap().is_none());
+        store.set_self_review_done(&k, SHA_A).unwrap();
+        assert_eq!(
+            store.get_self_review_done(&k).unwrap().unwrap().head_sha,
+            SHA_A
+        );
+
+        // Re-marking after new commits rebinds to the new head.
+        store.set_self_review_done(&k, SHA_B).unwrap();
+        assert_eq!(
+            store.get_self_review_done(&k).unwrap().unwrap().head_sha,
+            SHA_B
+        );
+
+        let by_branch = store
+            .list_self_review_done_by_branch(&k.repo_owner, &k.repo_name)
+            .unwrap();
+        assert_eq!(by_branch["feat/x"].head_sha, SHA_B);
+
+        store.clear_self_review_done(&k).unwrap();
+        assert!(store.get_self_review_done(&k).unwrap().is_none());
+    }
+
+    #[test]
+    fn debrief_freshness_inputs_list_repo_wide() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("debrief.sqlite3")).unwrap();
+        let k = key();
+        store
+            .set_debrief(&k, "main", vec![chapter("Core", &["src/a.rs"])], SHA_A)
+            .unwrap();
+        store.mark_debrief_seen(&k).unwrap();
+
+        let inputs = store
+            .list_debrief_freshness_inputs(&k.repo_owner, &k.repo_name)
+            .unwrap();
+        let (head, seen) = &inputs["feat/x"];
+        assert_eq!(head, SHA_A);
+        assert!(seen.is_some());
+    }
 
     #[test]
     fn debrief_round_trips_chapters_in_order() {

@@ -56,18 +56,30 @@ pub enum DebriefFreshness {
     Outdated,
 }
 
-impl Debrief {
-    /// Derive the freshness chip given the branch's current head SHA.
+impl DebriefFreshness {
+    /// Derive the chip from the stored freshness inputs — the same rule
+    /// wherever a Debrief is summarized (full read path or overview row).
     /// Outdated wins over seen: a stale account is stale whether or not the
     /// author read it.
-    pub fn freshness(&self, current_head_sha: &str) -> DebriefFreshness {
-        if self.head_sha != current_head_sha {
+    pub fn derive(
+        recorded_head_sha: &str,
+        seen_at: Option<i64>,
+        current_head_sha: &str,
+    ) -> DebriefFreshness {
+        if recorded_head_sha != current_head_sha {
             DebriefFreshness::Outdated
-        } else if self.seen_at.is_some() {
+        } else if seen_at.is_some() {
             DebriefFreshness::Seen
         } else {
             DebriefFreshness::New
         }
+    }
+}
+
+impl Debrief {
+    /// Derive the freshness chip given the branch's current head SHA.
+    pub fn freshness(&self, current_head_sha: &str) -> DebriefFreshness {
+        DebriefFreshness::derive(&self.head_sha, self.seen_at, current_head_sha)
     }
 
     /// Pair the Debrief with its derived freshness for emission.
