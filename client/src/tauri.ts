@@ -13,6 +13,7 @@ import type { ActivityLogEntry } from './generated/ActivityLogEntry';
 import type { ActivityLogLevel } from './generated/ActivityLogLevel';
 import type { ActivityLogPill } from './generated/ActivityLogPill';
 import type { BaseOptions } from './generated/BaseOptions';
+import type { BranchGraphView } from './generated/BranchGraphView';
 import type { BranchInfo } from './generated/BranchInfo';
 import type { BranchMeta } from './generated/BranchMeta';
 import type { ChangedFile } from './generated/ChangedFile';
@@ -32,6 +33,9 @@ import type { FetchOutcome } from './generated/FetchOutcome';
 import type { FileStatus } from './generated/FileStatus';
 import type { GitHubUser } from './generated/GitHubUser';
 import type { GithubSyncState } from './generated/GithubSyncState';
+import type { GraphBranch } from './generated/GraphBranch';
+import type { GraphLabel } from './generated/GraphLabel';
+import type { GraphRow } from './generated/GraphRow';
 import type { IssueComment } from './generated/IssueComment';
 import type { LineComment } from './generated/LineComment';
 import type { LocalDefault } from './generated/LocalDefault';
@@ -143,6 +147,10 @@ export type {
   StorylinePreview,
   StorylineStep,
   StorylineStepView,
+  BranchGraphView,
+  GraphBranch,
+  GraphLabel,
+  GraphRow,
   SwitchOutcome,
   SwitchPlan,
   SwitchPlanOutcome,
@@ -218,6 +226,11 @@ export const branchSwitchPlan = (branch: string) =>
  *  with the engine's complete message on any failure — render it verbatim. */
 export const branchSwitchExecute = (branch: string) =>
   invoke<SwitchOutcome>('branch_switch_execute', { branch });
+
+/** Assemble the branch graph (v6-light L6): bounded commit topology with lane
+ *  geometry, computed fresh per call. Read-only. Rejects with the engine's
+ *  complete message — render it verbatim. */
+export const branchGraph = () => invoke<BranchGraphView>('branch_graph');
 
 /** Fires when git's worktree set may have changed (e.g. an external tool added
  *  or finished a worktree). Re-fetch {@link repoWorktrees}. Returns the unlisten
