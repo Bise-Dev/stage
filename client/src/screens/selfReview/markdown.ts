@@ -4,7 +4,7 @@
  * still serves agents/contexts not wired to the `stage` CLI. Renders *all*
  * notes (with status tags + threads); snippets capped at SNIPPET_LINE_CAP.
  */
-import type { SelfReviewDiff, SelfReviewFileChange, SelfReviewNoteView, Side } from '../../tauri';
+import type { SelfReviewFileChange, SelfReviewNoteView, Side } from '../../tauri';
 
 const SNIPPET_LINE_CAP = 20;
 
@@ -14,15 +14,20 @@ const STATUS_TAG: Record<SelfReviewNoteView['status'], string> = {
   resolved: 'resolved',
 };
 
-export function notesToMarkdown(diff: SelfReviewDiff, notes: SelfReviewNoteView[]): string {
-  const scopeLabel = diff.scope === 'workdir' ? 'uncommitted' : `vs ${diff.baseRef ?? 'base'}`;
+export function notesToMarkdown(
+  branch: string,
+  baseRef: string | null,
+  files: SelfReviewFileChange[],
+  notes: SelfReviewNoteView[],
+): string {
+  const scopeLabel = `vs ${baseRef ?? 'base'}`;
   const anchored = notes.filter((n) => n.anchor !== null);
   const general = notes.filter((n) => n.anchor === null);
   const fileCount = new Set(anchored.map((n) => n.anchor?.file)).size;
   const today = new Date().toISOString().slice(0, 10);
 
   const out: string[] = [];
-  out.push(`# Self-Review — ${diff.currentBranch} (${scopeLabel})`);
+  out.push(`# Self-Review — ${branch} (${scopeLabel})`);
   out.push(`${fileCount} files · ${notes.length} notes · ${today}`);
   out.push('');
 
@@ -34,7 +39,7 @@ export function notesToMarkdown(diff: SelfReviewDiff, notes: SelfReviewNoteView[
   // File order follows the diff payload — same as the sidebar — so an eyeball
   // scan of the markdown matches the screen scan.
   const fileOrder = new Map<string, number>();
-  diff.files.forEach((f, i) => fileOrder.set(f.path, i));
+  files.forEach((f, i) => fileOrder.set(f.path, i));
   const byFile = new Map<string, SelfReviewNoteView[]>();
   for (const n of anchored) {
     const file = n.anchor?.file;
@@ -50,7 +55,7 @@ export function notesToMarkdown(diff: SelfReviewDiff, notes: SelfReviewNoteView[
 
   for (const path of orderedPaths) {
     out.push(`## ${path}`);
-    const file = diff.files.find((f) => f.path === path);
+    const file = files.find((f) => f.path === path);
     for (const n of byFile.get(path) ?? []) {
       for (const line of renderNote(n, file)) out.push(line);
     }

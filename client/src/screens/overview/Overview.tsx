@@ -61,12 +61,15 @@ function prRefFromUrl(url: string | null): PrRef | null {
 export function Overview({
   onChangeRepo,
   onStartSelfReview,
+  onViewDebrief,
   onOpenStoryline,
   onOpenReview,
   onOpenSettings,
 }: {
   onChangeRepo: () => void;
   onStartSelfReview: () => void;
+  /** Open the review shell in Debrief mode (v6-light L5). */
+  onViewDebrief: () => void;
   onOpenStoryline: () => void;
   onOpenReview: (pr: PrRef) => void;
   onOpenSettings: () => void;
@@ -191,9 +194,9 @@ export function Overview({
   // ⌘R / Ctrl+R — keyboard alias for Fetch (git fetch + reload the overview).
   useShortcut(RELOAD, runFetch);
 
-  // Focus the branch's worktree (observe-only — no checkout), then enter
-  // Self-Review (which reads the focused worktree from app state). The
-  // Debrief route is the same door: the rail opens itself when one exists.
+  // Focus the branch's worktree (observe-only — no checkout), then enter the
+  // review shell in Self-Review mode (it reads the focused worktree from app
+  // state).
   const startSelfReviewAt = useCallback(
     async (r: OverviewRow) => {
       const wt = r.branchMeta?.worktree;
@@ -206,6 +209,21 @@ export function Overview({
       }
     },
     [onStartSelfReview],
+  );
+
+  // Same door, Debrief mode: the full-screen chaptered viewer (v6-light L5).
+  const viewDebriefAt = useCallback(
+    async (r: OverviewRow) => {
+      const wt = r.branchMeta?.worktree;
+      if (!wt) return;
+      try {
+        await setFocusedWorktree(wt.path);
+        onViewDebrief();
+      } catch (e) {
+        console.warn('overview_focus_worktree_failed', e);
+      }
+    },
+    [onViewDebrief],
   );
 
   // Plan an explicit switch of the focused worktree to `branch` and open the
@@ -389,7 +407,7 @@ export function Overview({
               defaultBase={defaultBase}
               actions={{
                 onSelfReview: startSelfReviewAt,
-                onViewDebrief: startSelfReviewAt,
+                onViewDebrief: viewDebriefAt,
                 onReadyToShare: openNewReview,
                 onOpenStoryline: openStorylineAt,
                 onOpenReview,

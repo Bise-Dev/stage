@@ -566,6 +566,12 @@ export const selfReviewViewedImportLegacy = (marksByBranch: Record<string, strin
 export const selfReviewDoneSet = (branch: string, done: boolean) =>
   invoke<void>('self_review_done_set', { branch, done });
 
+/** The currently-valid "Mark reviewed" state: `doneAt` epoch seconds while the
+ *  mark's head SHA still matches the branch head, `null` otherwise (a new
+ *  commit silently withdraws it — same derivation as the overview pill). */
+export const selfReviewDoneGet = (branch: string) =>
+  invoke<number | null>('self_review_done_get', { branch });
+
 /** Review notes for the active repo + branch, optionally filtered by status. */
 export const selfReviewNotesList = (status?: NoteStatus) =>
   invoke<SelfReviewNoteView[]>('self_review_notes_list', { status: status ?? null });

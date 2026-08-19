@@ -3,8 +3,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { Overview } from './screens/overview/Overview';
 import { LocalReview } from './screens/review/LocalReview';
-import { SelfReview } from './screens/selfReview/SelfReview';
 import { Settings } from './screens/settings/Settings';
+import { ReviewShell } from './screens/shell/ReviewShell';
+import type { ShellMode } from './screens/shell/modes';
 import { Storyline } from './screens/storyline/Storyline';
 import {
   type OpenIntent,
@@ -17,11 +18,11 @@ import {
 
 // The single-mode, no-backend app (ADR-0022): there is no Stage account, session,
 // or sign-in (§5) — identity is the local `gh` user, resolved lazily where needed.
-// A repo is opened onto ONE home screen — the unified Overview (local branches +
-// drafts + published Reviews + PRs, design v3 §1) — from which the author works
-// locally (Self-Review → Storyline → Publish) or reviews a PR read-only
-// (LocalReview), all via `gh`/`git`.
-type View = 'openRepo' | 'overview' | 'selfReview' | 'localStoryline' | 'localReview' | 'settings';
+// A repo is opened onto ONE home screen — the branch-table Overview (v6-light
+// L4) — from which the author works locally in the review shell (Debrief /
+// Self-Review modes, v6-light L5) and the Storyline → Publish flow, or reviews
+// a PR read-only (LocalReview), all via `gh`/`git`.
+type View = 'openRepo' | 'overview' | 'shell' | 'localStoryline' | 'localReview' | 'settings';
 
 export function App() {
   // `booting` covers draining this launch's `stage open` intent before we pick a
@@ -35,6 +36,9 @@ export function App() {
   // True when Self-Review was reached via `stage open`: seed its base from the
   // Debrief's base, overriding the per-repo localStorage default (ADR-0014).
   const [seedBase, setSeedBase] = useState(false);
+  // Which review-shell mode the navigation intent asked for (v6-light L5):
+  // the table's Self-review action vs its View-agent-debrief action.
+  const [shellMode, setShellMode] = useState<ShellMode>('selfreview');
   // The view to return to when Settings is dismissed. Settings is reachable from
   // any screen (native ⌘, menu item, or the RepoMenu), so we stash where it was
   // opened from rather than assume a fixed home.
@@ -54,7 +58,8 @@ export function App() {
         setView('localReview');
       } else {
         setSeedBase(true);
-        setView('selfReview');
+        setShellMode('selfreview');
+        setView('shell');
       }
     } catch (e) {
       console.warn('open_intent_set_repo_failed', e);
@@ -102,9 +107,16 @@ export function App() {
   // seed from the Debrief — that's only for the `stage open` path, ADR-0014).
   const startSelfReview = useCallback(() => {
     setSeedBase(false);
-    setView('selfReview');
+    setShellMode('selfreview');
+    setView('shell');
   }, []);
-  const exitSelfReview = useCallback(() => setView('overview'), []);
+  // The table's "View agent debrief" action — same shell, debrief mode.
+  const startDebrief = useCallback(() => {
+    setSeedBase(false);
+    setShellMode('debrief');
+    setView('shell');
+  }, []);
+  const exitShell = useCallback(() => setView('overview'), []);
 
   const enterLocalStoryline = useCallback(() => setView('localStoryline'), []);
   const exitLocalStoryline = useCallback(() => setView('overview'), []);
@@ -154,10 +166,11 @@ export function App() {
   if (view === 'localReview' && localReviewPr) {
     return <LocalReview pr={localReviewPr} onBack={backFromLocalReview} />;
   }
-  if (view === 'selfReview') {
+  if (view === 'shell') {
     return (
-      <SelfReview
-        onExit={exitSelfReview}
+      <ReviewShell
+        initialMode={shellMode}
+        onExit={exitShell}
         onEnterStoryline={enterLocalStoryline}
         seedBaseFromDebrief={seedBase}
       />
@@ -170,6 +183,7 @@ export function App() {
     <Overview
       onChangeRepo={changeRepo}
       onStartSelfReview={startSelfReview}
+      onViewDebrief={startDebrief}
       onOpenStoryline={enterLocalStoryline}
       onOpenReview={openLocalReview}
       onOpenSettings={openSettings}
