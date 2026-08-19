@@ -9,15 +9,12 @@ import type { SwitchPlanOutcome } from '../../generated/SwitchPlanOutcome';
 import { RELOAD } from '../../lib/shortcuts';
 import { useShortcut } from '../../lib/useShortcut';
 import {
-  type GitHubUser,
   type OverviewRow,
   type PrRef,
-  type ReviewStatus,
   type SyncStatus,
   branchSwitchExecute,
   branchSwitchPlan,
   getActiveRepo,
-  ghIdentity,
   gitFetch,
   gitRemoteBranches,
   onSyncUpdated,
@@ -31,43 +28,20 @@ import {
   syncStatus,
 } from '../../tauri';
 import { relativeTime, relativeTimeFromEpoch } from '../../time';
+import { BranchTable, statusBadge } from './BranchTable';
 
 /**
- * The unified per-repo overview — the app's home screen. One board combining
- * what git + `.stage` know locally with what GitHub knows (design v3 §1
- * "Workspaces", restyled to the Review vocabulary of ADR-0022 §8): local
- * branches, per-machine drafts, published Reviews, and plain PRs, bucketed
- * into an "Authored by you" / "Awaiting your review" two-column board.
+ * The branch table — the app's home screen (v6-light L4, design
+ * `V6L_Branches`). One dense row per local branch, joining what git + the
+ * per-machine store know (worktrees, uncommitted counts, debrief freshness,
+ * self-review progress — all derived by Rust, L2) with what GitHub knows
+ * (the PR chip, via the sync engine). Replaces the bucketed two-column card
+ * board; PRs with no local branch stay reachable in the compact "On GitHub"
+ * section below the table (F5 — light is build order, not feature removal).
  *
  * A **pure renderer** (ADR-0022 §7): Rust assembles every row with its state
- * already derived (`overview`); this screen only filters/buckets for display.
- * The separate local-branches screen is gone — its rows (worktree badges,
- * Self-Review entry) live in the Self-Review bucket here.
+ * already derived (`overview`); this screen only filters/sorts for display.
  */
-
-type Show = 'all' | 'yours' | 'review';
-type Kind = 'self-review' | 'ready-to-share' | 'in-review' | 'open-prs';
-
-const RAIL_MIN = 160;
-const RAIL_MAX = 360;
-const RAIL_DEFAULT = 200;
-const RAIL_KEY = 'overview:rail-width';
-
-function clampRail(w: number): number {
-  return Math.min(RAIL_MAX, Math.max(RAIL_MIN, w));
-}
-
-/** Persisted, draggable width for the left filter rail (px, not %). */
-function useRailWidth() {
-  const [width, setWidth] = useState(() => {
-    const saved = Number(localStorage.getItem(RAIL_KEY));
-    return Number.isFinite(saved) && saved > 0 ? clampRail(saved) : RAIL_DEFAULT;
-  });
-  useEffect(() => {
-    localStorage.setItem(RAIL_KEY, String(width));
-  }, [width]);
-  return [width, setWidth] as const;
-}
 
 function slugFromRemote(url: string | null): string | null {
   if (!url) return null;
@@ -106,14 +80,10 @@ export function Overview({
   const [sync, setSync] = useState<SyncStatus | null>(null);
   // Even the local assembly failed: nothing renders but this banner.
   const [overviewError, setOverviewError] = useState<string | null>(null);
-  const [me, setMe] = useState<GitHubUser | null>(null);
-  const [show, setShow] = useState<Show>('all');
-  const [kind, setKind] = useState<Kind | null>(null);
   const [query, setQuery] = useState('');
   // Archived (closed/merged-PR) reviews are hidden by default (DB-5 #88); this
   // toggle re-asks Rust with the filter flipped (never stored).
   const [showArchived, setShowArchived] = useState(false);
-  const [railWidth, setRailWidth] = useRailWidth();
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [newReviewOpen, setNewReviewOpen] = useState(false);
@@ -156,8 +126,7 @@ export function Overview({
     }
   }, []);
 
-  // Boot: rail slug/path, identity (best-effort — the overview call surfaces
-  // any real gh failure), and the assembled overview.
+  // Boot: repo slug/path for the footer menu, and the assembled overview.
   useEffect(() => {
     (async () => {
       const repo = await getActiveRepo();
@@ -167,13 +136,10 @@ export function Overview({
         const sum = await repoSummary(repo.path);
         setRepoSlug(slugFromRemote(sum.remoteUrl));
       } catch (e) {
-        // Non-fatal: the rail just shows the folder name.
+        // Non-fatal: the footer menu just shows the folder name.
         console.warn('overview_repo_summary_failed', e);
       }
     })();
-    ghIdentity()
-      .then(setMe)
-      .catch(() => setMe(null));
     // Seed the freshness/degraded chips; live values ride on `sync-updated`.
     syncStatus()
       .then(setSync)
@@ -225,14 +191,15 @@ export function Overview({
   // ⌘R / Ctrl+R — keyboard alias for Fetch (git fetch + reload the overview).
   useShortcut(RELOAD, runFetch);
 
-  const railProps = useRailResize(setRailWidth);
-
   // Focus the branch's worktree (observe-only — no checkout), then enter
-  // Self-Review (which reads the focused worktree from app state).
+  // Self-Review (which reads the focused worktree from app state). The
+  // Debrief route is the same door: the rail opens itself when one exists.
   const startSelfReviewAt = useCallback(
-    async (worktreePath: string) => {
+    async (r: OverviewRow) => {
+      const wt = r.branchMeta?.worktree;
+      if (!wt) return;
       try {
-        await setFocusedWorktree(worktreePath);
+        await setFocusedWorktree(wt.path);
         onStartSelfReview();
       } catch (e) {
         console.warn('overview_focus_worktree_failed', e);
@@ -270,20 +237,11 @@ export function Overview({
     [onOpenStoryline],
   );
 
-  // --- Buckets (display grouping only — every row's state came derived) ------
-  // Self-Review = plain local branches. The default branch is excluded: you
-  // don't review it against itself, and sharing it would make a degenerate
-  // head==base review Publish can't open a PR for.
-  const branchRows = rows.filter((r) => r.kind === 'branch' && !r.branchMeta?.isDefault);
-  const draftRows = rows.filter((r) => r.kind === 'draft');
-  const publishedMine = rows.filter((r) => r.kind === 'published' && r.role === 'author');
-  const yoursReadyToShare = [...draftRows, ...publishedMine.filter((r) => r.prNumber === null)];
-  const yoursInReview = publishedMine.filter((r) => r.prNumber !== null);
-  const reviewInReview = rows.filter((r) => r.kind === 'published' && r.role === 'reviewer');
-  const openAuthor = rows.filter((r) => r.kind === 'plain_pr' && r.role === 'author');
-  const openReviewer = rows.filter((r) => r.kind === 'plain_pr' && r.role === 'reviewer');
-  const archivedShown = rows.filter((r) => r.archived).length;
-
+  // --- Row split (display only — every row's state came derived) ------------
+  // The table shows every row backed by a local branch (branch, draft,
+  // published, or an authored PR whose branch is in this clone). Rows without
+  // a local branch — PRs awaiting your review, or your PRs whose branch is
+  // gone locally — stay reachable in the compact "On GitHub" section.
   const q = query.trim().toLowerCase();
   const matchRow = (r: OverviewRow) =>
     !q ||
@@ -293,376 +251,268 @@ export function Overview({
     (r.prNumber !== null && `#${r.prNumber}`.includes(q)) ||
     (r.branchMeta?.lastCommit?.toLowerCase().includes(q) ?? false);
 
-  const kindCounts = {
-    'self-review': branchRows.length,
-    'ready-to-share': yoursReadyToShare.length,
-    'in-review': yoursInReview.length + reviewInReview.length,
-    'open-prs': openAuthor.length + openReviewer.length,
-  };
-  const yoursCount =
-    branchRows.length + yoursReadyToShare.length + yoursInReview.length + openAuthor.length;
-  const reviewCount = reviewInReview.length + openReviewer.length;
+  const localRows = rows
+    .filter((r) => r.branchMeta !== null)
+    .sort((a, b) => {
+      const am = a.branchMeta;
+      const bm = b.branchMeta;
+      if (!am || !bm) return 0;
+      if (am.isCurrent !== bm.isCurrent) return am.isCurrent ? -1 : 1;
+      return bm.updatedAt - am.updatedAt;
+    });
+  const ghRows = rows.filter((r) => r.branchMeta === null);
+  const defaultBase = localRows.find((r) => r.branchMeta?.isDefault)?.branch ?? null;
 
-  const showKind = (k: Kind) => kind === null || kind === k;
-  const toggleKind = (k: Kind) => setKind((cur) => (cur === k ? null : k));
+  const debriefNew = localRows.filter((r) => r.branchMeta?.debriefFreshness === 'new').length;
+  const selfInProgress = localRows.filter((r) => {
+    const sr = r.branchMeta?.selfReview;
+    return sr !== null && sr !== undefined && !sr.done && sr.viewed > 0;
+  }).length;
 
-  const showYours = show !== 'review';
-  const showReview = show !== 'yours';
+  const filteredLocal = localRows.filter(matchRow);
+  const filteredGh = ghRows.filter(matchRow);
+  const branchRowsForModal = localRows.filter(
+    (r) => r.kind === 'branch' && !r.branchMeta?.isDefault,
+  );
 
   return (
     <div className="stage">
       <div className="win">
         <TitleBar title="Stage" />
-        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-          {/* Left filter rail */}
-          <div
-            ref={railProps.railRef}
-            style={{
-              width: railWidth,
-              flex: `0 0 ${railWidth}px`,
-              padding: '14px 10px',
-              background: '#fbfaf8',
-              display: 'flex',
-              flexDirection: 'column',
-              minWidth: 0,
-            }}
-          >
-            <div className="section-label" style={{ padding: '0 6px' }}>
-              Show
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              <FilterRow
-                label="Everything"
-                count={yoursCount + reviewCount}
-                active={show === 'all'}
-                onClick={() => setShow('all')}
-              />
-              <FilterRow
-                label="Authored by you"
-                count={yoursCount}
-                dot="var(--blue)"
-                active={show === 'yours'}
-                onClick={() => setShow('yours')}
-              />
-              <FilterRow
-                label="Awaiting your review"
-                count={reviewCount}
-                dot="var(--orange)"
-                active={show === 'review'}
-                onClick={() => setShow('review')}
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '14px 18px 0',
+          }}
+        >
+          {/* Toolbar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <div style={{ flex: 1, position: 'relative' }}>
+              <div
+                style={{
+                  position: 'absolute',
+                  left: 9,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: 'var(--gray-400)',
+                  display: 'flex',
+                }}
+              >
+                <Icon name="search" size={13} />
+              </div>
+              <input
+                className="input lg"
+                placeholder="Search by branch, title, author or PR #…"
+                style={{ paddingLeft: 28, maxWidth: 340 }}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
               />
             </div>
-
-            <div className="section-label" style={{ marginTop: 14, padding: '0 6px' }}>
-              Filter by kind
+            <div className="seg" style={{ height: 26 }}>
+              <div className="active">Table</div>
+              <div
+                title="Branch graph — coming with v6-light L6"
+                style={{ opacity: 0.45 }}
+                aria-disabled="true"
+              >
+                Graph
+              </div>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              <FilterRow
-                icon={<Icon name="eye" size={11} />}
-                label="Self-Review"
-                count={kindCounts['self-review']}
-                sub="no review"
-                active={kind === 'self-review'}
-                onClick={() => toggleKind('self-review')}
-              />
-              <FilterRow
-                icon={<Icon name="branch" size={11} />}
-                label="Ready to share"
-                count={kindCounts['ready-to-share']}
-                sub="not on GitHub"
-                active={kind === 'ready-to-share'}
-                onClick={() => toggleKind('ready-to-share')}
-              />
-              <FilterRow
-                icon={<Icon name="doc-stack" size={11} />}
-                label="In review"
-                count={kindCounts['in-review']}
-                sub="review + PR"
-                active={kind === 'in-review'}
-                onClick={() => toggleKind('in-review')}
-              />
-              <FilterRow
-                icon={<Icon name="gh" size={11} />}
-                label="Open PRs"
-                count={kindCounts['open-prs']}
-                sub="no review"
-                active={kind === 'open-prs'}
-                onClick={() => toggleKind('open-prs')}
-              />
-            </div>
-
-            <div style={{ flex: 1 }} />
-
-            <div className="section-label" style={{ marginTop: 14, padding: '0 6px' }}>
-              Repository
-            </div>
-            <RepoMenu
-              slug={repoSlug}
-              path={repoPath}
-              onChangeRepo={onChangeRepo}
-              onOpenSettings={onOpenSettings}
-            />
+            <SyncedAgo status={sync} />
+            <FetchButton onFetch={runFetch} fetching={fetching} />
+            {/* Kept per F5 (build order, not feature removal) — plain style;
+                the light design drops the *primary* Create button. */}
+            <button type="button" className="btn btn-lg" onClick={() => openNewReview()}>
+              <Icon name="plus" size={12} color="var(--gray-700)" /> New review…
+            </button>
           </div>
 
-          {/* Resizable divider */}
-          <button
-            type="button"
-            ref={railProps.handleRef}
-            className="rail-resize"
-            onPointerDown={railProps.startResize}
-            onKeyDown={railProps.onResizeKey}
-            aria-label="Resize sidebar"
-            aria-orientation="vertical"
-            role="separator"
-            aria-valuenow={railWidth}
-            aria-valuemin={RAIL_MIN}
-            aria-valuemax={RAIL_MAX}
-          />
+          {fetchError && <ErrorNote>Fetch failed: {fetchError}</ErrorNote>}
+          {sync?.githubState === 'degraded' && sync.githubError && (
+            <ErrorNote>
+              GitHub sync degraded — showing the last synced state: {sync.githubError}
+            </ErrorNote>
+          )}
+          {sync?.autoFetchError && (
+            <ErrorNote>Background fetch failed: {sync.autoFetchError}</ErrorNote>
+          )}
+          {sync?.localError && (
+            <ErrorNote>Couldn't refresh the overview: {sync.localError}</ErrorNote>
+          )}
+          {overviewError && <ErrorNote>Couldn't load the overview: {overviewError}</ErrorNote>}
+          {switchError && <ErrorNote>Couldn't plan the switch: {switchError}</ErrorNote>}
 
-          {/* Main */}
+          {/* Summary strip */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '0 2px 10px' }}>
+            <span style={{ fontSize: 12, color: 'var(--gray-600)' }}>
+              {localRows.length} {localRows.length === 1 ? 'branch' : 'branches'}
+            </span>
+            {debriefNew > 0 && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: 11.5,
+                  color: '#7b2cab',
+                }}
+              >
+                <span
+                  style={{ width: 5, height: 5, borderRadius: 3, background: 'var(--purple)' }}
+                />
+                {debriefNew} debrief new
+              </span>
+            )}
+            {selfInProgress > 0 && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: 11.5,
+                  color: 'var(--blue-press)',
+                }}
+              >
+                <Icon name="eye" size={10} color="var(--blue)" />
+                {selfInProgress} self-review in progress
+              </span>
+            )}
+          </div>
+
+          {/* Table + the "On GitHub" tail scroll together; footer stays put. */}
+          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingBottom: 14 }}>
+            <BranchTable
+              rows={filteredLocal}
+              defaultBase={defaultBase}
+              actions={{
+                onSelfReview: startSelfReviewAt,
+                onViewDebrief: startSelfReviewAt,
+                onReadyToShare: openNewReview,
+                onOpenStoryline: openStorylineAt,
+                onOpenReview,
+                onSwitchTo: openSwitchDialog,
+                onDiscardDraft: setDiscardTarget,
+              }}
+            />
+
+            {/* PRs with no local branch — awaiting your review, or yours with
+                the branch gone locally. Compact, but the capability stays. */}
+            {(filteredGh.length > 0 || !githubIncluded) && (
+              <div style={{ marginTop: 16 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    margin: '0 2px 6px',
+                  }}
+                >
+                  <Icon name="gh" size={11} color="var(--gray-500)" />
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: 0.5,
+                      textTransform: 'uppercase',
+                      color: 'var(--gray-400)',
+                    }}
+                  >
+                    On GitHub · no local branch
+                  </span>
+                  {filteredGh.filter((r) => r.role === 'reviewer').length > 0 && (
+                    <span className="badge badge-orange">
+                      {filteredGh.filter((r) => r.role === 'reviewer').length} awaiting your review
+                    </span>
+                  )}
+                </div>
+                {!githubIncluded && (
+                  <div style={{ fontSize: 11.5, color: 'var(--gray-500)', padding: '2px 2px 6px' }}>
+                    GitHub wasn't consulted — fix `gh` (see the banner above) and Fetch to see the
+                    PRs awaiting your review.
+                  </div>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {filteredGh.map((r) => (
+                    <GhRow
+                      key={r.prNumber !== null ? `#${r.prNumber}` : r.branch}
+                      r={r}
+                      onOpenReview={onOpenReview}
+                    />
+                  ))}
+                </div>
+                {githubIncluded && (
+                  <button
+                    type="button"
+                    onClick={() => setShowArchived((v) => !v)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      background: 'none',
+                      border: 'none',
+                      padding: '6px 2px',
+                      cursor: 'pointer',
+                      fontSize: 11.5,
+                      color: 'var(--gray-500)',
+                    }}
+                  >
+                    <Icon name="eye" size={11} color="var(--gray-500)" />
+                    {showArchived
+                      ? `Hide archived (${rows.filter((r) => r.archived).length})`
+                      : 'Show archived'}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Footer: repo menu + legend */}
           <div
             style={{
-              flex: 1,
-              padding: '14px 18px',
-              overflow: 'hidden',
               display: 'flex',
-              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 16,
+              padding: '8px 0 10px',
+              borderTop: '1px solid var(--hairline-2)',
             }}
           >
+            <div style={{ width: 260, flex: '0 0 260px' }}>
+              <RepoMenu
+                slug={repoSlug}
+                path={repoPath}
+                onChangeRepo={onChangeRepo}
+                onOpenSettings={onOpenSettings}
+              />
+            </div>
             <div
               style={{
                 display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                marginBottom: 12,
-              }}
-            >
-              <div style={{ flex: 1, position: 'relative' }}>
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: 9,
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    color: 'var(--gray-400)',
-                    display: 'flex',
-                  }}
-                >
-                  <Icon name="search" size={13} />
-                </div>
-                <input
-                  className="input lg"
-                  placeholder="Search by branch, title, author or PR #…"
-                  style={{ paddingLeft: 28 }}
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-              </div>
-              <SyncedAgo status={sync} />
-              <FetchButton onFetch={runFetch} fetching={fetching} />
-              <button
-                type="button"
-                className="btn btn-primary btn-lg"
-                onClick={() => openNewReview()}
-              >
-                <Icon name="plus" size={12} color="#fff" /> New review
-              </button>
-            </div>
-
-            {fetchError && <ErrorNote>Fetch failed: {fetchError}</ErrorNote>}
-            {sync?.githubState === 'degraded' && sync.githubError && (
-              <ErrorNote>
-                GitHub sync degraded — showing the last synced state: {sync.githubError}
-              </ErrorNote>
-            )}
-            {sync?.autoFetchError && (
-              <ErrorNote>Background fetch failed: {sync.autoFetchError}</ErrorNote>
-            )}
-            {sync?.localError && (
-              <ErrorNote>Couldn't refresh the overview: {sync.localError}</ErrorNote>
-            )}
-            {overviewError && <ErrorNote>Couldn't load the overview: {overviewError}</ErrorNote>}
-            {switchError && <ErrorNote>Couldn't plan the switch: {switchError}</ErrorNote>}
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: showYours && showReview ? '1fr 1fr' : '1fr',
                 gap: 16,
-                flex: 1,
-                minHeight: 0,
+                fontSize: 11.5,
+                color: 'var(--gray-500)',
+                alignItems: 'center',
               }}
             >
-              {showYours && (
-                <Column
-                  icon={<Avatar name={me?.name || me?.login || 'You'} size="lg" />}
-                  title="Authored by you"
-                  count={yoursCount}
-                  tint="rgba(0,122,255,0.04)"
-                  border="rgba(0,122,255,0.16)"
-                  accent="var(--blue)"
-                >
-                  {showKind('self-review') && branchRows.filter(matchRow).length > 0 && (
-                    <Bucket
-                      color="var(--orange)"
-                      title="Self-Review"
-                      hint="no review"
-                      count={branchRows.length}
-                    >
-                      {branchRows.filter(matchRow).map((r) => (
-                        <BranchRowCompact
-                          key={r.branch}
-                          r={r}
-                          onStartSelfReview={startSelfReviewAt}
-                          onReadyToShare={openNewReview}
-                          onSwitchTo={openSwitchDialog}
-                        />
-                      ))}
-                    </Bucket>
-                  )}
-                  {showKind('ready-to-share') && yoursReadyToShare.filter(matchRow).length > 0 && (
-                    <Bucket
-                      color="var(--blue)"
-                      title="Ready to share"
-                      hint="not on GitHub"
-                      count={yoursReadyToShare.length}
-                    >
-                      {yoursReadyToShare.filter(matchRow).map((r) => (
-                        <ReviewRowCompact
-                          key={r.prNumber !== null ? `#${r.prNumber}` : r.branch}
-                          r={r}
-                          onBackToSelfReview={r.kind === 'draft' ? setDiscardTarget : undefined}
-                          onOpenStoryline={openStorylineAt}
-                        />
-                      ))}
-                    </Bucket>
-                  )}
-                  {showKind('in-review') && yoursInReview.filter(matchRow).length > 0 && (
-                    <Bucket
-                      color="var(--purple)"
-                      title="In review"
-                      hint="review + PR"
-                      count={yoursInReview.length}
-                    >
-                      {yoursInReview.filter(matchRow).map((r) => (
-                        <ReviewRowCompact
-                          key={r.prNumber !== null ? `#${r.prNumber}` : r.branch}
-                          r={r}
-                          onOpenStoryline={r.branchMeta?.worktree ? openStorylineAt : undefined}
-                          onOpenReview={onOpenReview}
-                        />
-                      ))}
-                    </Bucket>
-                  )}
-                  {showKind('open-prs') && openAuthor.filter(matchRow).length > 0 && (
-                    <Bucket
-                      color="var(--gray-400)"
-                      title="Open PRs"
-                      hint="on GitHub, no review"
-                      count={openAuthor.length}
-                    >
-                      {openAuthor.filter(matchRow).map((r) => (
-                        <OpenPrRowCompact key={r.prNumber} r={r} onOpenReview={onOpenReview} />
-                      ))}
-                    </Bucket>
-                  )}
-                </Column>
-              )}
-
-              {showReview && (
-                <Column
-                  icon={
-                    <div
-                      style={{
-                        width: 28,
-                        height: 28,
-                        borderRadius: 14,
-                        background: 'rgba(255,149,0,0.18)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <Icon name="eye" size={14} color="var(--orange)" />
-                    </div>
-                  }
-                  title="Awaiting your review"
-                  count={reviewCount}
-                  tint="rgba(255,149,0,0.04)"
-                  border="rgba(255,149,0,0.18)"
-                  accent="var(--orange)"
-                >
-                  {!githubIncluded && (
-                    <div style={{ fontSize: 11.5, color: 'var(--gray-500)', padding: '2px 2px' }}>
-                      GitHub wasn't consulted — fix `gh` (see the banner above) and Fetch to see the
-                      PRs awaiting your review.
-                    </div>
-                  )}
-                  {showKind('in-review') && reviewInReview.filter(matchRow).length > 0 && (
-                    <Bucket
-                      color="var(--purple)"
-                      title="In review"
-                      hint="review + PR"
-                      count={reviewInReview.length}
-                    >
-                      {reviewInReview.filter(matchRow).map((r) => (
-                        <ReviewRowCompact
-                          key={r.prNumber !== null ? `#${r.prNumber}` : r.branch}
-                          r={r}
-                          reviewing
-                          onOpenReview={onOpenReview}
-                        />
-                      ))}
-                    </Bucket>
-                  )}
-                  {/* Archived (closed/merged-PR) reviews are hidden by default —
-                      they're done. Reveal on demand; Rust re-derives the list. */}
-                  {showKind('in-review') && githubIncluded && (
-                    <button
-                      type="button"
-                      onClick={() => setShowArchived((v) => !v)}
-                      style={{
-                        alignSelf: 'flex-start',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 4,
-                        background: 'none',
-                        border: 'none',
-                        padding: '2px 2px',
-                        cursor: 'pointer',
-                        fontSize: 11.5,
-                        color: 'var(--gray-500)',
-                      }}
-                    >
-                      <Icon name="eye" size={11} color="var(--gray-500)" />
-                      {showArchived ? `Hide archived (${archivedShown})` : 'Show archived'}
-                    </button>
-                  )}
-                  {showKind('open-prs') && openReviewer.filter(matchRow).length > 0 && (
-                    <Bucket
-                      color="var(--gray-400)"
-                      title="Open PRs"
-                      hint="on GitHub, no review"
-                      count={openReviewer.length}
-                    >
-                      {openReviewer.filter(matchRow).map((r) => (
-                        <OpenPrRowCompact
-                          key={r.prNumber}
-                          r={r}
-                          reviewing
-                          onOpenReview={onOpenReview}
-                        />
-                      ))}
-                    </Bucket>
-                  )}
-                </Column>
-              )}
+              <span>
+                <span className="badge badge-purple">wt</span> worktree
+              </span>
+              <span>
+                <span style={{ color: 'var(--orange)', fontWeight: 600 }}>●3</span> uncommitted
+                files
+              </span>
+              <span>
+                reviews live locally in <span className="mono">.stage/</span>
+              </span>
             </div>
           </div>
         </div>
+
         {newReviewOpen && (
           <NewReviewModal
-            branchRows={branchRows}
+            branchRows={branchRowsForModal}
             prefillBranch={newReviewBranch}
             onClose={() => setNewReviewOpen(false)}
             onCreated={onOpenStoryline}
@@ -744,33 +594,6 @@ export function Overview({
   );
 }
 
-/** Pointer-drag + keyboard resize for the rail (extracted so the component body
- *  above stays readable; behaviour identical to the reference screen). */
-function useRailResize(setRailWidth: (fn: (w: number) => number) => void) {
-  const railRef = useRef<HTMLDivElement>(null);
-  const handleRef = useRef<HTMLButtonElement>(null);
-  const startResize = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const left = railRef.current?.getBoundingClientRect().left ?? 0;
-    handleRef.current?.classList.add('dragging');
-    document.body.style.cursor = 'col-resize';
-    const onMove = (ev: PointerEvent) => setRailWidth(() => clampRail(ev.clientX - left));
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      handleRef.current?.classList.remove('dragging');
-      document.body.style.cursor = '';
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  };
-  const onResizeKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowLeft') setRailWidth((w) => clampRail(w - 16));
-    else if (e.key === 'ArrowRight') setRailWidth((w) => clampRail(w + 16));
-  };
-  return { railRef, handleRef, startResize, onResizeKey };
-}
-
 /** "Updated 12s ago" — when the GitHub side last synced, ticking every 10s so
  *  the relative time stays honest. Quiet until the first poll lands; a
  *  degraded poll gets its own banner instead. */
@@ -809,396 +632,36 @@ function ErrorNote({ children }: { children: ReactNode }) {
   );
 }
 
-function FilterRow({
-  label,
-  count,
-  active,
-  dot,
-  sub,
-  icon,
-  onClick,
-}: {
-  label: string;
-  count: number;
-  active?: boolean;
-  dot?: string;
-  sub?: string;
-  icon?: ReactNode;
-  onClick?: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '5px 10px',
-        borderRadius: 5,
-        border: 'none',
-        textAlign: 'left',
-        cursor: 'default',
-        background: active ? 'rgba(0,0,0,0.06)' : 'transparent',
-        color: 'var(--gray-800)',
-        fontSize: 12.5,
-        fontFamily: 'inherit',
-        fontWeight: active ? 600 : 500,
-      }}
-    >
-      {dot && (
-        <span
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: 4,
-            background: dot,
-            flex: '0 0 7px',
-          }}
-        />
-      )}
-      {icon && <span style={{ color: 'var(--gray-500)', display: 'flex' }}>{icon}</span>}
-      {!dot && !icon && <span style={{ width: 7, height: 7, flex: '0 0 7px' }} />}
-      <span
-        style={{
-          flex: 1,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {label}
-      </span>
-      {sub && (
-        <span style={{ fontSize: 10.5, color: 'var(--gray-400)', fontWeight: 500 }}>{sub}</span>
-      )}
-      <span
-        style={{
-          color: 'var(--gray-500)',
-          fontSize: 11.5,
-          fontWeight: 500,
-          marginLeft: 4,
-        }}
-      >
-        {count}
-      </span>
-    </button>
-  );
-}
-
-function Column({
-  icon,
-  title,
-  count,
-  tint,
-  border,
-  accent,
-  children,
-}: {
-  icon: ReactNode;
-  title: string;
-  count: number;
-  tint: string;
-  border: string;
-  accent: string;
-  children: ReactNode;
-}) {
+/** A compact row for a PR with no local branch: reviewer rows carry the
+ *  author's avatar and a Review entry; authored rows open the PR. */
+function GhRow({ r, onOpenReview }: { r: OverviewRow; onOpenReview: (pr: PrRef) => void }) {
+  const st = statusBadge(r);
+  const pr = prRefFromUrl(r.url);
+  const open = () => {
+    if (pr) onOpenReview(pr);
+    else if (r.url) openUrl(r.url).catch((e) => console.warn('open_url_failed', e));
+  };
   return (
     <div
       style={{
         display: 'flex',
-        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 10,
+        background: '#fff',
+        border: '1px solid var(--hairline)',
+        borderRadius: 'var(--r-md)',
+        padding: '7px 10px',
+        boxShadow: 'var(--sh-1)',
         minWidth: 0,
-        minHeight: 0,
-        background: tint,
-        border: `1px solid ${border}`,
-        borderRadius: 'var(--r-lg)',
-        overflow: 'hidden',
       }}
     >
-      <div
-        style={{
-          padding: '12px 14px',
-          background: '#fff',
-          borderBottom: `1px solid ${border}`,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-        }}
-      >
-        {icon}
-        <div style={{ flex: 1 }}>
-          <div
-            style={{
-              fontSize: 14,
-              fontWeight: 700,
-              letterSpacing: -0.01,
-              color: 'var(--gray-900)',
-            }}
-          >
-            {title}
-          </div>
-          <div style={{ fontSize: 11.5, color: 'var(--gray-500)', marginTop: 1 }}>
-            {count} item{count === 1 ? '' : 's'}
-          </div>
-        </div>
-        <span style={{ width: 6, height: 24, borderRadius: 3, background: accent }} />
-      </div>
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflow: 'auto',
-          padding: '10px 12px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-        }}
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function Bucket({
-  color,
-  title,
-  hint,
-  count,
-  children,
-}: {
-  color: string;
-  title: string;
-  hint: string;
-  count: number;
-  children: ReactNode;
-}) {
-  return (
-    <div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          marginBottom: 6,
-          paddingLeft: 2,
-        }}
-      >
-        <span style={{ width: 7, height: 7, borderRadius: 4, background: color }} />
+      {r.role === 'reviewer' ? (
+        <Avatar name={r.authorLogin ?? '?'} size="sm" />
+      ) : (
+        <Icon name="gh" size={13} color="var(--gray-600)" />
+      )}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
         <span
-          style={{
-            fontSize: 11.5,
-            fontWeight: 700,
-            color: 'var(--gray-800)',
-            letterSpacing: 0.02,
-          }}
-        >
-          {title}
-        </span>
-        <span style={{ fontSize: 10.5, color: 'var(--gray-500)' }}>· {hint}</span>
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 10.5, color: 'var(--gray-500)', fontWeight: 600 }}>{count}</span>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>{children}</div>
-    </div>
-  );
-}
-
-function DiffStat({ signal }: { signal: OverviewRow['signal'] }) {
-  if (!signal) return null;
-  return (
-    <span>
-      <span style={{ color: 'var(--green-d)' }}>+{signal.added}</span>{' '}
-      <span style={{ color: 'var(--red-d)' }}>−{signal.removed}</span>
-    </span>
-  );
-}
-
-function rowShell(): React.CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    background: '#fff',
-    border: '1px solid var(--hairline)',
-    borderRadius: 'var(--r-md)',
-    padding: '8px 10px',
-    boxShadow: 'var(--sh-1)',
-    minWidth: 0,
-  };
-}
-
-/** A local branch with no Review yet — the Self-Review bucket row, carrying the
- *  worktree badges the old branch-list screen used to show. */
-function BranchRowCompact({
-  r,
-  onStartSelfReview,
-  onReadyToShare,
-  onSwitchTo,
-}: {
-  r: OverviewRow;
-  onStartSelfReview: (worktreePath: string) => void;
-  onReadyToShare: (branch: string) => void;
-  onSwitchTo: (branch: string) => void;
-}) {
-  const meta = r.branchMeta;
-  const wt = meta?.worktree ?? null;
-  const actionable = wt !== null && !wt.prunable;
-  // The explicit switch targets the FOCUSED worktree, so it applies to any
-  // local branch that isn't already checked out there — worktree or not.
-  const switchable = meta !== null && !meta.isCurrent;
-  return (
-    // `group` drives the hover-reveal of the action buttons, matching the
-    // reference branch rows.
-    <div className="group" style={rowShell()}>
-      <Icon name="branch" size={12} color="var(--gray-500)" />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          className="mono"
-          title={r.branch}
-          style={{
-            fontSize: 12,
-            fontWeight: 600,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {r.branch}
-        </div>
-        {(meta?.isCurrent || wt || meta?.hasDebrief) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-            {meta?.isCurrent && (
-              <span className="badge badge-green" style={{ flex: '0 0 auto' }}>
-                current
-              </span>
-            )}
-            {wt &&
-              (wt.isRoot ? (
-                <span className="badge" style={{ flex: '0 0 auto' }}>
-                  root
-                </span>
-              ) : (
-                <span className="badge badge-purple" style={{ flex: '0 0 auto' }}>
-                  ⌥ worktree
-                </span>
-              ))}
-            {wt?.prunable && (
-              <span className="badge badge-orange" style={{ flex: '0 0 auto' }}>
-                prunable
-              </span>
-            )}
-            {meta?.hasDebrief && (
-              <span className="badge badge-blue" style={{ flex: '0 0 auto' }}>
-                debrief
-              </span>
-            )}
-          </div>
-        )}
-        <div
-          style={{
-            fontSize: 11,
-            color: 'var(--gray-500)',
-            marginTop: 1,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            overflow: 'hidden',
-          }}
-        >
-          <DiffStat signal={r.signal} />
-          <span
-            style={{
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {meta?.lastCommit ? `${meta.lastCommit} · ` : ''}
-            {meta ? relativeTimeFromEpoch(meta.updatedAt) : ''}
-          </span>
-        </div>
-      </div>
-      {/* Self-Review / Ready-to-share need the branch materialized in a worktree
-          (the engine keys the draft off the focused worktree's branch, ADR-0022
-          §3). A branch with no worktree renders without actions. Hover-reveal
-          (opacity-0 keeps the space so the row doesn't reflow). */}
-      {switchable && (
-        <button
-          type="button"
-          className="btn opacity-0 group-hover:opacity-100 focus:opacity-100"
-          onClick={() => onSwitchTo(r.branch)}
-          style={{ transition: 'opacity 80ms ease' }}
-        >
-          <Icon name="branch" size={10} color="var(--gray-700)" /> Switch to…
-        </button>
-      )}
-      {actionable && (
-        <button
-          type="button"
-          className="btn opacity-0 group-hover:opacity-100 focus:opacity-100"
-          onClick={() => onStartSelfReview(wt.path)}
-          style={{ transition: 'opacity 80ms ease' }}
-        >
-          <Icon name="play" size={10} color="var(--gray-700)" /> Self-Review
-        </button>
-      )}
-      {actionable && (
-        <button
-          type="button"
-          className="btn btn-primary opacity-0 group-hover:opacity-100 focus:opacity-100"
-          onClick={() => onReadyToShare(r.branch)}
-          style={{ transition: 'opacity 80ms ease' }}
-        >
-          <Icon name="plus" size={10} color="#fff" /> Ready to share
-        </button>
-      )}
-    </div>
-  );
-}
-
-/** Status badge label + class per derived status (WS-5). Archived rows show
- *  the reference screen's plain "Archived" badge; a locally-published Review
- *  whose PR state is unknown (GitHub not consulted) says "Published" — absent
- *  state is shown as absent, never guessed. */
-function statusBadge(r: OverviewRow): { label: string; cls: string } {
-  if (r.archived) return { label: 'Archived', cls: '' };
-  if (r.status === null) return { label: 'Published', cls: '' };
-  const map: Record<ReviewStatus, { label: string; cls: string }> = {
-    draft: { label: 'Draft', cls: '' },
-    ready_to_publish: { label: 'Ready to publish', cls: 'badge-blue' },
-    open: { label: 'In review', cls: 'badge-blue' },
-    changes_requested: { label: 'Changes requested', cls: 'badge-orange' },
-    approved: { label: 'Approved', cls: 'badge-green' },
-    merged: { label: 'Archived', cls: '' },
-    closed: { label: 'Archived', cls: '' },
-  };
-  return map[r.status];
-}
-
-/** A Review row — a per-machine draft or a published (PR-backed) Review. */
-function ReviewRowCompact({
-  r,
-  reviewing,
-  onBackToSelfReview,
-  onOpenStoryline,
-  onOpenReview,
-}: {
-  r: OverviewRow;
-  reviewing?: boolean;
-  onBackToSelfReview?: (r: OverviewRow) => void;
-  onOpenStoryline?: (r: OverviewRow) => void;
-  onOpenReview?: (pr: PrRef) => void;
-}) {
-  const st = statusBadge(r);
-  const pr = prRefFromUrl(r.url);
-  const composerReady = r.branchMeta?.worktree != null;
-  return (
-    <div style={rowShell()}>
-      {reviewing && <Avatar name={r.authorLogin ?? '?'} size="sm" />}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
           title={r.title || r.branch}
           style={{
             fontSize: 12.5,
@@ -1206,183 +669,11 @@ function ReviewRowCompact({
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            marginBottom: 4,
           }}
         >
           {r.title || r.branch}
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            marginBottom: 4,
-          }}
-        >
-          {r.prNumber !== null && (
-            <span className="badge" style={{ background: 'rgba(0,0,0,0.06)', flex: '0 0 auto' }}>
-              #{r.prNumber}
-            </span>
-          )}
-          <span className={`badge ${st.cls}`} style={{ flex: '0 0 auto' }}>
-            {st.label}
-          </span>
-        </div>
-        {/* Branch on its own row — but only when it isn't already the heading
-            (an untitled Review falls back to the branch name above). */}
-        {r.title && r.title !== r.branch && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              marginBottom: 2,
-              minWidth: 0,
-            }}
-          >
-            <Icon name="branch" size={11} color="var(--gray-400)" />
-            <span
-              className="mono"
-              title={r.branch}
-              style={{
-                fontSize: 11,
-                color: 'var(--gray-500)',
-                minWidth: 0,
-                overflowWrap: 'anywhere',
-              }}
-            >
-              {r.branch}
-            </span>
-          </div>
-        )}
-        <div
-          style={{
-            fontSize: 11,
-            color: 'var(--gray-500)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            overflow: 'hidden',
-          }}
-        >
-          <DiffStat signal={r.signal} />
-          {r.storylineCount !== null && r.storylineCount > 0 && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-              <Icon name="doc-stack" size={9} color="var(--gray-500)" /> {r.storylineCount}
-            </span>
-          )}
-          {r.signal !== null && r.signal.comments > 0 && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-              <Icon name="comment-fill" size={9} color="var(--gray-400)" /> {r.signal.comments}
-            </span>
-          )}
-        </div>
-      </div>
-      <div style={{ fontSize: 10.5, color: 'var(--gray-500)', flex: '0 0 auto' }}>
-        {r.updatedAt
-          ? relativeTime(r.updatedAt)
-          : r.branchMeta
-            ? relativeTimeFromEpoch(r.branchMeta.updatedAt)
-            : ''}
-      </div>
-      {onOpenStoryline && (
-        <button
-          type="button"
-          className="btn"
-          onClick={() => onOpenStoryline(r)}
-          disabled={!composerReady}
-          title={
-            composerReady
-              ? 'Open the storyline for this review'
-              : 'Check the branch out in a worktree to compose its storyline'
-          }
-          style={{ flex: '0 0 auto', opacity: composerReady ? 1 : 0.5 }}
-        >
-          <Icon name="doc-stack" size={10} color="var(--gray-700)" /> Storyline
-        </button>
-      )}
-      {reviewing && onOpenReview && pr && (
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => onOpenReview(pr)}
-          title="Walk this review's storyline read-only"
-          style={{ flex: '0 0 auto' }}
-        >
-          <Icon name="eye" size={10} color="#fff" /> Review
-        </button>
-      )}
-      {!reviewing && onOpenReview && pr && (
-        <button
-          type="button"
-          className="btn"
-          onClick={() => onOpenReview(pr)}
-          title="Open this review's PR"
-          style={{ flex: '0 0 auto' }}
-        >
-          <Icon name="eye" size={10} color="var(--gray-700)" /> Open
-        </button>
-      )}
-      {onBackToSelfReview && (
-        <button
-          type="button"
-          className="btn"
-          onClick={() => onBackToSelfReview(r)}
-          title="Discard this review and return the branch to Self-Review"
-          style={{ flex: '0 0 auto' }}
-        >
-          <Icon name="chevron-left" size={10} color="var(--gray-700)" /> Back to Self-Review
-        </button>
-      )}
-    </div>
-  );
-}
-
-/** A plain GitHub PR (no Review anywhere we can see, DB-3). Opens in the local
- *  read-only reviewer — a storyline-less PR degrades to the plain diff there. */
-function OpenPrRowCompact({
-  r,
-  reviewing,
-  onOpenReview,
-}: {
-  r: OverviewRow;
-  reviewing?: boolean;
-  onOpenReview: (pr: PrRef) => void;
-}) {
-  const pr = prRefFromUrl(r.url);
-  const open = () => {
-    if (pr) onOpenReview(pr);
-    else if (r.url) openUrl(r.url).catch((e) => console.warn('open_url_failed', e));
-  };
-  return (
-    <div style={rowShell()}>
-      {reviewing ? (
-        <Avatar name={r.authorLogin ?? '?'} size="sm" />
-      ) : (
-        <Icon name="gh" size={13} color="var(--gray-600)" />
-      )}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          title={r.title}
-          style={{
-            fontSize: 12.5,
-            fontWeight: 600,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            marginBottom: 4,
-          }}
-        >
-          {r.title}
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            marginBottom: 4,
-          }}
-        >
+        </span>
+        {r.prNumber !== null && (
           <span
             className="badge"
             style={{
@@ -1395,46 +686,22 @@ function OpenPrRowCompact({
           >
             <Icon name="gh" size={9} color="var(--gray-700)" /> #{r.prNumber}
           </span>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            marginBottom: 2,
-            minWidth: 0,
-          }}
-        >
-          <Icon name="branch" size={11} color="var(--gray-400)" />
-          <span
-            className="mono"
-            title={r.branch}
-            style={{
-              fontSize: 11,
-              color: 'var(--gray-500)',
-              minWidth: 0,
-              overflowWrap: 'anywhere',
-            }}
-          >
-            {r.branch}
+        )}
+        <span className={`badge ${st.cls}`} style={{ flex: '0 0 auto' }}>
+          {st.label}
+        </span>
+        {r.role === 'reviewer' && r.authorLogin && (
+          <span style={{ fontSize: 11, color: 'var(--gray-500)', flex: '0 0 auto' }}>
+            by {r.authorLogin}
           </span>
-        </div>
-        <div
-          style={{
-            fontSize: 11,
-            color: 'var(--gray-500)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            overflow: 'hidden',
-          }}
-        >
-          <DiffStat signal={r.signal} />
-          {r.updatedAt && <span>{relativeTime(r.updatedAt)}</span>}
-        </div>
+        )}
       </div>
+      <span style={{ fontSize: 10.5, color: 'var(--gray-500)', flex: '0 0 auto' }}>
+        {r.updatedAt ? relativeTime(r.updatedAt) : ''}
+      </span>
       <button type="button" className="btn" onClick={open} title={r.url ?? undefined}>
-        <Icon name="play" size={10} color="var(--gray-700)" /> Review
+        <Icon name="eye" size={10} color="var(--gray-700)" />{' '}
+        {r.role === 'reviewer' ? 'Review' : 'Open'}
       </button>
     </div>
   );
