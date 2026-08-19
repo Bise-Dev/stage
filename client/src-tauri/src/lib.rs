@@ -257,6 +257,8 @@ pub fn run() {
             commands::storyline_preview,
             commands::review_open,
             commands::review_checkout_branch,
+            commands::branch_switch_plan,
+            commands::branch_switch_execute,
             commands::gh_identity,
             commands::publish_readiness,
             commands::publish_uncommitted,

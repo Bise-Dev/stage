@@ -1137,6 +1137,51 @@ pub async fn review_checkout_branch(
     .map_err(|e| AppError::Backend(format!("review_checkout_branch_join_error: {e}")))?
 }
 
+// --- Explicit branch switch (v6-light L3, ADR-0027 as amended) ----------------
+//
+// The one user-initiated working-tree switch. Strictly two-phase: `plan` lists
+// the exact git commands for the confirmation dialog; `execute` re-derives and
+// runs them. Both run in `spawn_blocking` (ADR-0023) — they shell out to git.
+
+/// Plan a switch of the focused worktree to `branch`: the exact steps that
+/// would run, or the structured "checked out elsewhere" outcome the UI answers
+/// with a "focus that worktree" affordance. Mutates nothing.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn branch_switch_plan(
+    state: State<'_, AppState>,
+    branch: String,
+) -> Result<stage_core::SwitchPlanOutcome, AppError> {
+    let path = active_repo_path(&state)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
+        Ok(stage_core::switch_plan(&path, &branch)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("branch_switch_plan_join_error: {e}")))?
+}
+
+/// Execute a confirmed switch (stash → checkout → pop, per the plan the user
+/// approved). Fail loud with git's verbatim stderr; a pop conflict leaves the
+/// stash entry intact and the error names it. Nudges the sync engine — HEAD
+/// moved, so every snapshot input changed.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn branch_switch_execute(
+    state: State<'_, AppState>,
+    branch: String,
+) -> Result<stage_core::SwitchOutcome, AppError> {
+    let path = active_repo_path(&state)?;
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
+        Ok(stage_core::switch_execute(&path, &branch)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("branch_switch_execute_join_error: {e}")))?;
+    // Nudge even when the pop failed loudly — the checkout may still have
+    // happened, and the snapshot must reflect the tree as it now is.
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    result
+}
+
 // --- Identity (ADR-0022 §5, milestone C) -------------------------------------
 //
 // Stage holds no account/session/token. "Who am I" is just the `gh` token owner,

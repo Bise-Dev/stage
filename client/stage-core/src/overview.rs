@@ -733,7 +733,7 @@ fn branch_diff(
 /// Working-tree entry count (staged + unstaged + untracked, ignored excluded)
 /// for the worktree at `path`. Fail loud: a worktree we can't inspect is an
 /// error, never a fake 0.
-fn uncommitted_count(path: &Path) -> Result<u32, StageError> {
+pub(crate) fn uncommitted_count(path: &Path) -> Result<u32, StageError> {
     let repo = git2::Repository::open(path)?;
     let mut opts = git2::StatusOptions::new();
     opts.include_untracked(true)
