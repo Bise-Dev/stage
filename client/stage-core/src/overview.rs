@@ -961,6 +961,7 @@ mod tests {
                 },
                 "main",
                 vec![],
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
             .unwrap();
 

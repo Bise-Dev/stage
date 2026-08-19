@@ -6,8 +6,8 @@ use tauri::{AppHandle, State};
 
 use stage_core::diff::{default_base, DiffLineIndex};
 use stage_core::{
-    repo_key_from_cwd, Debrief, NoteAnchor, NoteStatus, Review, SelfReviewNote, SelfReviewNoteView,
-    Store, StorylinePreview, StorylineStep,
+    repo_key_from_cwd, DebriefView, NoteAnchor, NoteStatus, Review, SelfReviewNote,
+    SelfReviewNoteView, Store, StorylinePreview, StorylineStep,
 };
 
 use crate::errors::AppError;
@@ -488,7 +488,12 @@ pub fn storyline_staleness(
             Some(draft) => {
                 let anchors = store
                     .get_debrief(&key)?
-                    .map(|d| d.steps.into_iter().map(|s| s.file).collect::<Vec<_>>())
+                    .map(|d| {
+                        d.chapters
+                            .into_iter()
+                            .flat_map(|c| c.files)
+                            .collect::<Vec<_>>()
+                    })
                     .unwrap_or_default();
                 Some((draft.base_ref, draft.head_ref, anchors))
             }
@@ -571,18 +576,45 @@ pub fn open_url(url: String) -> Result<(), AppError> {
 // no GitHub. `StageError` flows into `AppError` (errors.rs) preserving the
 // message verbatim for the client's banner.
 
-/// The stored Debrief for the active repo + branch, or `None` if the agent
-/// hasn't authored one.
+/// The stored Debrief for the active repo + branch (with its derived
+/// freshness chip — new/seen/outdated against the branch's current head), or
+/// `None` if the agent hasn't authored one.
 #[tauri::command]
 // `pill = "cmd"` tags this span so the dev Activity-log layer records one row
 // per invocation with its duration (debug builds only). `skip_all` keeps the
 // non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
 #[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn self_review_debrief_get(state: State<'_, AppState>) -> Result<Option<Debrief>, AppError> {
+pub fn self_review_debrief_get(
+    state: State<'_, AppState>,
+) -> Result<Option<DebriefView>, AppError> {
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
-    Ok(store.get_debrief(&key)?)
+    let Some(debrief) = store.get_debrief(&key)? else {
+        return Ok(None);
+    };
+    let freshness = debrief.freshness(&stage_core::branch_head_sha(&path, &key.branch)?);
+    Ok(Some(debrief.into_view(freshness)))
+}
+
+/// Record that the author opened the Debrief (freshness `new` → `seen`).
+/// Idempotent; `None` when there is no Debrief to mark.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn self_review_debrief_mark_seen(
+    state: State<'_, AppState>,
+) -> Result<Option<DebriefView>, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    let Some(debrief) = store.mark_debrief_seen(&key)? else {
+        return Ok(None);
+    };
+    let freshness = debrief.freshness(&stage_core::branch_head_sha(&path, &key.branch)?);
+    Ok(Some(debrief.into_view(freshness)))
 }
 
 /// Branch names that have a stored Debrief for the active repo. Branch-agnostic:

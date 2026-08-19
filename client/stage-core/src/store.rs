@@ -15,9 +15,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::chapter::Chapter;
 use crate::domain::{
-    Debrief, DebriefStep, NoteAnchor, NoteReply, NoteStatus, ReplyAuthor, Review, SelfReviewNote,
-    Side,
+    Debrief, NoteAnchor, NoteReply, NoteStatus, ReplyAuthor, Review, SelfReviewNote, Side,
 };
 use crate::error::StageError;
 use crate::repo_key::RepoKey;
@@ -70,59 +70,77 @@ impl Store {
         let row = self
             .conn
             .query_row(
-                "SELECT base, steps_json, created_at, updated_at FROM debrief \
+                "SELECT base, chapters_json, head_sha, seen_at, created_at, updated_at \
+                 FROM debrief \
                  WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
                 params![key.repo_owner, key.repo_name, key.branch],
                 |r| {
                     Ok((
                         r.get::<_, String>(0)?,
                         r.get::<_, String>(1)?,
-                        r.get::<_, i64>(2)?,
-                        r.get::<_, i64>(3)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<i64>>(3)?,
+                        r.get::<_, i64>(4)?,
+                        r.get::<_, i64>(5)?,
                     ))
                 },
             )
             .optional()?;
 
-        let Some((base, steps_json, created_at, updated_at)) = row else {
+        let Some((base, chapters_json, head_sha, seen_at, created_at, updated_at)) = row else {
             return Ok(None);
         };
-        let steps: Vec<DebriefStep> = serde_json::from_str(&steps_json)?;
+        let chapters: Vec<Chapter> = serde_json::from_str(&chapters_json)?;
         Ok(Some(Debrief {
             base,
-            steps,
+            chapters,
+            head_sha,
+            seen_at,
             created_at,
             updated_at,
         }))
     }
 
-    /// Upsert the Debrief for `key`. Steps are stored in ascending `order`.
-    /// `created_at` is preserved across regenerations; `updated_at` is bumped.
+    /// Upsert the Debrief for `key` — the agent's full account, replaced whole
+    /// on every pass. `created_at` is preserved across regenerations;
+    /// `updated_at` is bumped. `head_sha` is the branch head the account
+    /// describes: rewriting at the **same** head keeps `seen_at` (intro edits
+    /// don't un-see), rewriting at a **new** head clears it, so the freshness
+    /// chip flips back to `new`.
     pub fn set_debrief(
         &self,
         key: &RepoKey,
         base: &str,
-        mut steps: Vec<DebriefStep>,
+        chapters: Vec<Chapter>,
+        head_sha: &str,
     ) -> Result<Debrief, StageError> {
-        steps.sort_by_key(|s| s.order);
-        let steps_json = serde_json::to_string(&steps)?;
+        let chapters_json = serde_json::to_string(&chapters)?;
         let now = now_epoch();
-        let created_at = self.get_debrief(key)?.map(|h| h.created_at).unwrap_or(now);
+        let existing = self.get_debrief(key)?;
+        let created_at = existing.as_ref().map(|h| h.created_at).unwrap_or(now);
+        let seen_at = existing
+            .filter(|h| h.head_sha == head_sha)
+            .and_then(|h| h.seen_at);
 
         self.conn.execute(
             "INSERT INTO debrief \
-                (repo_owner, repo_name, branch, base, steps_json, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                (repo_owner, repo_name, branch, base, chapters_json, head_sha, seen_at, \
+                 created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
              ON CONFLICT(repo_owner, repo_name, branch) DO UPDATE SET \
                 base = excluded.base, \
-                steps_json = excluded.steps_json, \
+                chapters_json = excluded.chapters_json, \
+                head_sha = excluded.head_sha, \
+                seen_at = excluded.seen_at, \
                 updated_at = excluded.updated_at",
             params![
                 key.repo_owner,
                 key.repo_name,
                 key.branch,
                 base,
-                steps_json,
+                chapters_json,
+                head_sha,
+                seen_at,
                 created_at,
                 now
             ],
@@ -130,10 +148,28 @@ impl Store {
 
         Ok(Debrief {
             base: base.to_string(),
-            steps,
+            chapters,
+            head_sha: head_sha.to_string(),
+            seen_at,
             created_at,
             updated_at: now,
         })
+    }
+
+    /// Record that the author opened the Debrief for `key` (sets `seen_at` to
+    /// now; idempotent — re-opening refreshes the timestamp). Returns the
+    /// updated Debrief, or `None` when there is none to mark.
+    pub fn mark_debrief_seen(&self, key: &RepoKey) -> Result<Option<Debrief>, StageError> {
+        let now = now_epoch();
+        let changed = self.conn.execute(
+            "UPDATE debrief SET seen_at = ?4 \
+             WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
+            params![key.repo_owner, key.repo_name, key.branch, now],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        self.get_debrief(key)
     }
 
     /// Branch names that have a stored Debrief for the repo identified by
@@ -1032,6 +1068,27 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX IF NOT EXISTS review_draft_step_scope
         ON review_draft_step (repo_owner, repo_name, branch, order_index);",
+    // v6 — Debriefs become Chapters (ADR-0025, v6-light L1): `chapters_json`
+    // replaces `steps_json`, plus the freshness inputs `head_sha` (branch head
+    // at write time) and nullable `seen_at` (author opened it; cleared by a
+    // rewrite at a new head). Existing per-file-steps rows are **dropped, not
+    // converted** — the deliberate ADR-0025 hard break. A Debrief is an
+    // ephemeral per-machine agent artifact, overwritten on every agent pass and
+    // regenerated by re-running the self-review-debrief skill, so discarding
+    // beats both a permanent legacy reader and failing the whole store open.
+    "DROP TABLE IF EXISTS debrief;
+    CREATE TABLE debrief (
+        repo_owner    TEXT    NOT NULL,
+        repo_name     TEXT    NOT NULL,
+        branch        TEXT    NOT NULL,
+        base          TEXT    NOT NULL,
+        chapters_json TEXT    NOT NULL,
+        head_sha      TEXT    NOT NULL,
+        seen_at       INTEGER,
+        created_at    INTEGER NOT NULL,
+        updated_at    INTEGER NOT NULL,
+        PRIMARY KEY (repo_owner, repo_name, branch)
+    ) WITHOUT ROWID;",
 ];
 
 fn migrate(conn: &Connection) -> Result<(), StageError> {
@@ -1060,7 +1117,7 @@ fn now_epoch() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DebriefStep;
+    use crate::domain::DebriefFreshness;
 
     fn key() -> RepoKey {
         RepoKey {
@@ -1070,36 +1127,38 @@ mod tests {
         }
     }
 
-    fn step(file: &str, order: u32) -> DebriefStep {
-        DebriefStep {
-            file: file.into(),
-            intro: format!("did stuff to {file}"),
-            order,
+    fn chapter(title: &str, files: &[&str]) -> Chapter {
+        Chapter {
+            title: title.into(),
+            intro: format!("what changed in {title}"),
+            files: files.iter().map(|f| f.to_string()).collect(),
         }
     }
 
+    const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
     #[test]
-    fn debrief_round_trips_and_orders_steps() {
+    fn debrief_round_trips_chapters_in_order() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("debrief.sqlite3")).unwrap();
         let k = key();
 
         assert!(store.get_debrief(&k).unwrap().is_none());
 
-        // Set with out-of-order steps; expect them sorted by `order` on read.
+        let chapters = vec![
+            chapter("Core state", &["state.rs", "flow.rs"]),
+            chapter("Steps", &["payment.rs"]),
+        ];
         let saved = store
-            .set_debrief(&k, "main", vec![step("b.rs", 1), step("a.rs", 0)])
+            .set_debrief(&k, "main", chapters.clone(), SHA_A)
             .unwrap();
         assert_eq!(saved.base, "main");
+        assert_eq!(saved.head_sha, SHA_A);
+        assert_eq!(saved.seen_at, None);
 
         let got = store.get_debrief(&k).unwrap().expect("debrief present");
-        assert_eq!(
-            got.steps
-                .iter()
-                .map(|s| s.file.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a.rs", "b.rs"],
-        );
+        assert_eq!(got.chapters, chapters);
         assert_eq!(got.created_at, saved.created_at);
     }
 
@@ -1110,20 +1169,73 @@ mod tests {
         let k = key();
 
         let first = store
-            .set_debrief(&k, "main", vec![step("a.rs", 0)])
+            .set_debrief(&k, "main", vec![chapter("A", &["a.rs"])], SHA_A)
             .unwrap();
         let second = store
-            .set_debrief(&k, "develop", vec![step("a.rs", 0), step("c.rs", 1)])
+            .set_debrief(
+                &k,
+                "develop",
+                vec![chapter("A", &["a.rs"]), chapter("C", &["c.rs"])],
+                SHA_A,
+            )
             .unwrap();
 
         // Regenerating keeps the original created_at and updates the base.
         assert_eq!(second.created_at, first.created_at);
         assert_eq!(second.base, "develop");
-        assert_eq!(store.get_debrief(&k).unwrap().unwrap().steps.len(), 2);
+        assert_eq!(store.get_debrief(&k).unwrap().unwrap().chapters.len(), 2);
 
         assert!(store.clear_debrief(&k).unwrap());
         assert!(!store.clear_debrief(&k).unwrap()); // idempotent
         assert!(store.get_debrief(&k).unwrap().is_none());
+    }
+
+    #[test]
+    fn seen_survives_same_head_rewrite_and_resets_on_new_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("debrief.sqlite3")).unwrap();
+        let k = key();
+
+        // Unmarked store → nothing to mark.
+        assert!(store.mark_debrief_seen(&k).unwrap().is_none());
+
+        store
+            .set_debrief(&k, "main", vec![chapter("A", &["a.rs"])], SHA_A)
+            .unwrap();
+        let seen = store
+            .mark_debrief_seen(&k)
+            .unwrap()
+            .expect("debrief present");
+        assert!(seen.seen_at.is_some());
+
+        // Rewrite at the SAME head: intro edits don't un-see.
+        let same = store
+            .set_debrief(&k, "main", vec![chapter("A2", &["a.rs"])], SHA_A)
+            .unwrap();
+        assert_eq!(same.seen_at, seen.seen_at);
+
+        // Rewrite at a NEW head: seen resets → freshness flips back to new.
+        let moved = store
+            .set_debrief(&k, "main", vec![chapter("A3", &["a.rs"])], SHA_B)
+            .unwrap();
+        assert_eq!(moved.seen_at, None);
+    }
+
+    #[test]
+    fn freshness_derives_new_seen_outdated() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("debrief.sqlite3")).unwrap();
+        let k = key();
+
+        let fresh = store
+            .set_debrief(&k, "main", vec![chapter("A", &["a.rs"])], SHA_A)
+            .unwrap();
+        assert_eq!(fresh.freshness(SHA_A), DebriefFreshness::New);
+
+        let seen = store.mark_debrief_seen(&k).unwrap().unwrap();
+        assert_eq!(seen.freshness(SHA_A), DebriefFreshness::Seen);
+        // Outdated wins over seen: the branch head moved past the record.
+        assert_eq!(seen.freshness(SHA_B), DebriefFreshness::Outdated);
     }
 
     #[test]
@@ -1134,7 +1246,7 @@ mod tests {
         other.branch = "main".into();
 
         store
-            .set_debrief(&key(), "main", vec![step("a.rs", 0)])
+            .set_debrief(&key(), "main", vec![chapter("A", &["a.rs"])], SHA_A)
             .unwrap();
         assert!(store.get_debrief(&other).unwrap().is_none());
     }
@@ -1147,12 +1259,45 @@ mod tests {
         {
             let store = Store::open(&path).unwrap();
             store
-                .set_debrief(&k, "main", vec![step("a.rs", 0)])
+                .set_debrief(&k, "main", vec![chapter("A", &["a.rs"])], SHA_A)
                 .unwrap();
         }
         // Re-open: migrations already applied, data survives.
         let store = Store::open(&path).unwrap();
         assert_eq!(store.get_debrief(&k).unwrap().unwrap().base, "main");
+    }
+
+    #[test]
+    fn v6_migration_drops_legacy_steps_debriefs() {
+        // A store created at schema v5 with a legacy per-file-steps row: after
+        // the v6 migration the row is gone (ADR-0025 hard break — dropped, not
+        // converted) and the chapters shape works.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("debrief.sqlite3");
+        {
+            let conn = Connection::open(&path).unwrap();
+            // Replay migrations v1..v5 only, as an old binary would have.
+            for statement in &MIGRATIONS[..5] {
+                conn.execute_batch(statement).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 5).unwrap();
+            conn.execute(
+                "INSERT INTO debrief \
+                    (repo_owner, repo_name, branch, base, steps_json, created_at, updated_at) \
+                 VALUES ('octo', 'stage', 'feat/x', 'main', \
+                    '[{\"file\":\"a.rs\",\"intro\":\"legacy\",\"order\":0}]', 1, 1)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        let k = key();
+        assert!(store.get_debrief(&k).unwrap().is_none(), "legacy dropped");
+        store
+            .set_debrief(&k, "main", vec![chapter("A", &["a.rs"])], SHA_A)
+            .unwrap();
+        assert_eq!(store.get_debrief(&k).unwrap().unwrap().chapters.len(), 1);
     }
 
     fn anchor(file: &str) -> NoteAnchor {

@@ -7,31 +7,31 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// One step of a [`Debrief`]: an agent-authored intro anchored to a single
-/// file in the Base-scope diff.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct DebriefStep {
-    /// Repo-relative path of a file present in the Base-scope diff.
-    pub file: String,
-    /// Agent-authored markdown explaining what the agent did to this file.
-    pub intro: String,
-    /// Presentation order, ascending. Defaulted to the array index on input.
-    pub order: u32,
-}
+use crate::chapter::Chapter;
 
-/// A stored Debrief: the agent's ordered, annotated account of its own
-/// Base-scope changes, produced for the author to review locally.
+/// A stored Debrief: the agent's ordered-Chapters account of its own branch
+/// work (committed + uncommitted; no commit required), produced for the author
+/// to review locally. Records the branch head SHA and write time so the UI can
+/// present it as **new / seen / outdated** (ADR-0025; v6 decision record).
+/// One Debrief per branch, overwritten on every agent pass.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct Debrief {
     /// Base branch the diff was composed against (e.g. `"main"`).
     pub base: String,
-    /// Steps in presentation order.
-    pub steps: Vec<DebriefStep>,
+    /// Chapters in presentation order (ADR-0025: title + one intro + files).
+    pub chapters: Vec<Chapter>,
+    /// Full SHA of the branch head at write time. A rewrite with a *new* head
+    /// clears `seen_at`; the freshness chip derives from this (see
+    /// [`Debrief::freshness`]).
+    pub head_sha: String,
+    /// When the author last opened this Debrief, epoch seconds; `None` until
+    /// they do. Cleared whenever the agent rewrites at a new `head_sha`.
     // `i64` epoch seconds cross the JSON IPC boundary as a JS `number`, so the
     // generated TS must say `number` (ts-rs defaults 64-bit ints to `bigint`).
+    #[ts(type = "number | null")]
+    pub seen_at: Option<i64>,
     /// First-written time, epoch seconds. Preserved across regenerations.
     #[ts(type = "number")]
     pub created_at: i64,
@@ -40,37 +40,116 @@ pub struct Debrief {
     pub updated_at: i64,
 }
 
-/// The stdin payload accepted by `stage self-review set`.
-///
-/// `{ "base": "main", "steps": [{ "file": "...", "intro": "md", "order": 0 }] }`
-/// — `order` is optional; when omitted it defaults to the array index.
-#[derive(Debug, Clone, Deserialize)]
-pub struct DebriefInput {
-    pub base: String,
-    pub steps: Vec<DebriefStepInput>,
+/// Derived presentation state of a [`Debrief`] — computed at read time from
+/// the stored `head_sha`/`seen_at` against the branch's *current* head, never
+/// stored (the same derive-don't-store rule as `SelfReviewNoteView.outdated`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum DebriefFreshness {
+    /// Written for the current head and not yet opened by the author.
+    New,
+    /// Written for the current head and the author has opened it.
+    Seen,
+    /// The branch head moved past the recorded SHA — the account may no
+    /// longer match the code.
+    Outdated,
 }
 
+impl Debrief {
+    /// Derive the freshness chip given the branch's current head SHA.
+    /// Outdated wins over seen: a stale account is stale whether or not the
+    /// author read it.
+    pub fn freshness(&self, current_head_sha: &str) -> DebriefFreshness {
+        if self.head_sha != current_head_sha {
+            DebriefFreshness::Outdated
+        } else if self.seen_at.is_some() {
+            DebriefFreshness::Seen
+        } else {
+            DebriefFreshness::New
+        }
+    }
+
+    /// Pair the Debrief with its derived freshness for emission.
+    pub fn into_view(self, freshness: DebriefFreshness) -> DebriefView {
+        DebriefView {
+            freshness,
+            debrief: self,
+        }
+    }
+}
+
+/// A [`Debrief`] plus its derived [`DebriefFreshness`] — the read-path shape
+/// (mirrors [`SelfReviewNoteView`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DebriefView {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub debrief: Debrief,
+    pub freshness: DebriefFreshness,
+}
+
+/// The stdin payload accepted by `stage self-review set` (chapters shape,
+/// ADR-0025):
+///
+/// `{ "base": "main", "chapters": [{ "title": "…", "intro": "md", "files": ["…"] }] }`
+///
+/// The retired per-file `steps` shape is rejected loudly — see
+/// [`DebriefInput::LEGACY_STEPS_ERROR`].
 #[derive(Debug, Clone, Deserialize)]
-pub struct DebriefStepInput {
-    pub file: String,
-    pub intro: String,
-    #[serde(default)]
-    pub order: Option<u32>,
+#[serde(deny_unknown_fields)]
+pub struct DebriefInput {
+    pub base: String,
+    pub chapters: Vec<Chapter>,
 }
 
 impl DebriefInput {
-    /// Resolve the input into concrete steps, defaulting each missing `order`
-    /// to its position in the array.
-    pub fn into_steps(self) -> Vec<DebriefStep> {
-        self.steps
-            .into_iter()
-            .enumerate()
-            .map(|(i, s)| DebriefStep {
-                file: s.file,
-                intro: s.intro,
-                order: s.order.unwrap_or(i as u32),
-            })
-            .collect()
+    /// The actionable error for a payload in the retired `steps` shape.
+    /// Surfaced when the JSON carries `steps` instead of `chapters`
+    /// (ADR-0025's hard break, applied to the agent contract).
+    pub const LEGACY_STEPS_ERROR: &'static str = "unsupported legacy debrief shape: this payload has per-file `steps`, but Debriefs are authored as `chapters` (title + one intro + ordered files) since ADR-0025. Re-read the self-review-debrief skill and send {\"base\": …, \"chapters\": [{\"title\": …, \"intro\": …, \"files\": […]}]}.";
+
+    /// Parse the `stage self-review set` stdin document. A payload in the
+    /// retired per-file `steps` shape gets [`Self::LEGACY_STEPS_ERROR`] instead
+    /// of a generic serde failure, so the agent is pointed at the fix.
+    pub fn from_json(raw: &str) -> Result<Self, crate::error::StageError> {
+        let probe: serde_json::Value = serde_json::from_str(raw)?;
+        if probe.get("steps").is_some() {
+            return Err(crate::error::StageError::Invalid(
+                Self::LEGACY_STEPS_ERROR.to_string(),
+            ));
+        }
+        Ok(serde_json::from_str(raw)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debrief_input_parses_chapters() {
+        let input = DebriefInput::from_json(
+            r#"{"base":"main","chapters":[{"title":"A","intro":"md","files":["a.rs"]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(input.base, "main");
+        assert_eq!(input.chapters.len(), 1);
+        assert_eq!(input.chapters[0].files, vec!["a.rs"]);
+    }
+
+    #[test]
+    fn debrief_input_rejects_legacy_steps_shape_loudly() {
+        let err = DebriefInput::from_json(
+            r#"{"base":"main","steps":[{"file":"a.rs","intro":"md","order":0}]}"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("unsupported legacy debrief shape"),
+            "got: {err}"
+        );
     }
 }
 

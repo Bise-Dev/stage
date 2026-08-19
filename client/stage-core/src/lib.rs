@@ -8,6 +8,7 @@
 //! `gh`/`git` (ADR-0022 §5); Stage itself holds **no stored credential**.
 
 pub mod base;
+pub mod chapter;
 pub mod diff;
 pub mod discussion;
 pub mod domain;
@@ -25,14 +26,15 @@ pub mod store;
 pub mod storyline;
 pub mod worktree;
 
-pub use base::{base_options, BaseOptions, LocalDefault};
+pub use base::{base_options, branch_head_sha, BaseOptions, LocalDefault};
+pub use chapter::Chapter;
 pub use diff::DiffLineIndex;
 pub use discussion::{
     group_threads_by_step, PrDiscussion, ReviewThread, StepThreads, ThreadComment,
 };
 pub use domain::{
-    Debrief, DebriefInput, DebriefStep, NoteAnchor, NoteReply, NoteStatus, ReplyAuthor, Review,
-    SelfReviewNote, SelfReviewNoteView, Side,
+    Debrief, DebriefFreshness, DebriefInput, DebriefView, NoteAnchor, NoteReply, NoteStatus,
+    ReplyAuthor, Review, SelfReviewNote, SelfReviewNoteView, Side,
 };
 pub use error::StageError;
 pub use github::{GhAuthor, GhPullRequest, GitHub, GitHubUser, PrFilter};
