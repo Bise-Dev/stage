@@ -38,15 +38,19 @@ The author's human-readable label for a Review, entered at **Ready to share** an
 _Avoid_: "name" (that's the branch), "PR title".
 
 **Storyline**:
-The author's chosen narrative for how a reviewer should walk through the change — an ordered sequence of steps, each pointing at part of the diff and optionally carrying an introductory note. Drafted in the local store; serialized at Publish to one file per step under `.stage/<branch>/steps/` (a zero-padded numeric filename prefix orders them; TOML frontmatter carries the anchor + optional title; the body is the markdown intro).
+The author's chosen narrative for how a reviewer should walk through the change — an ordered sequence of **Chapters** over the diff. Changed files the author leaves out of every chapter stay part of the published Review: reviewers see them as an automatic, alphabetical "Everything else" section at the end, and they never block publishing. Drafted in the local store; serialized at Publish to one file per chapter under `.stage/<branch>/`. The pre-chapter one-file-per-step format is not read — a legacy `.stage` folder fails loudly rather than rendering partially.
 _Avoid_: Tour, walkthrough, guide.
+
+**Chapter**:
+The Storyline's narrative unit: a titled, author-ordered group of changed files carrying **one intro** addressed to reviewers. Chapters are the only carrier of narrative — files inside a chapter have no per-file title or intro of their own.
+_Avoid_: "step" (the retired pre-chapter unit, one file + one intro each), section, group.
 
 **Self-Review**:
 An iterative, author-only stage in which the author inspects their own evolving diff to gain an overview and guide further work (with or without an agent). It lives as long as the author keeps editing the branch and ends when they are happy. Distinct from the Storyline: a Self-Review is a working aid for the author; a Storyline is the artifact handed to reviewers. By default it compares the **selected worktree** against a **Base branch** (defaulting to the repo's remote default branch), showing the whole change — committed branch work plus uncommitted edits; the author can toggle to an **Uncommitted** view (working tree vs `HEAD`). A coding agent can attach a **Debrief** and read the author's **Self-Review notes** back, forming a local author↔agent loop. **Requires no GitHub auth** — `gh` is only invoked when a GitHub action is taken (Publish, or reviewing a PR).
 _Avoid_: Local review, pre-flight, draft review.
 
 **Debrief**:
-An agent-authored, local, author-facing narrative over the agent's own contributions — the same ordered-steps-over-the-diff shape as a Storyline, but produced by a coding agent for the **author** to review during Self-Review, not for external reviewers. Each step carries an **agent-authored intro**. Composed against the Base-scope diff. Lives only on the author's machine. At **Ready to share** a Debrief can seed a Review's Storyline — carrying its ordered steps and intros across as a starting point the author then curates — or be discarded for a fresh one. Distinct from a Storyline by producer (agent), audience (the author), storage (local store), and lifecycle (regenerated across passes, not hand-curated).
+An agent-authored, local, author-facing narrative over the agent's own contributions — the same ordered-**Chapters** shape as a Storyline, but produced by a coding agent for the **author** to review during Self-Review, not for external reviewers. Each Chapter carries an **agent-authored intro**; the Debrief holds no per-file or inline commentary — the author's questions and the agent's answers live in **Self-Review notes**. It describes the branch as the agent left it (committed + uncommitted; no commit required) and records the head SHA and timestamp at write time, so the UI can present it as new / seen / outdated. One Debrief per branch, **overwritten** on every agent pass. Lives only on the author's machine. At **Ready to share** a Debrief can seed a Review's Storyline — its Chapters and intros carry across 1:1 as a starting point the author then curates — or be discarded for a fresh one. Distinct from a Storyline by producer (agent), audience (the author), storage (local store), and lifecycle (regenerated across passes, not hand-curated).
 _Avoid_: "Handoff" (collides with an agent's conversation handoff and the `handoff` skill), "self-review storyline", "draft storyline", "recap", "walkthrough".
 
 **Self-Review note** (formerly *Review note*, ADR-0022 §8):
@@ -58,7 +62,7 @@ The author's explicit "I'm done iterating, now prepare what reviewers will see" 
 _Avoid_: "share" (overloaded), "publish" (the next step).
 
 **Ready to publish** (state, computed):
-The condition that gates Publish: the Storyline has ≥1 step, every step has a non-empty intro, and **no step is stale** against the current committed diff (a stale step narrates code the PR wouldn't contain, so it is never publishable — the author removes or re-anchors it, per *Stale step*). **Computed in Rust, never stored** — the moment the last gap is fixed, the Review is ready to publish.
+The condition that gates Publish: the Storyline has ≥1 Chapter, every Chapter has a title and a non-empty intro, and **no chapter is stale** against the current committed diff (a stale chapter narrates code the PR wouldn't contain, so it is never publishable — the author removes or re-anchors it, per *Stale chapter*). Unplaced files never block (they publish into the "Everything else" section). **Computed in Rust, never stored** — the moment the last gap is fixed, the Review is ready to publish.
 _Avoid_: "complete", "done".
 
 **Verdict** (the review decision, ADR-0022 §8):
@@ -81,14 +85,14 @@ _Avoid_: "dirty tree" in user-facing copy (say "uncommitted work"); treating Sta
 A Review outlives the GitHub PR it points to. PR close/merge does not delete it — the committed `.stage` stays on the branch, and the author can resume Self-Review, edit the Storyline, and re-publish (reopening a PR if needed). Archiving is **not** a manual action and is **never stored**: it follows the PR's GitHub state (closed/merged → archived; reopened → restored). See ADR-0002.
 
 **Comment**:
-Native GitHub review activity (a PR-level issue comment, or an inline line comment), posted **write-through** to GitHub via the user's `gh`. Stage owns no Comment entity and stores no comment drafts. See ADR-0003 (the write-through principle survives the backend's removal).
+Native GitHub review activity (a PR-level issue comment, or an inline line comment). While a review is being **drafted** in Stage, comments accumulate locally — each with a **severity** (blocking / suggestion / nit, rendered as a bold prefix in the posted body, since GitHub has no severity field) — and reach GitHub only at **Finish review**, submitted together as one GitHub review (overall comment = review body, verdict = review event). Replies inside an existing GitHub thread remain write-through. Stage owns no post-publish Comment entity; GitHub is the record once submitted.
 
-**Step discussion** (post-publish — replaces the removed *IntroComment*):
-Discussion on a storyline step is a **GitHub PR review thread**, code-anchored to the step's diff location (never to the intro paragraph). Resolve / reopen / edit / delete map to GitHub natives, gated per-comment by GitHub-computed viewer capabilities. **IntroComment is removed** (ADR-0022 §8) — there is no Stage-native intro-discussion entity. Pre-publish, the author's private annotations are **Self-Review notes**.
+**Storyline discussion** (formerly *Step discussion*; post-publish — replaces the removed *IntroComment*):
+Discussion on a storyline is a **GitHub PR review thread**, code-anchored to a diff location within a chapter's files (never to a chapter's intro paragraph). Resolve / reopen / edit / delete map to GitHub natives, gated per-comment by GitHub-computed viewer capabilities. **IntroComment is removed** (ADR-0022 §8) — there is no Stage-native intro-discussion entity. Pre-publish, the author's private annotations are **Self-Review notes**.
 
-**Stale step**:
-A Storyline step whose anchor is no longer part of the change set it composes against (file removed, renamed, or never present). **Computed in Rust** (never stored), two detection sites by phase: **pre-publish** against the local draft's committed diff; **post-publish** against the committed `.stage` storyline vs the current PR head. Surfaced as a per-step flag; nothing auto-fixes — the author edits the storyline. Pre-publish, a stale step **blocks Publish** (see *Ready to publish*). The two detectors can disagree (the local diff and the eventual PR diff need not match — see *Publish*), which is expected.
-_Avoid_: "broken step", "outdated step", "orphaned step" (we say "stale" consistently).
+**Stale chapter** (formerly *Stale step*):
+A Chapter holding a **stale file reference** — a referenced file that is no longer part of the change set the Storyline composes against (removed, renamed, or never present). **Computed in Rust** (never stored), per file reference, two detection sites by phase: **pre-publish** against the local draft's committed diff; **post-publish** against the committed `.stage` storyline vs the current PR head. Surfaced as a flag on the chapter; nothing auto-fixes — the author edits the storyline. Pre-publish, a stale chapter **blocks Publish** (see *Ready to publish*). The two detectors can disagree (the local diff and the eventual PR diff need not match — see *Publish*), which is expected.
+_Avoid_: "broken chapter", "outdated chapter", "orphaned file" (we say "stale" consistently).
 
 **Archived Review**:
 A Review whose GitHub PR is closed or merged. Derived strictly from the PR's GitHub state — there is no manual "archive" gesture and the state is never stored. Reopening the PR restores it. The default dashboard view hides archived Reviews — a view filter, not a separate state.

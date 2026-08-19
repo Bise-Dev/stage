@@ -1,6 +1,6 @@
 # ADR-0003 · Comments are write-through to github in the POC
 
-**Status:** accepted
+**Status:** superseded by ADR-0026 for composing a review (inline comments now draft locally and submit as one GitHub review); write-through survives for thread replies, resolve/reopen, and post-submission actions
 **Date:** 2026-05-23
 
 ## Context
