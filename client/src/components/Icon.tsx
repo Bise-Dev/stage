@@ -1,4 +1,4 @@
-type IconName =
+export type IconName =
   | 'gh'
   | 'folder'
   | 'chevron-right'
@@ -13,6 +13,7 @@ type IconName =
   | 'search'
   | 'eye'
   | 'grip'
+  | 'sparkle'
   | 'comment-fill';
 
 interface IconProps {
@@ -164,6 +165,19 @@ export function Icon({ name, size = 14, color = 'currentColor', className }: Ico
         >
           <circle cx="6" cy="6" r="4" />
           <path d="M9.2 9.2L12 12" />
+        </svg>
+      );
+    case 'sparkle':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <path d="M7 1.5v3M7 9.5v3M1.5 7h3M9.5 7h3M3.2 3.2l2 2M8.8 8.8l2 2M10.8 3.2l-2 2M5.2 8.8l-2 2" />
         </svg>
       );
     case 'eye':

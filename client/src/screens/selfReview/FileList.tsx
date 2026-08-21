@@ -9,23 +9,32 @@ const STATUS_BADGE: Record<SelfReviewFileChange['status'], { ch: string; color: 
   renamed: { ch: 'R', color: 'var(--purple)' },
 };
 
+/** Section-qualified row id: the committed and uncommitted sections can hold
+ *  the same path, so selection/scroll targets carry their section. */
+export const committedId = (path: string) => `c:${path}`;
+export const uncommittedId = (path: string) => `u:${path}`;
+
 /**
- * Left sidebar of the Self-Review screen. Flat list (no tree toggle for v1,
- * per Q13). Cmd-F binds to the filter input from the parent. "Mark viewed"
- * lives in each row's right side; counts roll up to the subheader.
+ * Left sidebar of the review shell's Self-Review mode. Flat list (no tree
+ * toggle for v1, per Q13). Cmd-F binds to the filter input from the parent.
  *
- * When a Debrief exists, `files` arrives pre-ordered by the parent: the files
- * the Debrief narrates come first (in step order), then everything else in path
- * order. `debriefPaths` marks the narrated set so we can draw an "Other files"
- * divider at the boundary — mirroring the rail's "Notes on other files" label.
+ * Three groups (v6-light L5):
+ *  - unviewed committed files — full rows, "Other files" divider when a
+ *    Debrief orders the top of the list;
+ *  - viewed committed files — compacted into a dim "Seen" group at the bottom
+ *    (design `V6_FileList`), each still toggleable back;
+ *  - the uncommitted section (flag F4) — present only when the author folds
+ *    the working tree in; separate label, no viewed checkboxes (working-tree
+ *    edits are too volatile to meaningfully "mark seen").
  */
 export function FileList({
   files,
+  uncommittedFiles,
   debriefPaths,
   filter,
   setFilter,
   filterRef,
-  selectedPath,
+  selectedId,
   onSelect,
   viewed,
   onToggleViewed,
@@ -33,14 +42,18 @@ export function FileList({
   noteCounts,
   width,
 }: {
+  /** The committed section's files. */
   files: SelfReviewFileChange[];
+  /** The uncommitted section's files; null/empty when the section is off. */
+  uncommittedFiles: SelfReviewFileChange[] | null;
   /** Paths the Debrief narrates (empty when there's no Debrief). */
   debriefPaths: Set<string>;
   filter: string;
   setFilter: (s: string) => void;
   filterRef: React.RefObject<HTMLInputElement | null>;
-  selectedPath: string | null;
-  onSelect: (path: string) => void;
+  /** Section-qualified id (see `committedId`/`uncommittedId`). */
+  selectedId: string | null;
+  onSelect: (id: string) => void;
   viewed: Set<string>;
   onToggleViewed: (path: string) => void;
   onClearViewed: () => void;
@@ -49,17 +62,21 @@ export function FileList({
   width: number;
 }) {
   const q = filter.trim().toLowerCase();
-  const filtered = !q
-    ? files
-    : files.filter((f) => f.path.toLowerCase().includes(q) || f.patch?.toLowerCase().includes(q));
+  const match = (f: SelfReviewFileChange) =>
+    !q || f.path.toLowerCase().includes(q) || f.patch?.toLowerCase().includes(q);
 
-  // Index of the first non-narrated file in the (already ordered) filtered list.
-  // We only draw the "Other files" divider when there's at least one narrated
-  // file above it (`> 0`) — if the filter leaves only non-Debrief files, or only
-  // Debrief files, no divider shows.
+  const filtered = files.filter(match);
+  const unseen = filtered.filter((f) => !viewed.has(f.path));
+  const seen = filtered.filter((f) => viewed.has(f.path));
+  const filteredUncommitted = (uncommittedFiles ?? []).filter(match);
+
+  // Index of the first non-narrated file among the unseen rows. The divider
+  // only shows when at least one narrated file sits above it.
   const otherStartIdx =
-    debriefPaths.size === 0 ? -1 : filtered.findIndex((f) => !debriefPaths.has(f.path));
+    debriefPaths.size === 0 ? -1 : unseen.findIndex((f) => !debriefPaths.has(f.path));
   const showOtherLabel = otherStartIdx > 0;
+
+  const empty = filtered.length === 0 && filteredUncommitted.length === 0;
 
   return (
     <div
@@ -104,7 +121,7 @@ export function FileList({
         </span>
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: '0 6px' }}>
-        {filtered.length === 0 && (
+        {empty && (
           <div
             style={{
               padding: '10px 12px',
@@ -112,10 +129,12 @@ export function FileList({
               color: 'var(--gray-500)',
             }}
           >
-            {files.length === 0 ? 'No changes.' : 'No files match the filter.'}
+            {files.length === 0 && (uncommittedFiles?.length ?? 0) === 0
+              ? 'No changes.'
+              : 'No files match the filter.'}
           </div>
         )}
-        {filtered.map((f, i) => (
+        {unseen.map((f, i) => (
           <Fragment key={f.path}>
             {showOtherLabel && i === otherStartIdx && (
               <div
@@ -127,14 +146,72 @@ export function FileList({
             )}
             <FileRow
               file={f}
-              active={f.path === selectedPath}
-              isViewed={viewed.has(f.path)}
+              active={committedId(f.path) === selectedId}
+              isViewed={false}
               noteCount={noteCounts.get(f.path) ?? 0}
-              onSelect={() => onSelect(f.path)}
+              onSelect={() => onSelect(committedId(f.path))}
               onToggleViewed={() => onToggleViewed(f.path)}
             />
           </Fragment>
         ))}
+
+        {/* Seen — viewed files compact into a dim single-line group (design
+            `V6_FileList`); the checkbox still toggles them back to full rows. */}
+        {seen.length > 0 && (
+          <>
+            <div
+              className="section-label"
+              style={{
+                padding: '12px 8px 4px',
+                color: 'var(--gray-400)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
+            >
+              <Icon name="check" size={10} color="var(--gray-400)" /> Seen · {seen.length}
+            </div>
+            {seen.map((f) => (
+              <SeenRow
+                key={f.path}
+                file={f}
+                active={committedId(f.path) === selectedId}
+                noteCount={noteCounts.get(f.path) ?? 0}
+                onSelect={() => onSelect(committedId(f.path))}
+                onToggleViewed={() => onToggleViewed(f.path)}
+              />
+            ))}
+          </>
+        )}
+
+        {/* Uncommitted — the separate working-tree section (flag F4). */}
+        {uncommittedFiles !== null && (
+          <>
+            <div
+              className="section-label"
+              style={{ padding: '12px 8px 4px', color: 'var(--orange)' }}
+            >
+              Uncommitted · {filteredUncommitted.length}
+            </div>
+            {filteredUncommitted.length === 0 && (
+              <div style={{ padding: '2px 12px 8px', fontSize: 11, color: 'var(--gray-500)' }}>
+                Working tree is clean.
+              </div>
+            )}
+            {filteredUncommitted.map((f) => (
+              <FileRow
+                key={f.path}
+                file={f}
+                active={uncommittedId(f.path) === selectedId}
+                isViewed={false}
+                hideViewed
+                noteCount={0}
+                onSelect={() => onSelect(uncommittedId(f.path))}
+                onToggleViewed={() => {}}
+              />
+            ))}
+          </>
+        )}
       </div>
       {viewed.size > 0 && (
         <div
@@ -161,10 +238,79 @@ export function FileList({
   );
 }
 
+/** Compact one-line row for a viewed file: dim, struck through, checkbox on
+ *  the left to un-view (mirrors the design's seen group). */
+function SeenRow({
+  file,
+  active,
+  noteCount,
+  onSelect,
+  onToggleViewed,
+}: {
+  file: SelfReviewFileChange;
+  active: boolean;
+  noteCount: number;
+  onSelect: () => void;
+  onToggleViewed: () => void;
+}) {
+  const badge = STATUS_BADGE[file.status];
+  const name = file.path.split('/').pop() ?? file.path;
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      title={file.path}
+      style={{
+        width: '100%',
+        textAlign: 'left',
+        border: 'none',
+        cursor: 'default',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '3px 8px',
+        borderRadius: 5,
+        margin: '1px 0',
+        background: active ? 'rgba(0,122,255,0.10)' : 'transparent',
+        opacity: 0.55,
+        fontFamily: 'inherit',
+      }}
+    >
+      <ViewedCheckbox isViewed onToggle={onToggleViewed} />
+      <span
+        style={{
+          width: 5,
+          height: 5,
+          flex: '0 0 5px',
+          borderRadius: 3,
+          background: badge.color,
+        }}
+      />
+      <span
+        className="mono"
+        style={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: 11.5,
+          color: 'var(--gray-500)',
+          textDecoration: 'line-through',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {name}
+      </span>
+      {noteCount > 0 && <Icon name="comment-fill" size={9} color="var(--gray-400)" />}
+    </button>
+  );
+}
+
 function FileRow({
   file,
   active,
   isViewed,
+  hideViewed,
   noteCount,
   onSelect,
   onToggleViewed,
@@ -172,6 +318,8 @@ function FileRow({
   file: SelfReviewFileChange;
   active: boolean;
   isViewed: boolean;
+  /** Uncommitted-section rows carry no viewed checkbox (flag F4). */
+  hideViewed?: boolean;
   noteCount: number;
   onSelect: () => void;
   onToggleViewed: () => void;
@@ -265,40 +413,46 @@ function FileRow({
           <span style={{ color: active ? '#7a3530' : 'var(--red-d)' }}>−{file.deletions}</span>
         )}
       </span>
-      <span
-        // biome-ignore lint/a11y/useSemanticElements: nested inside the row <button>; an <input type=checkbox> would clash with the row click target and inherit default OS styling we don't want.
-        role="checkbox"
-        aria-checked={isViewed}
-        aria-label="Mark viewed"
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleViewed();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === ' ' || e.key === 'Enter') {
-            e.preventDefault();
-            e.stopPropagation();
-            onToggleViewed();
-          }
-        }}
-        tabIndex={0}
-        style={{
-          width: 14,
-          height: 14,
-          borderRadius: 3,
-          border: '1px solid var(--gray-300)',
-          background: isViewed ? 'var(--green-d)' : '#fff',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#fff',
-          fontSize: 10,
-          flex: '0 0 14px',
-          cursor: 'default',
-        }}
-      >
-        {isViewed ? '✓' : ''}
-      </span>
+      {!hideViewed && <ViewedCheckbox isViewed={isViewed} onToggle={onToggleViewed} />}
     </button>
+  );
+}
+
+function ViewedCheckbox({ isViewed, onToggle }: { isViewed: boolean; onToggle: () => void }) {
+  return (
+    <span
+      // biome-ignore lint/a11y/useSemanticElements: nested inside the row <button>; an <input type=checkbox> would clash with the row click target and inherit default OS styling we don't want.
+      role="checkbox"
+      aria-checked={isViewed}
+      aria-label="Mark viewed"
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          onToggle();
+        }
+      }}
+      tabIndex={0}
+      style={{
+        width: 14,
+        height: 14,
+        borderRadius: 3,
+        border: '1px solid var(--gray-300)',
+        background: isViewed ? 'var(--green-d)' : '#fff',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#fff',
+        fontSize: 10,
+        flex: '0 0 14px',
+        cursor: 'default',
+      }}
+    >
+      {isViewed ? '✓' : ''}
+    </span>
   );
 }
