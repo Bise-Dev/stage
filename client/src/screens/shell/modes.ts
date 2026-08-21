@@ -1,7 +1,7 @@
 /**
  * The review shell's mode registry (v6-light L5, design `V6_MODES`; trimmed in
- * L7 §3b M1: the Debrief is no longer a mode — it renders *inside* Self-Review
- * as the rail plus inline chapter banners).
+ * L7 §3b M1: the Debrief is no longer a mode — since L9 it renders *inside*
+ * Self-Review as the chapter-grouped file list plus inline chapter banners).
  *
  * Self-Review — and later Review (full v6 step 7) — are the same interface:
  * one shell, one layout, with the mode config carrying everything that

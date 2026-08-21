@@ -15,6 +15,11 @@ const STATUS_BADGE: Record<SelfReviewFileChange['status'], { ch: string; color: 
 export const committedId = (path: string) => `c:${path}`;
 export const uncommittedId = (path: string) => `u:${path}`;
 
+/** A Debrief chapter's presence in the file list: title + the paths it
+ *  narrates, in chapter order (title only — the intro lives in the center
+ *  `ChapterBanner`, v6-light L9 §3c N1). */
+export type FileListChapter = { title: string; files: string[] };
+
 /**
  * Left sidebar of the review shell's Self-Review mode. Flat list (no tree
  * toggle for v1, per Q13). Cmd-F binds to the filter input from the parent.
@@ -22,19 +27,20 @@ export const uncommittedId = (path: string) => `u:${path}`;
  * content deliberately doesn't match, a filename query must not surface
  * unrelated files whose diff happens to contain it.
  *
- * Rendered inside the shared `CollapsibleRail` (M2); three groups (L5):
- *  - unviewed committed files — full rows, "Other files" divider when a
- *    Debrief orders the top of the list;
- *  - viewed committed files — compacted into a dim "Seen" group at the bottom
- *    (design `V6_FileList`), each still toggleable back;
- *  - the uncommitted section (flag F4) — present only when the author folds
- *    the working tree in; separate label, no viewed checkboxes (working-tree
- *    edits are too volatile to meaningfully "mark seen").
+ * Rendered inside the shared `CollapsibleRail` (M2). When a Debrief exists,
+ * committed files group under **chapter title headers** (L9 §3c N1) with a
+ * trailing "Other files" group for unnarrated ones; no Debrief → one flat
+ * group. Within each group, viewed files compact into dim struck-through
+ * rows at the group's bottom (design `V6_FileList`, per-group since L9).
+ * While a filter query is active, only groups containing matches render.
+ * The uncommitted section (flag F4) follows separately — no viewed
+ * checkboxes (working-tree edits are too volatile to meaningfully
+ * "mark seen").
  */
 export function FileList({
   files,
   uncommittedFiles,
-  debriefPaths,
+  chapters,
   filter,
   setFilter,
   filterRef,
@@ -52,8 +58,8 @@ export function FileList({
   files: SelfReviewFileChange[];
   /** The uncommitted section's files; null/empty when the section is off. */
   uncommittedFiles: SelfReviewFileChange[] | null;
-  /** Paths the Debrief narrates (empty when there's no Debrief). */
-  debriefPaths: Set<string>;
+  /** The Debrief's chapters (title + narrated paths); empty when no Debrief. */
+  chapters: FileListChapter[];
   filter: string;
   setFilter: (s: string) => void;
   filterRef: React.RefObject<HTMLInputElement | null>;
@@ -74,15 +80,32 @@ export function FileList({
   const match = (f: SelfReviewFileChange) => !q || f.path.toLowerCase().includes(q);
 
   const filtered = files.filter(match);
-  const unseen = filtered.filter((f) => !viewed.has(f.path));
-  const seen = filtered.filter((f) => viewed.has(f.path));
   const filteredUncommitted = (uncommittedFiles ?? []).filter(match);
 
-  // Index of the first non-narrated file among the unseen rows. The divider
-  // only shows when at least one narrated file sits above it.
-  const otherStartIdx =
-    debriefPaths.size === 0 ? -1 : unseen.findIndex((f) => !debriefPaths.has(f.path));
-  const showOtherLabel = otherStartIdx > 0;
+  // Group the (already filtered) committed files under their chapter titles,
+  // in chapter order; unnarrated files trail under "Other files". A file
+  // claimed by an earlier chapter isn't repeated by a later one. Groups
+  // emptied by the filter drop out entirely (header included).
+  const groups: Array<{ title: string | null; files: SelfReviewFileChange[] }> = [];
+  {
+    const byPath = new Map(filtered.map((f) => [f.path, f]));
+    const claimed = new Set<string>();
+    for (const ch of chapters) {
+      const chFiles: SelfReviewFileChange[] = [];
+      for (const p of ch.files) {
+        const f = byPath.get(p);
+        if (f && !claimed.has(p)) {
+          claimed.add(p);
+          chFiles.push(f);
+        }
+      }
+      if (chFiles.length > 0) groups.push({ title: ch.title, files: chFiles });
+    }
+    const rest = filtered.filter((f) => !claimed.has(f.path));
+    if (rest.length > 0) {
+      groups.push({ title: chapters.length > 0 ? 'Other files' : null, files: rest });
+    }
+  }
 
   const empty = filtered.length === 0 && filteredUncommitted.length === 0;
 
@@ -135,55 +158,53 @@ export function FileList({
               : 'No files match the filter.'}
           </div>
         )}
-        {unseen.map((f, i) => (
-          <Fragment key={f.path}>
-            {showOtherLabel && i === otherStartIdx && (
-              <div
-                className="section-label"
-                style={{ padding: '12px 8px 4px', color: 'var(--gray-500)' }}
-              >
-                Other files
-              </div>
-            )}
-            <FileRow
-              file={f}
-              active={committedId(f.path) === selectedId}
-              isViewed={false}
-              noteCount={noteCounts.get(f.path) ?? 0}
-              onSelect={() => onSelect(committedId(f.path))}
-              onToggleViewed={() => onToggleViewed(f.path)}
-            />
-          </Fragment>
-        ))}
-
-        {/* Seen — viewed files compact into a dim single-line group (design
-            `V6_FileList`); the checkbox still toggles them back to full rows. */}
-        {seen.length > 0 && (
-          <>
-            <div
-              className="section-label"
-              style={{
-                padding: '12px 8px 4px',
-                color: 'var(--gray-400)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-              }}
-            >
-              <Icon name="check" size={10} color="var(--gray-400)" /> Seen · {seen.length}
-            </div>
-            {seen.map((f) => (
-              <SeenRow
-                key={f.path}
-                file={f}
-                active={committedId(f.path) === selectedId}
-                noteCount={noteCounts.get(f.path) ?? 0}
-                onSelect={() => onSelect(committedId(f.path))}
-                onToggleViewed={() => onToggleViewed(f.path)}
-              />
-            ))}
-          </>
-        )}
+        {groups.map((g, gi) => {
+          const unseen = g.files.filter((f) => !viewed.has(f.path));
+          const seen = g.files.filter((f) => viewed.has(f.path));
+          return (
+            <Fragment key={g.title ?? '·flat·'}>
+              {g.title !== null && (
+                <div
+                  className="section-label"
+                  title={g.title}
+                  style={{
+                    padding: gi === 0 ? '6px 8px 4px' : '12px 8px 4px',
+                    color: g.title === 'Other files' ? 'var(--gray-500)' : 'var(--gray-600)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {g.title}
+                </div>
+              )}
+              {unseen.map((f) => (
+                <FileRow
+                  key={f.path}
+                  file={f}
+                  active={committedId(f.path) === selectedId}
+                  isViewed={false}
+                  noteCount={noteCounts.get(f.path) ?? 0}
+                  onSelect={() => onSelect(committedId(f.path))}
+                  onToggleViewed={() => onToggleViewed(f.path)}
+                />
+              ))}
+              {/* Seen — viewed files compact into dim single-line rows at the
+                  group's bottom (per-group since L9 §3c N1); the checkbox
+                  still toggles them back to full rows. */}
+              {seen.map((f) => (
+                <SeenRow
+                  key={f.path}
+                  file={f}
+                  active={committedId(f.path) === selectedId}
+                  noteCount={noteCounts.get(f.path) ?? 0}
+                  onSelect={() => onSelect(committedId(f.path))}
+                  onToggleViewed={() => onToggleViewed(f.path)}
+                />
+              ))}
+            </Fragment>
+          );
+        })}
 
         {/* Uncommitted — the separate working-tree section (flag F4). */}
         {uncommittedFiles !== null && (
