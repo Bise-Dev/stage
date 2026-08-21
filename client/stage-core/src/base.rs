@@ -86,6 +86,18 @@ pub fn base_options(repo_path: &Path) -> Result<BaseOptions, StageError> {
     })
 }
 
+/// Full SHA of local branch `branch`'s head. Loud on a missing branch (git2's
+/// own error propagates) — a Debrief keyed to a branch that doesn't resolve is
+/// a caller bug, not a condition to paper over.
+pub fn branch_head_sha(repo_path: &Path, branch: &str) -> Result<String, StageError> {
+    let repo = Repository::open(repo_path)?;
+    let commit = repo
+        .find_branch(branch, git2::BranchType::Local)?
+        .get()
+        .peel_to_commit()?;
+    Ok(commit.id().to_string())
+}
+
 /// `origin/HEAD`'s target shorthand (e.g. `main`), if set.
 fn remote_head_shorthand(repo: &Repository) -> Option<String> {
     let reference = repo.find_reference("refs/remotes/origin/HEAD").ok()?;

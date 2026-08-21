@@ -231,6 +231,7 @@ pub fn run() {
             commands::open_in_finder,
             commands::open_url,
             commands::self_review_debrief_get,
+            commands::self_review_debrief_mark_seen,
             commands::repo_debrief_branches,
             commands::self_review_notes_list,
             commands::self_review_note_create,

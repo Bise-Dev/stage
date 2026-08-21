@@ -16,6 +16,7 @@ import type { BaseOptions } from './generated/BaseOptions';
 import type { BranchInfo } from './generated/BranchInfo';
 import type { BranchMeta } from './generated/BranchMeta';
 import type { ChangedFile } from './generated/ChangedFile';
+import type { Chapter } from './generated/Chapter';
 // New-engine DTOs (ADR-0022): identity (C), publish (D), verdict/review (E-RW),
 // discussion (E-IC). All generated from the Rust structs; the screens import them
 // from here like the rest of the IPC boundary.
@@ -23,7 +24,8 @@ import type { CheckResult } from './generated/CheckResult';
 import type { CheckStatus } from './generated/CheckStatus';
 import type { CommittedDiff } from './generated/CommittedDiff';
 import type { Debrief } from './generated/Debrief';
-import type { DebriefStep } from './generated/DebriefStep';
+import type { DebriefFreshness } from './generated/DebriefFreshness';
+import type { DebriefView } from './generated/DebriefView';
 import type { DiffStats } from './generated/DiffStats';
 import type { DraftLineComment } from './generated/DraftLineComment';
 import type { FetchOutcome } from './generated/FetchOutcome';
@@ -96,8 +98,10 @@ export type {
   BranchMeta,
   ChangedFile,
   CommittedDiff,
+  Chapter,
   Debrief,
-  DebriefStep,
+  DebriefFreshness,
+  DebriefView,
   DiffStats,
   FetchOutcome,
   FileStatus,
@@ -506,8 +510,14 @@ export const prDeleteComment = (commentId: number) =>
 // --- Self-Review Debrief (cycle 1: local agent↔author loop; see ADR-0011,
 // CONTEXT.md "Debrief" / "Review note"). All local + auth-free. ---
 
-/** The stored Debrief for the active repo + branch, or `null` if none. */
-export const selfReviewDebriefGet = () => invoke<Debrief | null>('self_review_debrief_get');
+/** The stored Debrief (with derived freshness) for the active repo + branch,
+ *  or `null` if none. */
+export const selfReviewDebriefGet = () => invoke<DebriefView | null>('self_review_debrief_get');
+
+/** Record that the author opened the Debrief (`new` → `seen`). Idempotent;
+ *  `null` when there is no Debrief to mark. */
+export const selfReviewDebriefMarkSeen = () =>
+  invoke<DebriefView | null>('self_review_debrief_mark_seen');
 
 /** Branch names that have a stored Debrief for the active repo (branch-agnostic,
  *  repo-wide). Lets the branch list flag which branches carry a Debrief. */

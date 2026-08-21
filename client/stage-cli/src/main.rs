@@ -12,8 +12,8 @@ use stage_core::diff::{
     assert_files_in_base_diff, default_base, self_review_diff, DiffLineIndex, SelfReviewScope,
 };
 use stage_core::{
-    parse_pr_ref, repo_key_from_cwd, repo_root_from_cwd, resolve_clone, DebriefInput, NoteStatus,
-    PrRef, StageError, Store,
+    branch_head_sha, parse_pr_ref, repo_key_from_cwd, repo_root_from_cwd, resolve_clone,
+    DebriefInput, NoteStatus, PrRef, StageError, Store,
 };
 
 #[derive(Parser)]
@@ -322,18 +322,31 @@ fn self_review(cmd: SelfReviewCmd, cwd: &Path, root: &Path) -> Result<(), StageE
             let store = Store::open_default()?;
             let mut raw = String::new();
             std::io::stdin().read_to_string(&mut raw)?;
-            let input: DebriefInput = serde_json::from_str(&raw)?;
+            // The retired per-file `steps` shape gets the actionable hard-break
+            // error (ADR-0025), not a generic serde parse failure.
+            let input = DebriefInput::from_json(&raw)?;
             let base = input.base.clone();
-            let files: Vec<String> = input.steps.iter().map(|s| s.file.clone()).collect();
+            let files: Vec<String> = input
+                .chapters
+                .iter()
+                .flat_map(|c| c.files.iter().cloned())
+                .collect();
             assert_files_in_base_diff(root, &base, &files)?;
-            let debrief = store.set_debrief(&key, &base, input.into_steps())?;
+            // The Debrief describes the branch as the agent left it; record the
+            // head it was written against so the app can derive new/seen/outdated.
+            let head_sha = branch_head_sha(root, &key.branch)?;
+            let debrief = store.set_debrief(&key, &base, input.chapters, &head_sha)?;
             println!("{}", serde_json::to_string_pretty(&debrief)?);
         }
         SelfReviewCmd::Show => {
             let key = repo_key_from_cwd(cwd)?;
             let store = Store::open_default()?;
             match store.get_debrief(&key)? {
-                Some(debrief) => println!("{}", serde_json::to_string_pretty(&debrief)?),
+                Some(debrief) => {
+                    let freshness = debrief.freshness(&branch_head_sha(root, &key.branch)?);
+                    let view = debrief.into_view(freshness);
+                    println!("{}", serde_json::to_string_pretty(&view)?);
+                }
                 None => println!("null"),
             }
         }

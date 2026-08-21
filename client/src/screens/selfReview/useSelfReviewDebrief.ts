@@ -1,7 +1,7 @@
 import { listen } from '@tauri-apps/api/event';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  type Debrief,
+  type DebriefView,
   type NoteAnchor,
   type SelfReviewNoteView,
   selfReviewDebriefGet,
@@ -14,8 +14,8 @@ import {
 } from '../../tauri';
 
 export type UseSelfReviewDebrief = {
-  /** The agent-authored Debrief, or null if none has been written. */
-  debrief: Debrief | null;
+  /** The agent-authored Debrief (with derived freshness), or null if none has been written. */
+  debrief: DebriefView | null;
   /** All Review notes for the active repo+branch, with computed `outdated`. */
   notes: SelfReviewNoteView[];
   loading: boolean;
@@ -54,7 +54,7 @@ function errMessage(e: unknown): string {
  * so callers can react, after recording the message.
  */
 export function useSelfReviewDebrief(repoPath: string | null): UseSelfReviewDebrief {
-  const [debrief, setDebrief] = useState<Debrief | null>(null);
+  const [debrief, setDebrief] = useState<DebriefView | null>(null);
   const [notes, setNotes] = useState<SelfReviewNoteView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

@@ -2,15 +2,21 @@ import { useMemo, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Icon } from '../../components/Icon';
-import type { Debrief, NoteAnchor, SelfReviewFileChange, SelfReviewNoteView } from '../../tauri';
+import type {
+  DebriefView,
+  NoteAnchor,
+  SelfReviewFileChange,
+  SelfReviewNoteView,
+} from '../../tauri';
 import { Composer } from './Composer';
 import { Thread } from './Thread';
 
 /**
  * The Debrief rail — the author's view of the agent's self-review (ADR-0011,
- * CONTEXT.md "Debrief"). Lists the agent's ordered steps (file + markdown
- * intro), each driving the diff (click a step → scroll its file into view),
- * and the **Review notes** anchored to each file. It is also the home for
+ * ADR-0025, CONTEXT.md "Debrief"). Lists the agent's ordered Chapters (title +
+ * one markdown intro + the files it narrates), each file driving the diff
+ * (click → scroll it into view), and the **Review notes** anchored to each
+ * file. It is also the home for
  * notes with no inline anchor: general (un-anchored) feedback and notes whose
  * anchored lines left the diff (ADR-0012). Anchored notes also render inline in
  * the diff; the rail is the index + overview.
@@ -46,7 +52,7 @@ export function DebriefRail({
   onClose,
   ...noteOps
 }: NoteOps & {
-  debrief: Debrief | null;
+  debrief: DebriefView | null;
   notes: SelfReviewNoteView[];
   files: SelfReviewFileChange[];
   selectedPath: string | null;
@@ -79,12 +85,12 @@ export function DebriefRail({
     return m;
   }, [files]);
 
-  const steps = debrief ? [...debrief.steps].sort((a, b) => a.order - b.order) : [];
-  const stepFiles = new Set(steps.map((s) => s.file));
-  // Notes whose file isn't a Debrief step (the agent dropped the file from a
+  const chapters = debrief?.chapters ?? [];
+  const narrated = new Set(chapters.flatMap((c) => c.files));
+  // Notes whose file no chapter narrates (the agent dropped the file from a
   // later pass, or the note predates this Debrief) — surface them so feedback
   // is never silently orphaned.
-  const orphanFiles = [...notesByFile.keys()].filter((f) => !stepFiles.has(f));
+  const orphanFiles = [...notesByFile.keys()].filter((f) => !narrated.has(f));
 
   const openCount = notes.filter((n) => n.status === 'open').length;
 
@@ -150,23 +156,43 @@ export function DebriefRail({
         ) : (
           <>
             <div style={{ fontSize: 11, color: 'var(--gray-500)', marginBottom: 8 }}>
-              {steps.length} step{steps.length === 1 ? '' : 's'} · updated{' '}
+              {chapters.length} chapter{chapters.length === 1 ? '' : 's'} · updated{' '}
               {formatWhen(debrief.updatedAt)}
             </div>
-            {steps.map((step) => (
-              <StepCard
-                key={step.file}
-                file={step.file}
-                intro={step.intro}
-                meta={fileMeta.get(step.file)}
-                inDiff={fileMeta.has(step.file)}
-                active={step.file === selectedPath}
-                isViewed={viewed.has(step.file)}
-                notes={notesByFile.get(step.file) ?? []}
-                onSelect={() => onSelectFile(step.file)}
-                onToggleViewed={() => onToggleViewed(step.file)}
-                {...noteOps}
-              />
+            {chapters.map((ch) => (
+              <div key={ch.title} style={{ marginBottom: 12 }}>
+                {/* Chapter header — the one intro for the whole group (ADR-0025). */}
+                <div style={{ padding: '2px 2px 6px' }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: 'var(--gray-800)',
+                      marginBottom: 2,
+                    }}
+                  >
+                    {ch.title}
+                  </div>
+                  <div className="md" style={{ fontSize: 12 }}>
+                    <Markdown remarkPlugins={[remarkGfm]}>{ch.intro}</Markdown>
+                  </div>
+                </div>
+                {ch.files.map((file) => (
+                  <StepCard
+                    key={file}
+                    file={file}
+                    intro={null}
+                    meta={fileMeta.get(file)}
+                    inDiff={fileMeta.has(file)}
+                    active={file === selectedPath}
+                    isViewed={viewed.has(file)}
+                    notes={notesByFile.get(file) ?? []}
+                    onSelect={() => onSelectFile(file)}
+                    onToggleViewed={() => onToggleViewed(file)}
+                    {...noteOps}
+                  />
+                ))}
+              </div>
             ))}
 
             {orphanFiles.length > 0 && (

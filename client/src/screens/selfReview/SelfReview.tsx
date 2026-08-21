@@ -174,22 +174,30 @@ export function SelfReview({
   }, [debrief]);
   const openNoteCount = useMemo(() => notes.filter((n) => n.status === 'open').length, [notes]);
 
+  // The Debrief's narrated files, flattened across its chapters in
+  // presentation order (ADR-0025: chapters carry the order; files have no
+  // per-file order field). Position in this list is the sort key below.
+  const debriefFileOrder = useMemo(
+    () => (debrief?.chapters ?? []).flatMap((c) => c.files),
+    [debrief],
+  );
+
   // The set of file paths the Debrief narrates — used both to order the file
   // list and to draw the "Other files" divider below the narrated group.
-  const debriefPaths = useMemo(() => new Set((debrief?.steps ?? []).map((s) => s.file)), [debrief]);
+  const debriefPaths = useMemo(() => new Set(debriefFileOrder), [debriefFileOrder]);
 
   // The single ordered file list driving the left column, the scroll-mode diff
-  // stack, and the on-open selection. When a Debrief exists, its steps order the
-  // files they narrate (ascending `order`); every other file sinks below in the
-  // diff's original (path) order. `step.order` is treated as a pure sort key, so
-  // this works in any scope — a Debrief step whose file isn't in the current
-  // diff simply contributes no row. With no Debrief it's the diff order verbatim.
-  // Array.prototype.sort is stable, so returning 0 preserves the path order for
-  // the non-narrated tail.
+  // stack, and the on-open selection. When a Debrief exists, its chapters order
+  // the files they narrate (chapter order, then in-chapter file order); every
+  // other file sinks below in the diff's original (path) order. The flat index
+  // is a pure sort key, so this works in any scope — a narrated file that isn't
+  // in the current diff simply contributes no row. With no Debrief it's the
+  // diff order verbatim. Array.prototype.sort is stable, so returning 0
+  // preserves the path order for the non-narrated tail.
   const orderedFiles = useMemo(() => {
     const files = diff?.files ?? [];
     if (debriefPaths.size === 0) return files;
-    const orderOf = new Map((debrief?.steps ?? []).map((s) => [s.file, s.order]));
+    const orderOf = new Map(debriefFileOrder.map((file, i) => [file, i]));
     return [...files].sort((a, b) => {
       const ai = orderOf.get(a.path);
       const bi = orderOf.get(b.path);
@@ -198,7 +206,7 @@ export function SelfReview({
       if (bi !== undefined) return 1;
       return 0;
     });
-  }, [diff, debrief, debriefPaths]);
+  }, [diff, debriefFileOrder, debriefPaths]);
 
   // Mark-viewed state, persisted per (repoPath, branch). Reload when either
   // changes. We do NOT clear on scope change (Q8: viewed is sticky across
