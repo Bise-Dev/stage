@@ -3,6 +3,17 @@ name = "stage-client"
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.77"
+# Unbundled (i.e. `tauri dev`), macOS labels the Dock tile and the app menu with
+# the running binary's name, so the binary is named after the product rather than
+# the crate — otherwise the dev app shows up as "stage-client". `tauri build`
+# picks up the same name for `Stage.app/Contents/MacOS/`. `default-run` is what
+# marks it as the main binary for the Tauri CLI (it no longer matches the package
+# name).
+default-run = "Stage"
+
+[[bin]]
+name = "Stage"
+path = "src/main.rs"
 
 [lib]
 name = "stage_client_lib"

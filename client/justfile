@@ -15,7 +15,7 @@ install:
 
 # Build the desktop bundle + the release `stage` CLI, and link the CLI onto
 # PATH so `stage open` can launch the app (ADR-0014). The release CLI's sibling
-# `target/release/stage-client` is the local launch target; set STAGE_GUI_BIN
+# `target/release/Stage` is the local launch target; set STAGE_GUI_BIN
 # to point at an installed bundle instead.
 install-cli:
     bun run tauri build --bundles app

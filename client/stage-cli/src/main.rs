@@ -158,9 +158,11 @@ fn resolve_review_clone(pr: &PrRef, cwd: &Path) -> Result<PathBuf, StageError> {
     resolve_clone(&candidates, pr)
 }
 
-/// The bundled GUI binary's name (the Tauri app), a sibling of this CLI in the
-/// shared `target/` dir and inside the installed app bundle.
-const GUI_BIN_NAME: &str = "stage-client";
+/// The GUI binary's name (the Tauri app), a sibling of this CLI in the shared
+/// `target/` dir and inside the app bundle. `Stage` is the current name (the
+/// `[[bin]]` target in `src-tauri/Cargo.toml`); `stage-client` is what it was
+/// called before, kept so an app bundle built by an older checkout still launches.
+const GUI_BIN_NAMES: &[&str] = &["Stage", "stage-client"];
 
 /// Launch the Stage desktop app in Self-Review for `root` (ADR-0014). Spawns
 /// detached and returns: on a cold start the GUI keeps running; on a warm start
@@ -235,14 +237,12 @@ fn resolve_gui_binary() -> Result<PathBuf, StageError> {
             // binary is what gives the proper Dock/launcher icon — its
             // `mainBundle` resolves to the .app's Info.plist + icon.icns. A bare
             // binary has no enclosing bundle, so macOS shows a generic icon.
-            candidates.push(
-                dir.join("bundle/macos/Stage.app/Contents/MacOS")
-                    .join(GUI_BIN_NAME),
-            );
+            let bundled = dir.join("bundle/macos/Stage.app/Contents/MacOS");
+            candidates.extend(GUI_BIN_NAMES.iter().map(|name| bundled.join(name)));
             // Bare sibling: the `tauri dev` / plain-build fallback. Functional
             // (single-instance dedups by app id, not path), but launched cold it
             // has no launcher icon — that's why the bundle is preferred above.
-            candidates.push(dir.join(GUI_BIN_NAME));
+            candidates.extend(GUI_BIN_NAMES.iter().map(|name| dir.join(name)));
         }
     }
 
@@ -280,9 +280,10 @@ fn installed_candidates() -> Vec<PathBuf> {
             .into_iter()
             .flat_map(|root| {
                 let macos = root.join("Stage.app").join("Contents").join("MacOS");
-                // Tauri names the inner binary after the cargo package; some
-                // setups use the productName ("Stage"). Try both.
-                [macos.join(GUI_BIN_NAME), macos.join("Stage")]
+                GUI_BIN_NAMES
+                    .iter()
+                    .map(move |name| macos.join(name))
+                    .collect::<Vec<_>>()
             })
             .collect()
     }
