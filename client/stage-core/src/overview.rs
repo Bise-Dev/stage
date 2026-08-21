@@ -28,18 +28,20 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::Serialize;
 use ts_rs::TS;
 
 use crate::diff::diff_stats;
-use crate::domain::Review;
+use crate::domain::{DebriefFreshness, Review};
 use crate::error::StageError;
 use crate::github::{GhPullRequest, GitHub, PrFilter};
 use crate::repo_key::RepoKey;
 use crate::review_folder::{read_review_from_tree, StageReview};
 use crate::status::{is_archived, status_from_pr, ReviewRole, ReviewSignal, ReviewStatus};
 use crate::store::Store;
+use crate::viewed::current_post_image_oid;
 use crate::worktree::list_worktrees;
 
 /// What a row *is* — the webview buckets on this and derives nothing else.
@@ -73,6 +75,22 @@ pub struct WorktreeMeta {
     pub prunable: bool,
 }
 
+/// Self-Review progress for a branch (v6-light L2): counts derived from the
+/// content-anchored viewed marks (F2b — a mark whose anchor no longer matches
+/// the file's current post-image counts as unviewed) plus the explicit,
+/// SHA-bound "Mark reviewed" state (F3). `total` is the branch-vs-base changed
+/// file count — the same diff as `changed_file_count`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SelfReviewProgress {
+    pub viewed: u32,
+    pub total: u32,
+    /// The author marked the branch reviewed at its *current* head. A new
+    /// commit invalidates the stored mark (derived here, never stored).
+    pub done: bool,
+}
+
 /// Local-git annotations for a row whose branch exists in this clone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -84,6 +102,19 @@ pub struct BranchMeta {
     pub is_default: bool,
     /// A local agent Debrief exists for this branch (Self-Review entry signal).
     pub has_debrief: bool,
+    /// Freshness of that Debrief (new/seen/outdated vs. the branch's current
+    /// head); `None` exactly when `has_debrief` is false.
+    pub debrief_freshness: Option<DebriefFreshness>,
+    /// Working-tree entries (staged/unstaged/untracked) in this branch's
+    /// worktree. `None` when the branch has no working tree — absent, never a
+    /// fake 0 (a branch without a checkout has no dirtiness to report).
+    pub uncommitted_count: Option<u32>,
+    /// Files changed vs. the repo's default base (the same tree-to-tree diff
+    /// as the ± signal). `None` when there is no comparable base.
+    pub changed_file_count: Option<u32>,
+    /// Viewed/total/done Self-Review progress; `None` when there is no
+    /// comparable base to diff against (then there is no honest `total`).
+    pub self_review: Option<SelfReviewProgress>,
     /// Last-commit time, epoch seconds (UTC). Formatted on the client.
     #[ts(type = "number")]
     pub updated_at: i64,
@@ -152,6 +183,9 @@ pub struct OverviewView {
 struct LocalBranch {
     name: String,
     is_head: bool,
+    /// Full tip commit SHA — the comparand for debrief freshness and the
+    /// SHA-bound done state.
+    tip_sha: String,
     updated_at: i64,
     last_commit: Option<String>,
 }
@@ -195,39 +229,61 @@ pub fn fetch_overview_github(
     Ok(OverviewGithubData { prs, me: Some(me) })
 }
 
-/// Memoizes the per-branch ± signals across overview recomputes, keyed by the
+/// A branch's tree-to-tree diff vs. the default base, as the overview needs
+/// it: the ± signal plus the changed files with their post-image blob OIDs
+/// (the validity comparand for content-anchored viewed marks, F2b). The file
+/// list rides in an `Arc` so cache hits clone a pointer, not a Vec.
+#[derive(Debug, Clone)]
+struct BranchDiff {
+    signal: ReviewSignal,
+    /// `(path, post_image_oid)` per changed file; a deletion carries the zero
+    /// OID ([`crate::viewed::ABSENT_POST_IMAGE`]), matching the mark sentinel.
+    files: Arc<Vec<(String, String)>>,
+}
+
+/// Memoizes the per-branch base diffs across overview recomputes, keyed by the
 /// commit OIDs the diff actually depends on: `(head, base)`. Resolving OIDs is
-/// cheap; the `diff_tree_to_tree` behind each signal is not — with the cache a
+/// cheap; the `diff_tree_to_tree` behind each entry is not — with the cache a
 /// branch only pays for a diff when its tip (or the base) moves. Hold one per
 /// repo (the sync engine does) and pass it to [`assemble_overview_with`]; a
 /// throwaway `SignalCache::default()` gives the uncached behaviour.
 #[derive(Default)]
 pub struct SignalCache {
-    branch: HashMap<(git2::Oid, git2::Oid), Option<ReviewSignal>>,
+    branch: HashMap<(git2::Oid, git2::Oid), Option<BranchDiff>>,
     draft: HashMap<(git2::Oid, git2::Oid), ReviewSignal>,
 }
 
 impl SignalCache {
-    /// Cached [`branch_signal`]: same semantics (`None` for no comparable
+    /// Cached [`branch_diff`]: same semantics (`None` for no comparable
     /// base / no merge base), memoized on `(head, base)` commit OIDs.
-    fn branch_signal(
+    fn branch_diff(
         &mut self,
         repo: &git2::Repository,
         base: Option<&str>,
         branch: &str,
-    ) -> Result<Option<ReviewSignal>, StageError> {
+    ) -> Result<Option<BranchDiff>, StageError> {
         let Some(base) = base else { return Ok(None) };
         let Ok(base_commit) = repo.revparse_single(base).and_then(|o| o.peel_to_commit()) else {
             return Ok(None); // default base not resolvable in this clone
         };
         let head_commit = repo.revparse_single(branch)?.peel_to_commit()?;
         let key = (head_commit.id(), base_commit.id());
-        if let Some(signal) = self.branch.get(&key) {
-            return Ok(*signal);
+        if let Some(diff) = self.branch.get(&key) {
+            return Ok(diff.clone());
         }
-        let signal = branch_signal(repo, Some(base), branch)?;
-        self.branch.insert(key, signal);
-        Ok(signal)
+        let diff = branch_diff(repo, Some(base), branch)?;
+        self.branch.insert(key, diff.clone());
+        Ok(diff)
+    }
+
+    /// The ± signal slice of [`Self::branch_diff`] — the shape the rows carry.
+    fn branch_signal(
+        &mut self,
+        repo: &git2::Repository,
+        base: Option<&str>,
+        branch: &str,
+    ) -> Result<Option<ReviewSignal>, StageError> {
+        Ok(self.branch_diff(repo, base, branch)?.map(|d| d.signal))
     }
 
     /// Cached [`draft_signal`]: memoized on the draft's resolved `(head, base)`
@@ -315,10 +371,12 @@ pub fn assemble_overview_with(
     // Local facts first: branches, worktrees, debriefs, the default base.
     let branches = local_branches(&repo)?;
     let worktrees = list_worktrees(repo_root)?;
-    let debriefs: HashSet<String> = store
-        .list_debrief_branches(&repo_key.repo_owner, &repo_key.repo_name)?
-        .into_iter()
-        .collect();
+    let debrief_inputs =
+        store.list_debrief_freshness_inputs(&repo_key.repo_owner, &repo_key.repo_name)?;
+    let viewed_by_branch =
+        store.list_viewed_by_branch(&repo_key.repo_owner, &repo_key.repo_name)?;
+    let done_by_branch =
+        store.list_self_review_done_by_branch(&repo_key.repo_owner, &repo_key.repo_name)?;
     let default_branch = default_branch_name(&repo);
     // The comparison base for plain-branch signals: prefer the remote-tracking
     // default over a possibly-stale local one (ADR-0016/0018).
@@ -342,12 +400,75 @@ pub fn assemble_overview_with(
                 locked: w.locked.is_some(),
                 prunable: w.prunable.is_some(),
             });
+        let is_default = default_branch.as_deref() == Some(b.name.as_str());
+
+        // A prunable worktree's directory is gone — there is no working tree
+        // to count, so `None` (absent), same as no worktree at all.
+        let usable_wt_path = wt
+            .as_ref()
+            .filter(|w| !w.prunable)
+            .map(|w| Path::new(&w.path).to_path_buf());
+        let uncommitted = usable_wt_path
+            .as_deref()
+            .map(uncommitted_count)
+            .transpose()?;
+
+        // The base diff behind the ± signal, reused for the file count and the
+        // viewed-progress total (one memoized diff, three fields). The default
+        // branch has no base to compare against — all three stay absent.
+        let bdiff = if is_default {
+            None
+        } else {
+            cache.branch_diff(&repo, signal_base.as_deref(), &b.name)?
+        };
+
+        let self_review = match &bdiff {
+            None => None,
+            Some(d) => {
+                let marks = viewed_by_branch.get(&b.name);
+                let mut viewed = 0u32;
+                for mark in marks.into_iter().flatten() {
+                    // Validity (F2b): the stored anchor must equal the file's
+                    // current post-image. For a materialized branch that is the
+                    // working-tree content; otherwise the tip blob — which the
+                    // memoized diff already carries, no extra git work.
+                    let Some((_, tip_oid)) = d.files.iter().find(|(p, _)| p == &mark.file) else {
+                        continue; // marked file no longer in the base diff
+                    };
+                    let current = match usable_wt_path.as_deref() {
+                        Some(wt_path) => {
+                            current_post_image_oid(&repo, Some(wt_path), &b.name, &mark.file)?
+                        }
+                        None => tip_oid.clone(),
+                    };
+                    if current == mark.blob_oid {
+                        viewed += 1;
+                    }
+                }
+                Some(SelfReviewProgress {
+                    viewed,
+                    total: d.files.len() as u32,
+                    done: done_by_branch
+                        .get(&b.name)
+                        .is_some_and(|done| done.head_sha == b.tip_sha),
+                })
+            }
+        };
+
+        let debrief_freshness = debrief_inputs
+            .get(&b.name)
+            .map(|(head_sha, seen_at)| DebriefFreshness::derive(head_sha, *seen_at, &b.tip_sha));
+
         meta_by_branch.insert(
             b.name.clone(),
             BranchMeta {
                 is_current: b.is_head,
-                is_default: default_branch.as_deref() == Some(b.name.as_str()),
-                has_debrief: debriefs.contains(&b.name),
+                is_default,
+                has_debrief: debrief_freshness.is_some(),
+                debrief_freshness,
+                uncommitted_count: uncommitted,
+                changed_file_count: bdiff.as_ref().map(|d| d.files.len() as u32),
+                self_review,
                 updated_at: b.updated_at,
                 last_commit: b.last_commit.clone(),
                 worktree: wt,
@@ -556,15 +677,16 @@ fn branch_present(repo_root: &Path, branch: &str) -> Result<bool, StageError> {
         .any(|r| repo.revparse_single(r).is_ok()))
 }
 
-/// ± lines for a plain branch vs. the repo's default base. `Ok(None)` when there
+/// The base diff for a plain branch vs. the repo's default base: ± lines plus
+/// the changed files with their post-image blob OIDs. `Ok(None)` when there
 /// is no comparable base — no default resolved, or no merge base (an orphan /
 /// unrelated-history branch): that is a legitimate absence of a signal, not a
 /// failure to hide. A genuine diff failure on comparable refs propagates.
-fn branch_signal(
+fn branch_diff(
     repo: &git2::Repository,
     base: Option<&str>,
     branch: &str,
-) -> Result<Option<ReviewSignal>, StageError> {
+) -> Result<Option<BranchDiff>, StageError> {
     let Some(base) = base else { return Ok(None) };
     let Ok(base_commit) = repo.revparse_single(base).and_then(|o| o.peel_to_commit()) else {
         return Ok(None); // default base not resolvable in this clone
@@ -579,11 +701,46 @@ fn branch_signal(
     let head_tree = head_commit.tree()?;
     let diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), None)?;
     let stats = diff.stats()?;
-    Ok(Some(ReviewSignal {
-        added: stats.insertions() as u32,
-        removed: stats.deletions() as u32,
-        comments: 0,
+    let mut files = Vec::with_capacity(diff.deltas().len());
+    for delta in diff.deltas() {
+        // Post-image path when it exists (a deletion falls back to the old
+        // path); post-image OID is zero for deletions — the same sentinel the
+        // viewed marks use (`ABSENT_POST_IMAGE`).
+        let path = delta
+            .new_file()
+            .path()
+            .or_else(|| delta.old_file().path())
+            .ok_or_else(|| {
+                StageError::Invalid(format!(
+                    "branch_diff: delta without a path in '{branch}' vs '{base}'"
+                ))
+            })?;
+        files.push((
+            path.to_string_lossy().into_owned(),
+            delta.new_file().id().to_string(),
+        ));
+    }
+    Ok(Some(BranchDiff {
+        signal: ReviewSignal {
+            added: stats.insertions() as u32,
+            removed: stats.deletions() as u32,
+            comments: 0,
+        },
+        files: Arc::new(files),
     }))
+}
+
+/// Working-tree entry count (staged + unstaged + untracked, ignored excluded)
+/// for the worktree at `path`. Fail loud: a worktree we can't inspect is an
+/// error, never a fake 0.
+fn uncommitted_count(path: &Path) -> Result<u32, StageError> {
+    let repo = git2::Repository::open(path)?;
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .exclude_submodules(true);
+    let statuses = repo.statuses(Some(&mut opts))?;
+    Ok(statuses.iter().filter(|e| !e.status().is_ignored()).count() as u32)
 }
 
 /// `origin/HEAD`'s target shorthand (e.g. `main`), matching `base_options`'s
@@ -617,6 +774,7 @@ fn local_branches(repo: &git2::Repository) -> Result<Vec<LocalBranch>, StageErro
         out.push(LocalBranch {
             name,
             is_head,
+            tip_sha: commit.id().to_string(),
             updated_at: commit.time().seconds(),
             last_commit: commit.summary().map(str::to_string),
         });
@@ -991,5 +1149,136 @@ mod tests {
 
         let spare = by_branch(&view, "feat/spare");
         assert_eq!(spare.branch_meta.as_ref().unwrap().worktree, None);
+    }
+
+    /// v6-light L2: uncommitted count (Some only with a working tree), changed
+    /// file count, debrief freshness, and content-anchored viewed progress +
+    /// SHA-bound done state — all derived in the assembly, invalidated by a
+    /// moved tip / edited content, never stored as flags.
+    #[test]
+    fn enrichment_fields_flow_from_store_and_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q", "-b", "main"]);
+        git(&root, &["config", "user.email", "t@e.com"]);
+        git(&root, &["config", "user.name", "t"]);
+        std::fs::write(root.join("base.rs"), "fn base() {}\n").unwrap();
+        git(&root, &["add", "-A"]);
+        git(&root, &["commit", "-q", "-m", "init"]);
+        git(&root, &["checkout", "-q", "-b", "feat/enrich"]);
+        std::fs::write(root.join("f.rs"), "fn one() {}\n").unwrap();
+        git(&root, &["add", "-A"]);
+        git(&root, &["commit", "-q", "-m", "feat work"]);
+        git(&root, &["checkout", "-q", "main"]);
+        // Wire origin/HEAD so the assembly has a signal base (origin/main).
+        git(&root, &["update-ref", "refs/remotes/origin/main", "main"]);
+        git(
+            &root,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
+
+        // The store lives OUTSIDE the repo — its sqlite/-wal/-shm files must
+        // not count as untracked entries in the worktree.
+        let store = Store::open(&tmp.path().join("store.sqlite3")).unwrap();
+        let repo = git2::Repository::open(&root).unwrap();
+        let feat_key = RepoKey {
+            repo_owner: "octo".into(),
+            repo_name: "stage".into(),
+            branch: "feat/enrich".into(),
+        };
+        let feat_tip = repo
+            .revparse_single("feat/enrich")
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string();
+
+        // Debrief at the feat tip; viewed mark anchored to f.rs's tip blob;
+        // done bound to the tip.
+        store
+            .set_debrief(&feat_key, "main", vec![], &feat_tip)
+            .unwrap();
+        let f_oid =
+            crate::viewed::current_post_image_oid(&repo, None, "feat/enrich", "f.rs").unwrap();
+        store.set_viewed(&feat_key, "f.rs", &f_oid).unwrap();
+        store.set_self_review_done(&feat_key, &feat_tip).unwrap();
+        // Dirty the root worktree (main): one modified tracked file, one
+        // untracked file.
+        std::fs::write(root.join("base.rs"), "fn base() { /* edited */ }\n").unwrap();
+        std::fs::write(root.join("junk.txt"), "scratch\n").unwrap();
+
+        let mut cache = SignalCache::default();
+        let view = assemble_overview_with(&store, &root, &key(), None, false, &mut cache).unwrap();
+
+        let main_meta = by_branch(&view, "main").branch_meta.clone().unwrap();
+        assert_eq!(main_meta.uncommitted_count, Some(2), "modified + untracked");
+        assert_eq!(
+            main_meta.changed_file_count, None,
+            "the default branch has no base to compare against"
+        );
+        assert_eq!(main_meta.self_review, None);
+        assert_eq!(main_meta.debrief_freshness, None);
+        assert!(!main_meta.has_debrief);
+
+        let feat_meta = by_branch(&view, "feat/enrich").branch_meta.clone().unwrap();
+        assert_eq!(
+            feat_meta.uncommitted_count, None,
+            "no working tree — absent, never a fake 0"
+        );
+        assert_eq!(feat_meta.changed_file_count, Some(1));
+        assert_eq!(feat_meta.debrief_freshness, Some(DebriefFreshness::New));
+        assert!(feat_meta.has_debrief);
+        assert_eq!(
+            feat_meta.self_review,
+            Some(SelfReviewProgress {
+                viewed: 1,
+                total: 1,
+                done: true,
+            })
+        );
+
+        // Seen flips the chip.
+        store.mark_debrief_seen(&feat_key).unwrap();
+        let view = assemble_overview_with(&store, &root, &key(), None, false, &mut cache).unwrap();
+        assert_eq!(
+            by_branch(&view, "feat/enrich")
+                .branch_meta
+                .as_ref()
+                .unwrap()
+                .debrief_freshness,
+            Some(DebriefFreshness::Seen)
+        );
+
+        // Move the tip with new content for f.rs: the debrief goes outdated,
+        // the viewed anchor no longer matches (F2b), done unbinds (F3).
+        git(&root, &["checkout", "-q", "feat/enrich"]);
+        std::fs::write(root.join("f.rs"), "fn one() {}\nfn two() {}\n").unwrap();
+        // Only f.rs — the dirty main-worktree files ride along the checkout
+        // and must stay uncommitted.
+        git(&root, &["add", "f.rs"]);
+        git(&root, &["commit", "-q", "-m", "more work"]);
+        git(&root, &["checkout", "-q", "main"]);
+
+        let view = assemble_overview_with(&store, &root, &key(), None, false, &mut cache).unwrap();
+        let feat_meta = by_branch(&view, "feat/enrich").branch_meta.clone().unwrap();
+        assert_eq!(
+            feat_meta.debrief_freshness,
+            Some(DebriefFreshness::Outdated)
+        );
+        assert_eq!(
+            feat_meta.self_review,
+            Some(SelfReviewProgress {
+                viewed: 0,
+                total: 1,
+                done: false,
+            }),
+            "edited content invalidates the mark; the moved head unbinds done"
+        );
     }
 }

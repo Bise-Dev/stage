@@ -523,6 +523,30 @@ export const selfReviewDebriefMarkSeen = () =>
  *  repo-wide). Lets the branch list flag which branches carry a Debrief. */
 export const repoDebriefBranches = () => invoke<string[]>('repo_debrief_branches');
 
+/** Currently-valid viewed files for a branch (content-anchored, F2b: a file
+ *  edited since it was marked counts as unviewed again). */
+export const selfReviewViewedList = (branch: string) =>
+  invoke<string[]>('self_review_viewed_list', { branch });
+
+/** Set or clear one viewed mark (anchored to the file's current post-image). */
+export const selfReviewViewedSet = (branch: string, file: string, viewed: boolean) =>
+  invoke<void>('self_review_viewed_set', { branch, file, viewed });
+
+/** Remove every viewed mark for a branch ("Clear viewed"). */
+export const selfReviewViewedClear = (branch: string) =>
+  invoke<void>('self_review_viewed_clear', { branch });
+
+/** One-time import of legacy webview-store viewed marks (F2 migration);
+ *  returns the number imported. The caller clears the legacy source only on
+ *  success. */
+export const selfReviewViewedImportLegacy = (marksByBranch: Record<string, string[]>) =>
+  invoke<number>('self_review_viewed_import_legacy', { marksByBranch });
+
+/** The explicit "Mark reviewed" action (F3), bound to the branch's current
+ *  head SHA; `done: false` withdraws it. */
+export const selfReviewDoneSet = (branch: string, done: boolean) =>
+  invoke<void>('self_review_done_set', { branch, done });
+
 /** Review notes for the active repo + branch, optionally filtered by status. */
 export const selfReviewNotesList = (status?: NoteStatus) =>
   invoke<SelfReviewNoteView[]>('self_review_notes_list', { status: status ?? null });

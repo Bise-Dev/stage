@@ -634,6 +634,157 @@ pub fn repo_debrief_branches(state: State<'_, AppState>) -> Result<Vec<String>, 
     Ok(store.list_debrief_branches(&key.repo_owner, &key.repo_name)?)
 }
 
+// --- Self-Review viewed marks + done state (v6-light L2; F2/F2b/F3) ---------
+//
+// Viewed marks live in the shared SQLite store, content-anchored to the
+// post-image blob the author saw (`stage_core::viewed`). The active repo path
+// doubles as the working tree to hash from when `branch` is the checked-out
+// branch there; any other branch anchors at its tip.
+
+/// The store key + optional working tree for a viewed-mark command. The
+/// working tree only counts for the branch actually checked out at the active
+/// repo path — other branches hash against their tip.
+fn viewed_ctx(
+    state: &State<'_, AppState>,
+    branch: &str,
+) -> Result<(PathBuf, stage_core::RepoKey, Option<PathBuf>), AppError> {
+    let path = active_repo_path(state)?;
+    let current = repo_key_from_cwd(&path)?;
+    let worktree = (branch == current.branch).then(|| path.clone());
+    let key = stage_core::RepoKey {
+        branch: branch.to_string(),
+        ..current
+    };
+    Ok((path, key, worktree))
+}
+
+/// The currently-valid viewed files for a branch: stored marks whose content
+/// anchor still matches the file's post-image (F2b — an edited file counts as
+/// unviewed again). Stale marks are ignored, not deleted.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn self_review_viewed_list(
+    state: State<'_, AppState>,
+    branch: String,
+) -> Result<Vec<String>, AppError> {
+    let (path, key, worktree) = viewed_ctx(&state, &branch)?;
+    let store = Store::open_default()?;
+    let repo = git2::Repository::discover(&path)
+        .map_err(|e| AppError::Backend(format!("viewed_list: not a repository: {e}")))?;
+    let mut valid = Vec::new();
+    for mark in store.list_viewed(&key)? {
+        let current =
+            stage_core::current_post_image_oid(&repo, worktree.as_deref(), &branch, &mark.file)?;
+        if current == mark.blob_oid {
+            valid.push(mark.file);
+        }
+    }
+    Ok(valid)
+}
+
+/// Set or clear one viewed mark. Marking anchors to the file's current
+/// post-image (what the author is looking at right now).
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn self_review_viewed_set(
+    state: State<'_, AppState>,
+    branch: String,
+    file: String,
+    viewed: bool,
+) -> Result<(), AppError> {
+    let (path, key, worktree) = viewed_ctx(&state, &branch)?;
+    let store = Store::open_default()?;
+    if viewed {
+        let repo = git2::Repository::discover(&path)
+            .map_err(|e| AppError::Backend(format!("viewed_set: not a repository: {e}")))?;
+        let oid = stage_core::current_post_image_oid(&repo, worktree.as_deref(), &branch, &file)?;
+        store.set_viewed(&key, &file, &oid)?;
+    } else {
+        store.unset_viewed(&key, &file)?;
+    }
+    // The FS watcher can't see the SQLite store move — nudge the snapshot so
+    // the overview's viewed-progress pill tracks the marks.
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    Ok(())
+}
+
+/// Remove every viewed mark for a branch ("Clear viewed").
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn self_review_viewed_clear(
+    state: State<'_, AppState>,
+    branch: String,
+) -> Result<(), AppError> {
+    let (_path, key, _worktree) = viewed_ctx(&state, &branch)?;
+    let store = Store::open_default()?;
+    store.clear_viewed(&key)?;
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    Ok(())
+}
+
+/// One-time import of the legacy webview-store viewed marks (F2 migration).
+/// Each file is stamped with its *current* post-image OID — "viewed as of
+/// now". Returns the number imported; the webview clears its legacy source
+/// only on success (a failed import must stay retryable).
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn self_review_viewed_import_legacy(
+    state: State<'_, AppState>,
+    marks_by_branch: std::collections::HashMap<String, Vec<String>>,
+) -> Result<u32, AppError> {
+    let path = active_repo_path(&state)?;
+    let key = repo_key_from_cwd(&path)?;
+    let store = Store::open_default()?;
+    let imported = stage_core::import_legacy_viewed(
+        &store,
+        &path,
+        &key.repo_owner,
+        &key.repo_name,
+        &key.branch,
+        &marks_by_branch,
+    )?;
+    tracing::info!(imported, "viewed_import_legacy_done");
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    Ok(imported)
+}
+
+/// The explicit "Mark reviewed" action (F3): binds to the branch's current
+/// head SHA — a later commit invalidates it (derived on the overview row,
+/// never stored as a boolean). `done: false` withdraws the mark.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn self_review_done_set(
+    state: State<'_, AppState>,
+    branch: String,
+    done: bool,
+) -> Result<(), AppError> {
+    let (path, key, _worktree) = viewed_ctx(&state, &branch)?;
+    let store = Store::open_default()?;
+    if done {
+        let head = stage_core::branch_head_sha(&path, &branch)?;
+        store.set_self_review_done(&key, &head)?;
+    } else {
+        store.clear_self_review_done(&key)?;
+    }
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    Ok(())
+}
+
 /// Review notes for the active repo + branch (optionally filtered by `status`),
 /// each carrying its `replies` thread and a computed `outdated` flag.
 /// `outdated` is derived against the current Debrief's base (falling back to the

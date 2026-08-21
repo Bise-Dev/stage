@@ -20,7 +20,7 @@ import { ResizeHandle, useColumnWidth } from './columnResize';
 import { notesToMarkdown } from './markdown';
 import { useSelfReviewDebrief } from './useSelfReviewDebrief';
 import { useSelfReviewDiff } from './useSelfReviewDiff';
-import { clearViewed, loadViewed, setViewed } from './viewedStore';
+import { clearViewed, loadViewed, setViewed } from './viewedMarks';
 
 /**
  * Self-Review screen root.
@@ -208,25 +208,35 @@ export function SelfReview({
     });
   }, [diff, debriefFileOrder, debriefPaths]);
 
-  // Mark-viewed state, persisted per (repoPath, branch). Reload when either
-  // changes. We do NOT clear on scope change (Q8: viewed is sticky across
-  // toggles and commits — it tracks the user's brain, not the file's git
-  // state). We intentionally key on `diff?.currentBranch` rather than `diff`:
-  // a watcher-driven refresh keeps the same currentBranch and shouldn't
-  // re-read the store on every keystroke.
-  // Branch-keyed by design: we depend on the derived `branchKey`, not `diff`,
-  // so a watcher refresh that keeps the same branch doesn't re-read the store.
+  // Mark-viewed state, engine-backed per (repo, branch) and content-anchored
+  // (F2b, supersedes the earlier sticky-across-commits behaviour): the engine
+  // returns only marks whose anchor still matches the file's current
+  // post-image, so an edited file reads back as unviewed. We reload on
+  // branch and head changes — `headSha` moves on commit/checkout, not on
+  // keystrokes, so a watcher-driven workdir refresh still doesn't re-read the
+  // store per edit (in-session marks the author just made stay optimistic).
   const branchKey = diff?.currentBranch ?? null;
+  const headKey = diff?.headSha ?? null;
   useEffect(() => {
     if (!repoPath || !branchKey) return;
+    // Deliberate `headKey` dependency: marks are content-anchored, so a
+    // commit/checkout must re-read which marks are still valid.
+    void headKey;
     let cancelled = false;
-    loadViewed(repoPath, branchKey).then((s) => {
-      if (!cancelled) setViewedState(s);
-    });
+    loadViewed(repoPath, branchKey).then(
+      (s) => {
+        if (!cancelled) setViewedState(s);
+      },
+      (e) => {
+        // Loud per CLAUDE.md: a failed load (or legacy import) lands in the
+        // screen's error slot, not a silent empty set.
+        if (!cancelled) setBootstrapError(String(e));
+      },
+    );
     return () => {
       cancelled = true;
     };
-  }, [repoPath, branchKey]);
+  }, [repoPath, branchKey, headKey]);
 
   // Mirror `viewed` into a ref so toggleViewed can read the current set without
   // listing `viewed` in its deps. Marking one file viewed then no longer
@@ -245,9 +255,18 @@ export function SelfReview({
         else next.add(path);
         return next;
       });
-      setViewed(repoPath, diff.currentBranch, path, !isOn).catch((e) =>
-        console.warn('self_review_viewed_persist_failed', e),
-      );
+      setViewed(repoPath, diff.currentBranch, path, !isOn).catch((e) => {
+        // The mark didn't persist — say so (CLAUDE.md fail-loud) and undo the
+        // optimistic flip so the checkbox shows the stored truth.
+        console.warn('self_review_viewed_persist_failed', e);
+        setBootstrapError(String(e));
+        setViewedState((prev) => {
+          const next = new Set(prev);
+          if (isOn) next.add(path);
+          else next.delete(path);
+          return next;
+        });
+      });
     },
     [repoPath, diff],
   );
@@ -259,6 +278,7 @@ export function SelfReview({
       await clearViewed(repoPath, diff.currentBranch);
     } catch (e) {
       console.warn('self_review_viewed_clear_failed', e);
+      setBootstrapError(String(e));
     }
   }, [repoPath, diff]);
 
