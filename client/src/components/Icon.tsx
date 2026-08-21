@@ -14,7 +14,8 @@ export type IconName =
   | 'eye'
   | 'grip'
   | 'sparkle'
-  | 'comment-fill';
+  | 'comment-fill'
+  | 'alert';
 
 interface IconProps {
   name: IconName;
@@ -250,6 +251,21 @@ export function Icon({ name, size = 14, color = 'currentColor', className }: Ico
           aria-hidden="true"
         >
           <path d="M2 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H6l-3 2v-2H4a2 2 0 0 1-2-2z" />
+        </svg>
+      );
+    case 'alert':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <path d="M7 1.8 12.8 12H1.2z" />
+          <path d="M7 5.6v3" />
+          <path d="M7 10.4h.01" />
         </svg>
       );
   }
