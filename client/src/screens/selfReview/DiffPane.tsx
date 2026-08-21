@@ -1,4 +1,5 @@
 import {
+  Fragment,
   type Ref,
   memo,
   useCallback,
@@ -69,6 +70,9 @@ type DiffPaneProps = NoteOps & {
   onToggleViewed(path: string): void;
   /** All Review notes for the branch; DiffPane buckets them by file/anchor. */
   notes: SelfReviewNoteView[];
+  /** Optional leading content above a committed file's block — the Debrief's
+   *  inline chapter banners (v6-light L7 M1). Called per committed file. */
+  renderBefore?: (path: string) => React.ReactNode;
   /** React 19 ref-as-prop. Parent supplies a `useRef<DiffPaneHandle>(null)`. */
   ref?: Ref<DiffPaneHandle>;
 };
@@ -108,6 +112,7 @@ export function DiffPane({
   viewed,
   onToggleViewed,
   notes,
+  renderBefore,
   onCreateNote,
   onReplyNote,
   onResolveNote,
@@ -221,19 +226,21 @@ export function DiffPane({
             // navigated to a file, so don't second-guess them.
             const collapsed = isViewed && viewLayout === 'scroll';
             return (
-              <LazyFileBlock
-                key={cid(f.path)}
-                blockId={cid(f.path)}
-                file={f}
-                registerRef={registerFileRef}
-                viewMode={viewMode}
-                collapsed={collapsed}
-                isViewed={isViewed}
-                readOnly={false}
-                onToggleViewed={onToggleViewed}
-                notes={notesByFile.get(f.path) ?? EMPTY_NOTES}
-                {...noteOps}
-              />
+              <Fragment key={cid(f.path)}>
+                {renderBefore?.(f.path)}
+                <LazyFileBlock
+                  blockId={cid(f.path)}
+                  file={f}
+                  registerRef={registerFileRef}
+                  viewMode={viewMode}
+                  collapsed={collapsed}
+                  isViewed={isViewed}
+                  readOnly={false}
+                  onToggleViewed={onToggleViewed}
+                  notes={notesByFile.get(f.path) ?? EMPTY_NOTES}
+                  {...noteOps}
+                />
+              </Fragment>
             );
           })}
           {uncommittedFiles !== null && viewLayout === 'scroll' && (

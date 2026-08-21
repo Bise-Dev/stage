@@ -3,13 +3,8 @@
 /**
  * Self-Review progress for a branch (v6-light L2): counts derived from the
  * content-anchored viewed marks (F2b — a mark whose anchor no longer matches
- * the file's current post-image counts as unviewed) plus the explicit,
- * SHA-bound "Mark reviewed" state (F3). `total` is the branch-vs-base changed
- * file count — the same diff as `changed_file_count`.
+ * the file's current post-image counts as unviewed). `total` is the
+ * branch-vs-base changed file count — the same diff as `changed_file_count`.
+ * (The explicit "Mark reviewed" done state was removed in L7 — F3 rescinded.)
  */
-export type SelfReviewProgress = { viewed: number, total: number, 
-/**
- * The author marked the branch reviewed at its *current* head. A new
- * commit invalidates the stored mark (derived here, never stored).
- */
-done: boolean, };
+export type SelfReviewProgress = { viewed: number, total: number, };

@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Icon } from '../../components/Icon';
-import {
-  reviewDraftCreate,
-  reviewDraftGet,
-  selfReviewDoneGet,
-  selfReviewDoneSet,
-} from '../../tauri';
+import { useRailCollapsed } from '../../components/CollapsibleRail';
+import { selfReviewDebriefMarkSeen } from '../../tauri';
 import { DebriefRail } from '../selfReview/DebriefRail';
 import {
   DiffPane,
@@ -18,17 +13,21 @@ import { Subheader } from '../selfReview/Subheader';
 import { ResizeHandle, useColumnWidth } from '../selfReview/columnResize';
 import { notesToMarkdown } from '../selfReview/markdown';
 import { clearViewed, loadViewed, setViewed } from '../selfReview/viewedMarks';
+import { ChapterBanner, type ChapterBannerData } from './ChapterBanner';
 import type { ShellModeBodyProps } from './modes';
 import { useSectionedDiff } from './useSectionedDiff';
 
 /**
- * Self-Review mode of the review shell (v6-light L5) — the author-only
- * iterative stage, re-housed from the standalone SelfReview screen.
+ * Self-Review mode of the review shell — the one review surface (v6-light L7):
+ * the author's iterative pass over their own diff, with the agent's Debrief
+ * folded in rather than shown as a separate mode (§3b M1). The Debrief renders
+ * two ways here: the right rail (chapters + notes, flag F9) and a collapsed
+ * chapter banner above each chapter's first file diff. Opening this surface on
+ * a branch that has a Debrief marks it seen (M3).
  *
  * Scope model (flag F4): the committed diff (`merge_base(base, HEAD) → HEAD`)
  * is the reviewable unit; "+ Uncommitted" folds the working tree in as a
- * separate section. "Mark reviewed" (flag F3) is the mode primary. The
- * Debrief rail stays (flag F9) as the agent-context / Q&A home.
+ * separate section.
  */
 const LAYOUT_KEY = 'selfReview:viewLayout';
 const VIEWMODE_KEY = 'selfReview:viewMode';
@@ -40,12 +39,7 @@ function loadViewMode(): ViewMode {
   return localStorage.getItem(VIEWMODE_KEY) === 'split' ? 'split' : 'unified';
 }
 
-export function SelfReviewMode({
-  shell,
-  debriefState,
-  onExit,
-  onEnterStoryline,
-}: ShellModeBodyProps) {
+export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyProps) {
   const { repoPath, defaultBranch, baseRef, setBaseRef, branches, baseOptions } = shell;
   const [viewMode, setViewModeState] = useState<ViewMode>(loadViewMode);
   const [viewLayout, setViewLayoutState] = useState<ViewLayout>(loadLayout);
@@ -67,9 +61,14 @@ export function SelfReviewMode({
     setViewModeState(v);
   }, []);
 
-  // Resizable file-list + Debrief-rail columns (persisted, clamped).
+  // Resizable file-list + Debrief-rail columns (persisted, clamped), each
+  // collapsible to the shared rail strip (M2).
   const fileListCol = useColumnWidth('selfReview:fileListWidth', 260, 180, 480, 'right');
   const railCol = useColumnWidth('selfReview:railWidth', 360, 280, 560, 'left');
+  const [fileListCollapsed, toggleFileListCollapsed] = useRailCollapsed(
+    'selfReview:fileListCollapsed',
+  );
+  const [railCollapsed, toggleRailCollapsed] = useRailCollapsed('selfReview:debriefRailCollapsed');
 
   const {
     committed,
@@ -92,18 +91,29 @@ export function SelfReviewMode({
     deleteNote,
   } = debriefState;
 
-  // The rail starts closed and auto-opens once when a Debrief first appears, so
-  // the agent path is discoverable without intruding on the non-agent path.
-  // After that the author's toggle wins (we never auto-close or re-open).
-  const [railOpen, setRailOpen] = useState(false);
-  const autoOpenedRef = useRef(false);
+  // A fresh Debrief expands the rail once, so the agent path is discoverable;
+  // a seen one respects the persisted collapse (the author's toggle wins).
+  const autoExpandedRef = useRef(false);
   useEffect(() => {
-    if (debrief && !autoOpenedRef.current) {
-      autoOpenedRef.current = true;
-      setRailOpen(true);
+    if (debrief?.freshness === 'new' && railCollapsed && !autoExpandedRef.current) {
+      autoExpandedRef.current = true;
+      toggleRailCollapsed();
     }
+  }, [debrief, railCollapsed, toggleRailCollapsed]);
+
+  // Opening Self-Review on a branch that has a Debrief is what "seen" means
+  // (§3b M3) — once per head SHA; a fresh agent pass re-runs this. Loud but
+  // non-blocking on failure: the banner explains it, the next open retries.
+  const markedRef = useRef<string | null>(null);
+  const [markSeenError, setMarkSeenError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!debrief || markedRef.current === debrief.headSha) return;
+    markedRef.current = debrief.headSha;
+    selfReviewDebriefMarkSeen().catch((e) => {
+      markedRef.current = null; // retry on next open
+      setMarkSeenError(`Couldn't mark this debrief as seen — ${String(e)}`);
+    });
   }, [debrief]);
-  const openNoteCount = useMemo(() => notes.filter((n) => n.status === 'open').length, [notes]);
 
   // The Debrief's narrated files, flattened across its chapters in
   // presentation order (ADR-0025).
@@ -129,6 +139,32 @@ export function SelfReviewMode({
       return 0;
     });
   }, [committed, debriefFileOrder, debriefPaths]);
+
+  // The Debrief's inline presence (§3b M1): a collapsed chapter banner above
+  // the chapter's FIRST file present in the committed diff.
+  const chapterBanners = useMemo(() => {
+    const m = new Map<string, ChapterBannerData>();
+    const inDiff = new Set((committed?.files ?? []).map((f) => f.path));
+    (debrief?.chapters ?? []).forEach((ch, i) => {
+      const first = ch.files.find((f) => inDiff.has(f));
+      if (first && !m.has(first)) {
+        m.set(first, {
+          index: i + 1,
+          title: ch.title,
+          intro: ch.intro,
+          fileCount: ch.files.length,
+        });
+      }
+    });
+    return m;
+  }, [debrief, committed]);
+  const renderBefore = useCallback(
+    (path: string) => {
+      const ch = chapterBanners.get(path);
+      return ch ? <ChapterBanner chapter={ch} /> : null;
+    },
+    [chapterBanners],
+  );
 
   const currentBranch = workdir?.currentBranch ?? null;
   const headSha = committed?.headSha ?? null;
@@ -195,40 +231,6 @@ export function SelfReviewMode({
       setLocalError(String(e));
     }
   }, [repoPath, currentBranch]);
-
-  // "Mark reviewed" (flag F3): explicit, SHA-bound; the engine derives
-  // validity at read time, so a new head silently withdraws it — we re-read
-  // on head changes for the same reason viewed marks do.
-  const [doneAt, setDoneAt] = useState<number | null>(null);
-  useEffect(() => {
-    if (!currentBranch) return;
-    void headSha;
-    let cancelled = false;
-    selfReviewDoneGet(currentBranch).then(
-      (d) => {
-        if (!cancelled) setDoneAt(d);
-      },
-      (e) => {
-        console.warn('self_review_done_get_failed', e);
-        if (!cancelled) setLocalError(String(e));
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [currentBranch, headSha]);
-
-  const onToggleDone = useCallback(async () => {
-    if (!currentBranch) return;
-    const next = doneAt === null;
-    try {
-      await selfReviewDoneSet(currentBranch, next);
-      setDoneAt(await selfReviewDoneGet(currentBranch));
-    } catch (e) {
-      console.warn('self_review_done_set_failed', e);
-      setLocalError(String(e));
-    }
-  }, [currentBranch, doneAt]);
 
   // Cmd/Ctrl-F focuses the filter input; Escape (when not in an input) exits.
   useEffect(() => {
@@ -304,27 +306,6 @@ export function SelfReviewMode({
     }
   }, [committed, currentBranch, notes]);
 
-  // "Ready to share" (WS-2 #60, kept per flag F5): a branch with an existing
-  // draft jumps straight into the composer; otherwise the modal collects the
-  // Review title + base first.
-  const [readyToShareOpen, setReadyToShareOpen] = useState(false);
-  const [readyToShareError, setReadyToShareError] = useState<string | null>(null);
-  const onReadyToShare = useCallback(async () => {
-    try {
-      const existing = await reviewDraftGet();
-      if (existing) {
-        onEnterStoryline();
-        return;
-      }
-    } catch (e) {
-      console.warn('self_review_draft_probe_failed', e);
-      setReadyToShareError(String(e));
-      return;
-    }
-    setReadyToShareError(null);
-    setReadyToShareOpen(true);
-  }, [onEnterStoryline]);
-
   const selectedUncommittedFiles = includeUncommitted ? (workdir?.files ?? []) : null;
 
   return (
@@ -343,14 +324,11 @@ export function SelfReviewMode({
         includeUncommitted={includeUncommitted}
         uncommittedCount={uncommittedCount}
         onToggleUncommitted={setIncludeUncommitted}
-        doneAt={doneAt}
-        onToggleDone={onToggleDone}
         onExit={onExit}
         onBaseChange={setBaseRef}
         onRefreshBase={shell.refreshBase}
         fetching={shell.fetching}
         onCopyAsMarkdown={onCopy}
-        onReadyToShare={onReadyToShare}
         copyState={copyState}
       />
 
@@ -366,7 +344,7 @@ export function SelfReviewMode({
       {localError && <div style={errorBanner}>{localError}</div>}
       {error && <div style={errorBanner}>{error}</div>}
       {debriefError && <div style={errorBanner}>{debriefError}</div>}
-      {readyToShareError && <div style={errorBanner}>{readyToShareError}</div>}
+      {markSeenError && <div style={errorBanner}>{markSeenError}</div>}
 
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <FileList
@@ -383,12 +361,16 @@ export function SelfReviewMode({
           onClearViewed={onClearViewed}
           noteCounts={noteCounts}
           width={fileListCol.width}
+          collapsed={fileListCollapsed}
+          onToggleCollapsed={toggleFileListCollapsed}
         />
-        <ResizeHandle
-          onResizeStart={fileListCol.onResizeStart}
-          onResizeKey={fileListCol.onResizeKey}
-          ariaLabel="Resize file list"
-        />
+        {!fileListCollapsed && (
+          <ResizeHandle
+            onResizeStart={fileListCol.onResizeStart}
+            onResizeKey={fileListCol.onResizeKey}
+            ariaLabel="Resize file list"
+          />
+        )}
 
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           {/* Diff toolbar: layout toggle (scroll/single) on the left,
@@ -443,22 +425,6 @@ export function SelfReviewMode({
                 Unified
               </button>
             </div>
-            {!railOpen && (
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setRailOpen(true)}
-                title="Show the agent Debrief rail"
-                style={debrief ? { borderColor: 'var(--blue-tint-2)' } : undefined}
-              >
-                <Icon name="doc-stack" size={12} /> Debrief
-                {openNoteCount > 0 && (
-                  <span className="badge badge-orange" style={{ marginLeft: 6 }}>
-                    {openNoteCount}
-                  </span>
-                )}
-              </button>
-            )}
           </div>
           <DiffPane
             ref={diffPaneRef}
@@ -470,6 +436,7 @@ export function SelfReviewMode({
             viewed={viewed}
             onToggleViewed={toggleViewed}
             notes={notes}
+            renderBefore={renderBefore}
             onCreateNote={createNote}
             onReplyNote={replyNote}
             onResolveNote={resolveNote}
@@ -478,195 +445,32 @@ export function SelfReviewMode({
           />
         </div>
 
-        {railOpen && (
+        {!railCollapsed && (
           <ResizeHandle
             onResizeStart={railCol.onResizeStart}
             onResizeKey={railCol.onResizeKey}
             ariaLabel="Resize Debrief rail"
           />
         )}
-        {railOpen && (
-          <DebriefRail
-            debrief={debrief}
-            notes={notes}
-            files={committed?.files ?? []}
-            selectedPath={selectedId?.startsWith('c:') ? selectedId.slice(2) : null}
-            viewed={viewed}
-            width={railCol.width}
-            onSelectFile={onSelectFile}
-            onToggleViewed={toggleViewed}
-            onCreateNote={createNote}
-            onReplyNote={replyNote}
-            onResolveNote={resolveNote}
-            onReopenNote={reopenNote}
-            onDeleteNote={deleteNote}
-            onClose={() => setRailOpen(false)}
-          />
-        )}
-      </div>
-      {readyToShareOpen && (
-        <ReadyToShareModal
-          branch={currentBranch ?? ''}
-          initialBase={baseRef ?? baseOptions?.recommended ?? 'origin/main'}
-          baseChoices={[
-            ...new Set(
-              [baseOptions?.recommended, baseOptions?.remoteDefault, baseRef ?? undefined].filter(
-                (b): b is string => Boolean(b),
-              ),
-            ),
-          ]}
-          onClose={() => setReadyToShareOpen(false)}
-          onCreated={onEnterStoryline}
+        <DebriefRail
+          debrief={debrief}
+          notes={notes}
+          files={committed?.files ?? []}
+          selectedPath={selectedId?.startsWith('c:') ? selectedId.slice(2) : null}
+          viewed={viewed}
+          width={railCol.width}
+          onSelectFile={onSelectFile}
+          onToggleViewed={toggleViewed}
+          collapsed={railCollapsed}
+          onToggleCollapsed={toggleRailCollapsed}
+          onCreateNote={createNote}
+          onReplyNote={replyNote}
+          onResolveNote={resolveNote}
+          onReopenNote={reopenNote}
+          onDeleteNote={deleteNote}
         />
-      )}
+      </div>
     </>
-  );
-}
-
-/**
- * The "Ready to share" gesture (WS-2 #60): name the Review (WS-3 #61), pick
- * its base, and create the per-machine draft for the current branch — then
- * drop straight into the storyline composer. Local-only: nothing reaches
- * GitHub until Publish.
- */
-function ReadyToShareModal({
-  branch,
-  initialBase,
-  baseChoices,
-  onClose,
-  onCreated,
-}: {
-  branch: string;
-  initialBase: string;
-  baseChoices: string[];
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [title, setTitle] = useState('');
-  const [base, setBase] = useState(initialBase);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const submit = async () => {
-    setSubmitting(true);
-    setError(null);
-    try {
-      await reviewDraftCreate(title.trim() || branch, base.trim() || 'main');
-      onClose();
-      onCreated();
-    } catch (e) {
-      // Fail loud (CLAUDE.md): surface the engine's message verbatim in the
-      // modal; never close on a swallowed error.
-      console.warn('review_draft_create_failed', e);
-      setError(String(e));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    // biome-ignore lint/a11y/useSemanticElements: overlay modal, role="dialog" matches the app's existing modal pattern rather than a native <dialog>.
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Ready to share"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.28)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 50,
-      }}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        style={{
-          width: 420,
-          background: '#fff',
-          borderRadius: 'var(--r-lg)',
-          boxShadow: 'var(--sh-pop)',
-          padding: 18,
-        }}
-      >
-        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--gray-900)', marginBottom: 6 }}>
-          Ready to share
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--gray-600)', marginBottom: 14, lineHeight: 1.5 }}>
-          Start a storyline for <span className="mono">{branch}</span>. This stays local — nothing
-          is pushed to GitHub until you publish.
-        </div>
-
-        <label
-          htmlFor="rts-title"
-          style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--gray-600)' }}
-        >
-          Title (optional)
-        </label>
-        <input
-          id="rts-title"
-          className="input"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder={branch || 'Review title'}
-          style={{ display: 'block', width: '100%', margin: '4px 0 12px' }}
-        />
-
-        <label
-          htmlFor="rts-base"
-          style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--gray-600)' }}
-        >
-          Base branch
-        </label>
-        <input
-          id="rts-base"
-          list="rts-base-choices"
-          className="input mono"
-          value={base}
-          onChange={(e) => setBase(e.target.value)}
-          style={{ display: 'block', width: '100%', margin: '4px 0 14px' }}
-        />
-        <datalist id="rts-base-choices">
-          {baseChoices.map((c) => (
-            <option key={c} value={c} />
-          ))}
-        </datalist>
-
-        {error && (
-          <div
-            style={{
-              fontSize: 11.5,
-              color: 'var(--red-d)',
-              background: 'rgba(255,59,48,0.08)',
-              border: '1px solid rgba(255,59,48,0.20)',
-              borderRadius: 'var(--r-sm)',
-              padding: '6px 10px',
-              marginBottom: 8,
-            }}
-          >
-            Couldn't create the review: {error}
-          </div>
-        )}
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button type="button" className="btn" onClick={onClose} disabled={submitting}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={submit}
-            disabled={submitting || base.trim().length === 0}
-            style={{ opacity: submitting ? 0.6 : 1 }}
-          >
-            {submitting ? 'Starting…' : 'Start storyline'}
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 

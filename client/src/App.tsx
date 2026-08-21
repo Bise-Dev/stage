@@ -5,7 +5,6 @@ import { Overview } from './screens/overview/Overview';
 import { LocalReview } from './screens/review/LocalReview';
 import { Settings } from './screens/settings/Settings';
 import { ReviewShell } from './screens/shell/ReviewShell';
-import type { ShellMode } from './screens/shell/modes';
 import { Storyline } from './screens/storyline/Storyline';
 import {
   type OpenIntent,
@@ -19,9 +18,9 @@ import {
 // The single-mode, no-backend app (ADR-0022): there is no Stage account, session,
 // or sign-in (§5) — identity is the local `gh` user, resolved lazily where needed.
 // A repo is opened onto ONE home screen — the branch-table Overview (v6-light
-// L4) — from which the author works locally in the review shell (Debrief /
-// Self-Review modes, v6-light L5) and the Storyline → Publish flow, or reviews
-// a PR read-only (LocalReview), all via `gh`/`git`.
+// L4) — from which the author works locally in the review shell (Self-Review,
+// with the agent's Debrief folded in — v6-light L7) and the Storyline → Publish
+// flow, or reviews a PR read-only (LocalReview), all via `gh`/`git`.
 type View = 'openRepo' | 'overview' | 'shell' | 'localStoryline' | 'localReview' | 'settings';
 
 export function App() {
@@ -36,9 +35,6 @@ export function App() {
   // True when Self-Review was reached via `stage open`: seed its base from the
   // Debrief's base, overriding the per-repo localStorage default (ADR-0014).
   const [seedBase, setSeedBase] = useState(false);
-  // Which review-shell mode the navigation intent asked for (v6-light L5):
-  // the table's Self-review action vs its View-agent-debrief action.
-  const [shellMode, setShellMode] = useState<ShellMode>('selfreview');
   // The view to return to when Settings is dismissed. Settings is reachable from
   // any screen (native ⌘, menu item, or the RepoMenu), so we stash where it was
   // opened from rather than assume a fixed home.
@@ -58,7 +54,6 @@ export function App() {
         setView('localReview');
       } else {
         setSeedBase(true);
-        setShellMode('selfreview');
         setView('shell');
       }
     } catch (e) {
@@ -105,15 +100,10 @@ export function App() {
 
   // Manual entry from the Overview: respect the author's persisted base (don't
   // seed from the Debrief — that's only for the `stage open` path, ADR-0014).
+  // The table's "View agent debrief" action lands here too — one surface (M1);
+  // the Debrief shows as the rail + inline chapter banners.
   const startSelfReview = useCallback(() => {
     setSeedBase(false);
-    setShellMode('selfreview');
-    setView('shell');
-  }, []);
-  // The table's "View agent debrief" action — same shell, debrief mode.
-  const startDebrief = useCallback(() => {
-    setSeedBase(false);
-    setShellMode('debrief');
     setView('shell');
   }, []);
   const exitShell = useCallback(() => setView('overview'), []);
@@ -167,14 +157,7 @@ export function App() {
     return <LocalReview pr={localReviewPr} onBack={backFromLocalReview} />;
   }
   if (view === 'shell') {
-    return (
-      <ReviewShell
-        initialMode={shellMode}
-        onExit={exitShell}
-        onEnterStoryline={enterLocalStoryline}
-        seedBaseFromDebrief={seedBase}
-      />
-    );
+    return <ReviewShell onExit={exitShell} seedBaseFromDebrief={seedBase} />;
   }
   if (view === 'localStoryline') {
     return <Storyline onBack={exitLocalStoryline} />;
@@ -183,7 +166,6 @@ export function App() {
     <Overview
       onChangeRepo={changeRepo}
       onStartSelfReview={startSelfReview}
-      onViewDebrief={startDebrief}
       onOpenStoryline={enterLocalStoryline}
       onOpenReview={openLocalReview}
       onOpenSettings={openSettings}

@@ -237,8 +237,6 @@ pub fn run() {
             commands::self_review_viewed_set,
             commands::self_review_viewed_clear,
             commands::self_review_viewed_import_legacy,
-            commands::self_review_done_set,
-            commands::self_review_done_get,
             commands::self_review_notes_list,
             commands::self_review_note_create,
             commands::self_review_note_reply,

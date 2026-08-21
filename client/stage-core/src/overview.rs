@@ -77,18 +77,15 @@ pub struct WorktreeMeta {
 
 /// Self-Review progress for a branch (v6-light L2): counts derived from the
 /// content-anchored viewed marks (F2b — a mark whose anchor no longer matches
-/// the file's current post-image counts as unviewed) plus the explicit,
-/// SHA-bound "Mark reviewed" state (F3). `total` is the branch-vs-base changed
-/// file count — the same diff as `changed_file_count`.
+/// the file's current post-image counts as unviewed). `total` is the
+/// branch-vs-base changed file count — the same diff as `changed_file_count`.
+/// (The explicit "Mark reviewed" done state was removed in L7 — F3 rescinded.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct SelfReviewProgress {
     pub viewed: u32,
     pub total: u32,
-    /// The author marked the branch reviewed at its *current* head. A new
-    /// commit invalidates the stored mark (derived here, never stored).
-    pub done: bool,
 }
 
 /// Local-git annotations for a row whose branch exists in this clone.
@@ -112,7 +109,7 @@ pub struct BranchMeta {
     /// Files changed vs. the repo's default base (the same tree-to-tree diff
     /// as the ± signal). `None` when there is no comparable base.
     pub changed_file_count: Option<u32>,
-    /// Viewed/total/done Self-Review progress; `None` when there is no
+    /// Viewed/total Self-Review progress; `None` when there is no
     /// comparable base to diff against (then there is no honest `total`).
     pub self_review: Option<SelfReviewProgress>,
     /// Last-commit time, epoch seconds (UTC). Formatted on the client.
@@ -375,8 +372,6 @@ pub fn assemble_overview_with(
         store.list_debrief_freshness_inputs(&repo_key.repo_owner, &repo_key.repo_name)?;
     let viewed_by_branch =
         store.list_viewed_by_branch(&repo_key.repo_owner, &repo_key.repo_name)?;
-    let done_by_branch =
-        store.list_self_review_done_by_branch(&repo_key.repo_owner, &repo_key.repo_name)?;
     let default_branch = default_branch_name(&repo);
     // The comparison base for plain-branch signals: prefer the remote-tracking
     // default over a possibly-stale local one (ADR-0016/0018).
@@ -448,9 +443,6 @@ pub fn assemble_overview_with(
                 Some(SelfReviewProgress {
                     viewed,
                     total: d.files.len() as u32,
-                    done: done_by_branch
-                        .get(&b.name)
-                        .is_some_and(|done| done.head_sha == b.tip_sha),
                 })
             }
         };
@@ -1199,15 +1191,13 @@ mod tests {
             .id()
             .to_string();
 
-        // Debrief at the feat tip; viewed mark anchored to f.rs's tip blob;
-        // done bound to the tip.
+        // Debrief at the feat tip; viewed mark anchored to f.rs's tip blob.
         store
             .set_debrief(&feat_key, "main", vec![], &feat_tip)
             .unwrap();
         let f_oid =
             crate::viewed::current_post_image_oid(&repo, None, "feat/enrich", "f.rs").unwrap();
         store.set_viewed(&feat_key, "f.rs", &f_oid).unwrap();
-        store.set_self_review_done(&feat_key, &feat_tip).unwrap();
         // Dirty the root worktree (main): one modified tracked file, one
         // untracked file.
         std::fs::write(root.join("base.rs"), "fn base() { /* edited */ }\n").unwrap();
@@ -1239,7 +1229,6 @@ mod tests {
             Some(SelfReviewProgress {
                 viewed: 1,
                 total: 1,
-                done: true,
             })
         );
 
@@ -1256,7 +1245,7 @@ mod tests {
         );
 
         // Move the tip with new content for f.rs: the debrief goes outdated,
-        // the viewed anchor no longer matches (F2b), done unbinds (F3).
+        // the viewed anchor no longer matches (F2b).
         git(&root, &["checkout", "-q", "feat/enrich"]);
         std::fs::write(root.join("f.rs"), "fn one() {}\nfn two() {}\n").unwrap();
         // Only f.rs — the dirty main-worktree files ride along the checkout
@@ -1276,9 +1265,8 @@ mod tests {
             Some(SelfReviewProgress {
                 viewed: 0,
                 total: 1,
-                done: false,
             }),
-            "edited content invalidates the mark; the moved head unbinds done"
+            "edited content invalidates the mark"
         );
     }
 }

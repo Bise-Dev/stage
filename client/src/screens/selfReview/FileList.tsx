@@ -1,4 +1,5 @@
 import { Fragment } from 'react';
+import { CollapsibleRail, RailStripStat } from '../../components/CollapsibleRail';
 import { Icon } from '../../components/Icon';
 import type { SelfReviewFileChange } from '../../tauri';
 
@@ -17,8 +18,11 @@ export const uncommittedId = (path: string) => `u:${path}`;
 /**
  * Left sidebar of the review shell's Self-Review mode. Flat list (no tree
  * toggle for v1, per Q13). Cmd-F binds to the filter input from the parent.
+ * The filter matches on the file *path* only (v6-light L7, §3b M7) — patch
+ * content deliberately doesn't match, a filename query must not surface
+ * unrelated files whose diff happens to contain it.
  *
- * Three groups (v6-light L5):
+ * Rendered inside the shared `CollapsibleRail` (M2); three groups (L5):
  *  - unviewed committed files — full rows, "Other files" divider when a
  *    Debrief orders the top of the list;
  *  - viewed committed files — compacted into a dim "Seen" group at the bottom
@@ -41,6 +45,8 @@ export function FileList({
   onClearViewed,
   noteCounts,
   width,
+  collapsed,
+  onToggleCollapsed,
 }: {
   /** The committed section's files. */
   files: SelfReviewFileChange[];
@@ -60,10 +66,12 @@ export function FileList({
   noteCounts: Map<string, number>;
   /** Author-resizable column width (px); see `useColumnWidth`. */
   width: number;
+  /** Rail collapse (M2) — owned by the parent so it can hide the resize handle. */
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }) {
   const q = filter.trim().toLowerCase();
-  const match = (f: SelfReviewFileChange) =>
-    !q || f.path.toLowerCase().includes(q) || f.patch?.toLowerCase().includes(q);
+  const match = (f: SelfReviewFileChange) => !q || f.path.toLowerCase().includes(q);
 
   const filtered = files.filter(match);
   const unseen = filtered.filter((f) => !viewed.has(f.path));
@@ -79,16 +87,24 @@ export function FileList({
   const empty = filtered.length === 0 && filteredUncommitted.length === 0;
 
   return (
-    <div
-      style={{
-        width,
-        flex: `0 0 ${width}px`,
-        borderRight: '1px solid var(--hairline)',
-        background: '#fbfaf8',
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 0,
-      }}
+    <CollapsibleRail
+      side="left"
+      label="Files"
+      count={files.length}
+      collapsed={collapsed}
+      onToggle={onToggleCollapsed}
+      width={width}
+      headerExtra={
+        <span style={{ fontSize: 10.5, color: 'var(--gray-500)', fontWeight: 600 }}>
+          {viewed.size}/{files.length} viewed
+        </span>
+      }
+      collapsedContent={
+        <>
+          <RailStripStat icon="doc-stack" n={files.length} title="Changed files" />
+          <RailStripStat icon="check" n={viewed.size} title="Viewed" />
+        </>
+      }
     >
       <div style={{ padding: '10px 12px 8px', borderBottom: '1px solid var(--hairline-2)' }}>
         <input
@@ -105,22 +121,7 @@ export function FileList({
           }}
         />
       </div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '8px 12px 4px',
-        }}
-      >
-        <span className="section-label" style={{ padding: 0 }}>
-          Files
-        </span>
-        <span style={{ fontSize: 10.5, color: 'var(--gray-500)', fontWeight: 600 }}>
-          {viewed.size}/{files.length} viewed
-        </span>
-      </div>
-      <div style={{ flex: 1, overflow: 'auto', padding: '0 6px' }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: '4px 6px 0' }}>
         {empty && (
           <div
             style={{
@@ -234,7 +235,7 @@ export function FileList({
           </button>
         </div>
       )}
-    </div>
+    </CollapsibleRail>
   );
 }
 

@@ -62,15 +62,12 @@ function prRefFromUrl(url: string | null): PrRef | null {
 export function Overview({
   onChangeRepo,
   onStartSelfReview,
-  onViewDebrief,
   onOpenStoryline,
   onOpenReview,
   onOpenSettings,
 }: {
   onChangeRepo: () => void;
   onStartSelfReview: () => void;
-  /** Open the review shell in Debrief mode (v6-light L5). */
-  onViewDebrief: () => void;
   onOpenStoryline: () => void;
   onOpenReview: (pr: PrRef) => void;
   onOpenSettings: () => void;
@@ -98,8 +95,8 @@ export function Overview({
     localStorage.setItem('home:view', v);
     setHomeView(v);
   };
+  // The composer's single entry point (L7 M4) — the toolbar's "New review".
   const [newReviewOpen, setNewReviewOpen] = useState(false);
-  const [newReviewBranch, setNewReviewBranch] = useState<string | undefined>(undefined);
   const [discardTarget, setDiscardTarget] = useState<OverviewRow | null>(null);
   // The explicit "Switch to branch…" flow (v6-light L3, ADR-0027 as amended):
   // a planned outcome opens the command-listing confirmation; planning errors
@@ -110,10 +107,7 @@ export function Overview({
   } | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
 
-  const openNewReview = useCallback((branch?: string) => {
-    setNewReviewBranch(branch);
-    setNewReviewOpen(true);
-  }, []);
+  const openNewReview = useCallback(() => setNewReviewOpen(true), []);
 
   // One load in flight at a time. Loads are snapshot reads (the sync engine
   // owns freshness — `gh` is never on this path), so this guard only drops
@@ -220,21 +214,6 @@ export function Overview({
     [onStartSelfReview],
   );
 
-  // Same door, Debrief mode: the full-screen chaptered viewer (v6-light L5).
-  const viewDebriefAt = useCallback(
-    async (r: OverviewRow) => {
-      const wt = r.branchMeta?.worktree;
-      if (!wt) return;
-      try {
-        await setFocusedWorktree(wt.path);
-        onViewDebrief();
-      } catch (e) {
-        console.warn('overview_focus_worktree_failed', e);
-      }
-    },
-    [onViewDebrief],
-  );
-
   // Plan an explicit switch of the focused worktree to `branch` and open the
   // command-listing confirmation (ADR-0027). Planning never mutates.
   const openSwitchDialog = useCallback(async (branch: string) => {
@@ -293,7 +272,7 @@ export function Overview({
   const debriefNew = localRows.filter((r) => r.branchMeta?.debriefFreshness === 'new').length;
   const selfInProgress = localRows.filter((r) => {
     const sr = r.branchMeta?.selfReview;
-    return sr !== null && sr !== undefined && !sr.done && sr.viewed > 0;
+    return sr !== null && sr !== undefined && sr.viewed > 0;
   }).length;
 
   const filteredLocal = localRows.filter(matchRow);
@@ -434,8 +413,9 @@ export function Overview({
                 defaultBase={defaultBase}
                 actions={{
                   onSelfReview: startSelfReviewAt,
-                  onViewDebrief: viewDebriefAt,
-                  onReadyToShare: openNewReview,
+                  // One surface (L7 M1): "View agent debrief" opens Self-Review;
+                  // the Debrief shows as the rail + inline chapter banners.
+                  onViewDebrief: startSelfReviewAt,
                   onOpenStoryline: openStorylineAt,
                   onOpenReview,
                   onSwitchTo: openSwitchDialog,
@@ -562,7 +542,6 @@ export function Overview({
         {newReviewOpen && (
           <NewReviewModal
             branchRows={branchRowsForModal}
-            prefillBranch={newReviewBranch}
             onClose={() => setNewReviewOpen(false)}
             onCreated={onOpenStoryline}
           />
@@ -775,17 +754,16 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** "Ready to share" (WS-2 #60): pick a branch (checked out in a worktree — the
- *  engine keys the draft off the focused worktree), a base, and an optional
- *  title; creates the per-machine draft and opens the storyline composer. */
+/** "New review" (WS-2 #60; the composer's single entry per L7 M4): pick a
+ *  branch (checked out in a worktree — the engine keys the draft off the
+ *  focused worktree), a base, and an optional title; creates the per-machine
+ *  draft and opens the storyline composer. */
 function NewReviewModal({
   branchRows,
-  prefillBranch,
   onClose,
   onCreated,
 }: {
   branchRows: OverviewRow[];
-  prefillBranch?: string;
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -795,7 +773,7 @@ function NewReviewModal({
   const without = branchRows.filter(
     (r) => !r.branchMeta?.worktree || r.branchMeta.worktree.prunable,
   );
-  const [headRef, setHeadRef] = useState(prefillBranch ?? withWorktree[0]?.branch ?? '');
+  const [headRef, setHeadRef] = useState(withWorktree[0]?.branch ?? '');
   // Base is the PR merge target, stored remote-tracking (`origin/<name>`) so
   // the diff prefers the remote copy; Publish strips the prefix for gh.
   const [baseRef, setBaseRef] = useState('');

@@ -6,11 +6,11 @@ import { relativeTimeFromEpoch } from '../../time';
 /**
  * Top bar of the review shell's Self-Review mode.
  *
- * v6-light L5 (flags F3/F4): the old `workdir | base` scope seg is gone — the
- * committed-vs-base diff is always the reviewable unit, and "+ Uncommitted"
- * folds the working tree in as a separate section. "Mark reviewed" is the
- * mode's primary (explicit, SHA-bound; a later commit withdraws it
- * engine-side). "Ready to share" stays (flag F5 — no feature removal).
+ * v6-light L7 (flag F4; §3b M4–M6/M8): the committed-vs-base diff is always
+ * the reviewable unit, and "+ Uncommitted" folds the working tree in as a
+ * separate section — greyed out when there is nothing to fold in. The
+ * composer's single entry point is the Overview's "New review" button (M4),
+ * and "Mark reviewed" is gone (M5, F3 rescinded).
  */
 export function Subheader({
   branch,
@@ -26,14 +26,11 @@ export function Subheader({
   includeUncommitted,
   uncommittedCount,
   onToggleUncommitted,
-  doneAt,
-  onToggleDone,
   onExit,
   onBaseChange,
   onRefreshBase,
   fetching,
   onCopyAsMarkdown,
-  onReadyToShare,
   copyState,
 }: {
   branch: string;
@@ -56,19 +53,18 @@ export function Subheader({
   /** Workdir-diff file count for the toggle badge; null until known. */
   uncommittedCount: number | null;
   onToggleUncommitted: (on: boolean) => void;
-  /** "Mark reviewed" state (flag F3): epoch seconds while valid, else null. */
-  doneAt: number | null;
-  onToggleDone: () => void;
   onExit: () => void;
   onBaseChange: (base: string) => void;
   /** Fetch the remote and re-resolve the base options. */
   onRefreshBase: () => void;
   fetching: boolean;
   onCopyAsMarkdown: () => void;
-  onReadyToShare: () => void;
   copyState: 'idle' | 'copied' | 'error';
 }) {
   const base = baseRef ?? defaultBranch ?? 'main';
+  // M6: nothing to fold in — the toggle is inert unless it's already on (then
+  // the author can still turn the empty section off).
+  const uncommittedInert = (uncommittedCount ?? 0) === 0 && !includeUncommitted;
 
   return (
     <div
@@ -83,15 +79,16 @@ export function Subheader({
         borderBottom: '1px solid var(--hairline)',
       }}
     >
+      {/* M8: reads as back navigation — left-pointing chevron + destination. */}
       <button
         type="button"
-        className="btn btn-ghost"
+        className="btn"
         onClick={onExit}
         title="Back to Reviews — Esc"
-        style={{ padding: '0 8px' }}
+        style={{ padding: '0 10px 0 6px', gap: 3 }}
       >
-        <Icon name="chevron-right" size={12} color="var(--gray-500)" />
-        <span style={{ marginLeft: 4 }}>Reviews</span>
+        <Icon name="chevron-left" size={12} color="var(--gray-600)" />
+        <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Back</span>
       </button>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -133,15 +130,21 @@ export function Subheader({
         />
       </div>
 
-      {/* "+ Uncommitted" — fold the working tree in as a separate section. */}
+      {/* "+ Uncommitted" — fold the working tree in as a separate section.
+          Greyed out (M6) when there is no working tree / nothing uncommitted. */}
       <button
         type="button"
         className="btn"
         onClick={() => onToggleUncommitted(!includeUncommitted)}
+        disabled={uncommittedInert}
         title={
           includeUncommitted
             ? 'Hide the working-tree section'
-            : 'Show uncommitted changes as a separate section'
+            : uncommittedCount === null
+              ? 'No working tree for this branch'
+              : uncommittedCount === 0
+                ? 'Nothing uncommitted in the working tree'
+                : 'Show uncommitted changes as a separate section'
         }
         style={
           includeUncommitted
@@ -150,7 +153,9 @@ export function Subheader({
                 borderColor: 'rgba(255,149,0,0.28)',
                 color: '#b56500',
               }
-            : undefined
+            : uncommittedInert
+              ? { opacity: 0.45 }
+              : undefined
         }
       >
         {includeUncommitted ? '−' : '+'} Uncommitted
@@ -188,35 +193,6 @@ export function Subheader({
           : copyState === 'error'
             ? 'Copy failed'
             : 'Copy as markdown'}
-      </button>
-      <button
-        type="button"
-        className="btn"
-        onClick={onReadyToShare}
-        title="Mark ready to share and start composing the storyline"
-      >
-        <Icon name="gh" size={12} /> Ready to share
-      </button>
-      {/* "Mark reviewed" (flag F3): explicit, allowed anytime, SHA-bound —
-          clicking again withdraws it. */}
-      <button
-        type="button"
-        className={doneAt !== null ? 'btn' : 'btn btn-primary'}
-        onClick={onToggleDone}
-        disabled={!ready}
-        title={
-          doneAt !== null
-            ? 'Reviewed at this commit — click to withdraw'
-            : 'Mark this branch self-reviewed at its current head'
-        }
-        style={
-          doneAt !== null
-            ? { background: 'rgba(52,199,89,0.14)', color: 'var(--green-d)', opacity: 1 }
-            : { opacity: ready ? 1 : 0.6 }
-        }
-      >
-        <Icon name="check" size={12} color={doneAt !== null ? 'var(--green-d)' : '#fff'} />{' '}
-        {doneAt !== null ? 'Reviewed' : 'Mark reviewed'}
       </button>
     </div>
   );

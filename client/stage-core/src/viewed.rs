@@ -26,16 +26,6 @@ pub struct ViewedMark {
     pub viewed_at: i64,
 }
 
-/// The stored "Mark reviewed" state (flag F3): explicit, SHA-bound. Valid only
-/// while `head_sha` is still the branch head — derived at read time, so a new
-/// commit silently returns the branch to not-done without a write.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SelfReviewDone {
-    pub head_sha: String,
-    /// Epoch seconds (UTC).
-    pub done_at: i64,
-}
-
 /// The zero OID — the sentinel for an absent post-image (a deleted file).
 /// Stable by construction: a mark on a deletion stays valid exactly as long
 /// as the file stays deleted.
