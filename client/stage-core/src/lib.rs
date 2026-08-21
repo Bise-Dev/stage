@@ -14,6 +14,7 @@ pub mod discussion;
 pub mod domain;
 pub mod error;
 pub mod github;
+pub mod graph;
 pub mod overview;
 pub mod pr;
 pub mod publish;
@@ -40,6 +41,9 @@ pub use domain::{
 };
 pub use error::StageError;
 pub use github::{GhAuthor, GhPullRequest, GitHub, GitHubUser, PrFilter};
+pub use graph::{
+    branch_graph, BranchGraphView, GraphBranch, GraphHeadStatus, GraphLabel, GraphRow,
+};
 pub use overview::{
     assemble_overview, assemble_overview_with, fetch_overview_github, BranchMeta,
     OverviewGithubData, OverviewKind, OverviewRow, OverviewView, SelfReviewProgress, SignalCache,

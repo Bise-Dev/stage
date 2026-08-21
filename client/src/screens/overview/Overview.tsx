@@ -28,6 +28,7 @@ import {
   syncStatus,
 } from '../../tauri';
 import { relativeTime, relativeTimeFromEpoch } from '../../time';
+import { BranchGraph } from './BranchGraph';
 import { BranchTable, statusBadge } from './BranchTable';
 
 /**
@@ -89,6 +90,14 @@ export function Overview({
   const [showArchived, setShowArchived] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  // Table ⇄ Graph home choice (v6-light L6), persisted like other view prefs.
+  const [homeView, setHomeView] = useState<'table' | 'graph'>(() =>
+    localStorage.getItem('home:view') === 'graph' ? 'graph' : 'table',
+  );
+  const pickHomeView = (v: 'table' | 'graph') => {
+    localStorage.setItem('home:view', v);
+    setHomeView(v);
+  };
   const [newReviewOpen, setNewReviewOpen] = useState(false);
   const [newReviewBranch, setNewReviewBranch] = useState<string | undefined>(undefined);
   const [discardTarget, setDiscardTarget] = useState<OverviewRow | null>(null);
@@ -330,11 +339,23 @@ export function Overview({
               />
             </div>
             <div className="seg" style={{ height: 26 }}>
-              <div className="active">Table</div>
               <div
-                title="Branch graph — coming with v6-light L6"
-                style={{ opacity: 0.45 }}
-                aria-disabled="true"
+                className={homeView === 'table' ? 'active' : ''}
+                onClick={() => pickHomeView('table')}
+                onKeyDown={(e) => e.key === 'Enter' && pickHomeView('table')}
+                role="tab"
+                tabIndex={0}
+                aria-selected={homeView === 'table'}
+              >
+                Table
+              </div>
+              <div
+                className={homeView === 'graph' ? 'active' : ''}
+                onClick={() => pickHomeView('graph')}
+                onKeyDown={(e) => e.key === 'Enter' && pickHomeView('graph')}
+                role="tab"
+                tabIndex={0}
+                aria-selected={homeView === 'graph'}
               >
                 Graph
               </div>
@@ -400,92 +421,102 @@ export function Overview({
             )}
           </div>
 
-          {/* Table + the "On GitHub" tail scroll together; footer stays put. */}
-          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingBottom: 14 }}>
-            <BranchTable
-              rows={filteredLocal}
-              defaultBase={defaultBase}
-              actions={{
-                onSelfReview: startSelfReviewAt,
-                onViewDebrief: viewDebriefAt,
-                onReadyToShare: openNewReview,
-                onOpenStoryline: openStorylineAt,
-                onOpenReview,
-                onSwitchTo: openSwitchDialog,
-                onDiscardDraft: setDiscardTarget,
-              }}
-            />
+          {homeView === 'graph' ? (
+            /* The graph fills the scroll area; the "On GitHub" tail is a
+               table-view companion and stays there. */
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', paddingBottom: 14 }}>
+              <BranchGraph rows={localRows} refreshKey={sync?.generation ?? 0} />
+            </div>
+          ) : (
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingBottom: 14 }}>
+              <BranchTable
+                rows={filteredLocal}
+                defaultBase={defaultBase}
+                actions={{
+                  onSelfReview: startSelfReviewAt,
+                  onViewDebrief: viewDebriefAt,
+                  onReadyToShare: openNewReview,
+                  onOpenStoryline: openStorylineAt,
+                  onOpenReview,
+                  onSwitchTo: openSwitchDialog,
+                  onDiscardDraft: setDiscardTarget,
+                }}
+              />
 
-            {/* PRs with no local branch — awaiting your review, or yours with
+              {/* PRs with no local branch — awaiting your review, or yours with
                 the branch gone locally. Compact, but the capability stays. */}
-            {(filteredGh.length > 0 || !githubIncluded) && (
-              <div style={{ marginTop: 16 }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    margin: '0 2px 6px',
-                  }}
-                >
-                  <Icon name="gh" size={11} color="var(--gray-500)" />
-                  <span
+              {(filteredGh.length > 0 || !githubIncluded) && (
+                <div style={{ marginTop: 16 }}>
+                  <div
                     style={{
-                      fontSize: 10,
-                      fontWeight: 700,
-                      letterSpacing: 0.5,
-                      textTransform: 'uppercase',
-                      color: 'var(--gray-400)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      margin: '0 2px 6px',
                     }}
                   >
-                    On GitHub · no local branch
-                  </span>
-                  {filteredGh.filter((r) => r.role === 'reviewer').length > 0 && (
-                    <span className="badge badge-orange">
-                      {filteredGh.filter((r) => r.role === 'reviewer').length} awaiting your review
+                    <Icon name="gh" size={11} color="var(--gray-500)" />
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: 0.5,
+                        textTransform: 'uppercase',
+                        color: 'var(--gray-400)',
+                      }}
+                    >
+                      On GitHub · no local branch
                     </span>
+                    {filteredGh.filter((r) => r.role === 'reviewer').length > 0 && (
+                      <span className="badge badge-orange">
+                        {filteredGh.filter((r) => r.role === 'reviewer').length} awaiting your
+                        review
+                      </span>
+                    )}
+                  </div>
+                  {!githubIncluded && (
+                    <div
+                      style={{ fontSize: 11.5, color: 'var(--gray-500)', padding: '2px 2px 6px' }}
+                    >
+                      GitHub wasn't consulted — fix `gh` (see the banner above) and Fetch to see the
+                      PRs awaiting your review.
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {filteredGh.map((r) => (
+                      <GhRow
+                        key={r.prNumber !== null ? `#${r.prNumber}` : r.branch}
+                        r={r}
+                        onOpenReview={onOpenReview}
+                      />
+                    ))}
+                  </div>
+                  {githubIncluded && (
+                    <button
+                      type="button"
+                      onClick={() => setShowArchived((v) => !v)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        background: 'none',
+                        border: 'none',
+                        padding: '6px 2px',
+                        cursor: 'pointer',
+                        fontSize: 11.5,
+                        color: 'var(--gray-500)',
+                      }}
+                    >
+                      <Icon name="eye" size={11} color="var(--gray-500)" />
+                      {showArchived
+                        ? `Hide archived (${rows.filter((r) => r.archived).length})`
+                        : 'Show archived'}
+                    </button>
                   )}
                 </div>
-                {!githubIncluded && (
-                  <div style={{ fontSize: 11.5, color: 'var(--gray-500)', padding: '2px 2px 6px' }}>
-                    GitHub wasn't consulted — fix `gh` (see the banner above) and Fetch to see the
-                    PRs awaiting your review.
-                  </div>
-                )}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {filteredGh.map((r) => (
-                    <GhRow
-                      key={r.prNumber !== null ? `#${r.prNumber}` : r.branch}
-                      r={r}
-                      onOpenReview={onOpenReview}
-                    />
-                  ))}
-                </div>
-                {githubIncluded && (
-                  <button
-                    type="button"
-                    onClick={() => setShowArchived((v) => !v)}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      background: 'none',
-                      border: 'none',
-                      padding: '6px 2px',
-                      cursor: 'pointer',
-                      fontSize: 11.5,
-                      color: 'var(--gray-500)',
-                    }}
-                  >
-                    <Icon name="eye" size={11} color="var(--gray-500)" />
-                    {showArchived
-                      ? `Hide archived (${rows.filter((r) => r.archived).length})`
-                      : 'Show archived'}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
 
           {/* Footer: repo menu + legend */}
           <div

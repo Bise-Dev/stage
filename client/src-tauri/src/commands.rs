@@ -1204,6 +1204,25 @@ pub async fn branch_switch_execute(
     result
 }
 
+// --- Branch graph (v6-light L6) ------------------------------------------------
+
+/// Assemble the branch graph: bounded commit topology with lane geometry,
+/// computed fresh per call (no sync-engine integration in light — the view
+/// recomputes on open and on `sync-updated`). Read-only; runs off the UI
+/// thread (ADR-0023) — the walk is blocking git I/O.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn branch_graph(
+    state: State<'_, AppState>,
+) -> Result<stage_core::BranchGraphView, AppError> {
+    let path = active_repo_path(&state)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
+        Ok(stage_core::branch_graph(&path)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("branch_graph_join_error: {e}")))?
+}
+
 // --- Identity (ADR-0022 §5, milestone C) -------------------------------------
 //
 // Stage holds no account/session/token. "Who am I" is just the `gh` token owner,
