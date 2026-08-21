@@ -81,7 +81,5 @@ pub use switch::{
     switch_execute, switch_plan, SwitchOutcome, SwitchPlan, SwitchPlanOutcome, SwitchStep,
     SwitchStepKind,
 };
-pub use viewed::{
-    current_post_image_oid, import_legacy_viewed, SelfReviewDone, ViewedMark, ABSENT_POST_IMAGE,
-};
+pub use viewed::{current_post_image_oid, import_legacy_viewed, ViewedMark, ABSENT_POST_IMAGE};
 pub use worktree::{list_worktrees, repo_common_dir, WorktreeInfo};

@@ -1,45 +1,33 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { TitleBar } from '../../components/TitleBar';
 import { useSelfReviewDebrief } from '../selfReview/useSelfReviewDebrief';
-import { DebriefMode } from './DebriefMode';
 import { SelfReviewMode } from './SelfReviewMode';
 import { SHELL_MODES, type ShellMode, type ShellModeBodyProps } from './modes';
 import { useShellBootstrap } from './useShellBootstrap';
 
 /**
- * The unified review shell (v6-light L5, design `V6_ReviewShell`): Debrief and
- * Self-Review are the same interface, differing only in the mode config
- * (`SHELL_MODES`) and the mode body mounted below the title bar. The full-v6
- * Review mode (step 7) slots in as a third registry entry + body — no
- * restructuring.
+ * The unified review shell (v6-light L5; trimmed in L7 §3b M1): Self-Review is
+ * the one review surface, with the agent's Debrief rendered inside it (rail +
+ * inline chapter banners) rather than as a separate mode. The full-v6 Review
+ * mode (step 7) slots in as a second registry entry + body — no restructuring.
  *
- * The shell owns what every mode shares: the repo/base bootstrap, the Debrief
- * + Review-notes state, and the mode swap (Debrief's "Start self-review"
- * primary lands here).
+ * The shell owns what every mode shares: the repo/base bootstrap and the
+ * Debrief + Review-notes state.
  */
 const MODE_BODIES: Record<ShellMode, (props: ShellModeBodyProps) => React.ReactNode> = {
   selfreview: SelfReviewMode,
-  debrief: DebriefMode,
 };
 
 export function ReviewShell({
-  initialMode,
   onExit,
-  onEnterStoryline,
   seedBaseFromDebrief = false,
 }: {
-  initialMode: ShellMode;
   onExit: () => void;
-  /** Enter the storyline composer after "Ready to share" creates the draft. */
-  onEnterStoryline: () => void;
   /** The `stage open` path (ADR-0014): seed the base from the Debrief's
    *  stored base, overriding the per-repo persisted default. */
   seedBaseFromDebrief?: boolean;
 }) {
-  const [mode, setMode] = useState<ShellMode>(initialMode);
-  // Re-entering the shell from navigation (e.g. table → View debrief while
-  // already mounted on Self-Review) re-applies the requested mode.
-  useEffect(() => setMode(initialMode), [initialMode]);
+  const mode: ShellMode = 'selfreview';
 
   const shell = useShellBootstrap();
   const debriefState = useSelfReviewDebrief(shell.repoPath);
@@ -63,13 +51,7 @@ export function ReviewShell({
       <div className="win">
         <TitleBar title={`Stage — ${cfg.label}`} />
         {shell.error && <div style={errorBanner}>{shell.error}</div>}
-        <Body
-          shell={shell}
-          debriefState={debriefState}
-          onExit={onExit}
-          onEnterStoryline={onEnterStoryline}
-          onStartSelfReview={() => setMode('selfreview')}
-        />
+        <Body shell={shell} debriefState={debriefState} onExit={onExit} />
       </div>
     </div>
   );

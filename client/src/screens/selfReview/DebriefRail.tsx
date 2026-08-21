@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { CollapsibleRail, RailStripStat } from '../../components/CollapsibleRail';
 import { Icon } from '../../components/Icon';
 import type {
   DebriefView,
@@ -49,7 +50,8 @@ export function DebriefRail({
   width,
   onSelectFile,
   onToggleViewed,
-  onClose,
+  collapsed,
+  onToggleCollapsed,
   ...noteOps
 }: NoteOps & {
   debrief: DebriefView | null;
@@ -62,7 +64,9 @@ export function DebriefRail({
   width: number;
   onSelectFile: (path: string) => void;
   onToggleViewed: (path: string) => void;
-  onClose: () => void;
+  /** Rail collapse (M2, mirrored right) — parent-owned like the file list's. */
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }) {
   // Path → anchored notes, in store order (newest first from the backend).
   const notesByFile = useMemo(() => {
@@ -95,53 +99,34 @@ export function DebriefRail({
   const openCount = notes.filter((n) => n.status === 'open').length;
 
   return (
-    <div
-      style={{
-        width,
-        flex: `0 0 ${width}px`,
-        borderLeft: '1px solid var(--hairline)',
-        background: '#fbfaf8',
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 0,
-      }}
+    <CollapsibleRail
+      side="right"
+      label="Agent Debrief"
+      count={debrief ? chapters.length : null}
+      collapsed={collapsed}
+      onToggle={onToggleCollapsed}
+      width={width}
+      headerExtra={
+        <>
+          {debrief && (
+            <span className="badge mono" style={{ background: 'rgba(0,0,0,0.06)' }}>
+              {debrief.base}
+            </span>
+          )}
+          {openCount > 0 && (
+            <span className="badge badge-orange">
+              {openCount} open note{openCount === 1 ? '' : 's'}
+            </span>
+          )}
+        </>
+      }
+      collapsedContent={
+        <>
+          <RailStripStat icon="sparkle" n={chapters.length} title="Debrief chapters" />
+          <RailStripStat icon="comment-fill" n={openCount} title="Open Review notes" />
+        </>
+      }
     >
-      {/* Rail header */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '10px 12px',
-          borderBottom: '1px solid var(--hairline)',
-          background: '#fff',
-        }}
-      >
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--gray-800)' }}>
-          Agent Debrief
-        </span>
-        {debrief && (
-          <span className="badge mono" style={{ background: 'rgba(0,0,0,0.06)' }}>
-            {debrief.base}
-          </span>
-        )}
-        {openCount > 0 && (
-          <span className="badge badge-orange">
-            {openCount} open note{openCount === 1 ? '' : 's'}
-          </span>
-        )}
-        <div style={{ flex: 1 }} />
-        <button
-          type="button"
-          className="btn btn-ghost"
-          onClick={onClose}
-          title="Hide the Debrief rail"
-          style={{ padding: '0 6px' }}
-        >
-          <Icon name="chevron-right" size={12} color="var(--gray-500)" />
-        </button>
-      </div>
-
       <div style={{ flex: 1, overflow: 'auto', padding: '10px 12px' }}>
         <GeneralNotes notes={general} {...noteOps} />
 
@@ -223,7 +208,7 @@ export function DebriefRail({
           </>
         )}
       </div>
-    </div>
+    </CollapsibleRail>
   );
 }
 

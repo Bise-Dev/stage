@@ -77,21 +77,10 @@ function DebriefPill({ r }: { r: OverviewRow }) {
   );
 }
 
-/** Blue progress pill while a self-review is underway; a check once the
- *  branch is explicitly marked reviewed (F3, SHA-bound — Rust already
- *  invalidated stale marks). */
+/** Blue progress pill while a self-review is underway (viewed/total from the
+ *  content-anchored marks; the done state was removed in L7 — F3 rescinded). */
 function SelfReviewPill({ sr }: { sr: SelfReviewProgress | null }) {
   if (!sr) return null;
-  if (sr.done) {
-    return (
-      <span
-        className="badge"
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flex: '0 0 auto' }}
-      >
-        <Icon name="check" size={9} color="var(--gray-500)" /> self-reviewed
-      </span>
-    );
-  }
   if (sr.viewed === 0) return null;
   const pct = sr.total > 0 ? Math.min(100, Math.round((sr.viewed / sr.total) * 100)) : 0;
   return (
@@ -141,9 +130,9 @@ export type BranchTableActions = {
   /** Focus the row's worktree and enter Self-Review. Caller guards on a
    *  materialized worktree; the table disables the affordance otherwise. */
   onSelfReview: (r: OverviewRow) => void;
-  /** Same route — the Debrief rail opens itself when a Debrief exists. */
+  /** Same route (L7 M1 — one surface): the Debrief renders inside Self-Review
+   *  as the rail + inline chapter banners; a fresh one expands the rail. */
   onViewDebrief: (r: OverviewRow) => void;
-  onReadyToShare: (branch: string) => void;
   onOpenStoryline: (r: OverviewRow) => void;
   onOpenReview: (pr: PrRef) => void;
   onSwitchTo: (branch: string) => void;
@@ -302,7 +291,7 @@ function BranchRow({
   // Base: a Review row carries its chosen base; a plain branch diffs against
   // the repo default (the DTO says so) — name it when we know it.
   const base = r.baseRef ?? (meta.isDefault ? null : defaultBase);
-  const selfLabel = sr && !sr.done && sr.viewed > 0 ? 'Continue' : 'Self-review';
+  const selfLabel = sr && sr.viewed > 0 ? 'Continue' : 'Self-review';
   const localChip =
     r.kind === 'draft' || (r.kind === 'published' && r.prNumber === null) ? (
       <button
@@ -411,7 +400,7 @@ function BranchRow({
           <DebriefPill r={r} />
           <SelfReviewPill sr={sr} />
           {localChip}
-          {!meta.debriefFreshness && !localChip && (!sr || (sr.viewed === 0 && !sr.done)) && (
+          {!meta.debriefFreshness && !localChip && (!sr || sr.viewed === 0) && (
             <span style={{ fontSize: 11, color: 'var(--gray-300)' }}>—</span>
           )}
         </div>
@@ -499,9 +488,11 @@ function BranchRow({
   );
 }
 
-/** The per-branch action menu (design `V6L_ActionMenu` + F1/F5): the two
- *  local-review actions, the kept v5 entries, and the explicit switch. No
- *  auto-switch notice — switching is its own confirmed action (ADR-0027). */
+/** The per-branch action menu (design `V6L_ActionMenu` + F1; trimmed per L7
+ *  M4 — the composer's single entry is the toolbar's "New review"): the two
+ *  local-review actions, the draft/published entries, and the explicit
+ *  switch. No auto-switch notice — switching is its own confirmed action
+ *  (ADR-0027). */
 function BranchActionMenu({
   r,
   actions,
@@ -519,11 +510,7 @@ function BranchActionMenu({
   const hasDebrief = meta.hasDebrief;
   const freshness = meta.debriefFreshness;
   const selfLabel =
-    sr && !sr.done && sr.viewed > 0
-      ? `Continue self-review · ${sr.viewed}/${sr.total}`
-      : sr?.done
-        ? 'Self-review again'
-        : 'Self-review';
+    sr && sr.viewed > 0 ? `Continue self-review · ${sr.viewed}/${sr.total}` : 'Self-review';
 
   const run = (fn: () => void) => () => {
     closeMenu();
@@ -562,11 +549,7 @@ function BranchActionMenu({
               ? 'Browse your changes by file, entirely on this machine.'
               : 'Not checked out — switch to this branch (below) to self-review it here.'
           }
-          right={
-            sr && !sr.done && sr.viewed > 0 ? (
-              <span className="badge badge-blue">ongoing</span>
-            ) : null
-          }
+          right={sr && sr.viewed > 0 ? <span className="badge badge-blue">ongoing</span> : null}
         />
       )}
       <MenuItem
@@ -588,16 +571,6 @@ function BranchActionMenu({
           </span>
         }
       />
-      {r.kind === 'branch' && !meta.isDefault && (
-        <MenuItem
-          icon="plus"
-          color="var(--green-d)"
-          label="Ready to share…"
-          dim={!materialized}
-          onClick={materialized ? run(() => actions.onReadyToShare(r.branch)) : undefined}
-          sub="Compose a storyline, then publish it as a PR."
-        />
-      )}
       {(r.kind === 'draft' || r.kind === 'published') && (
         <MenuItem
           icon="doc-stack"

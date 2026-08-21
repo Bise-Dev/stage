@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Avatar } from '../../components/Avatar';
+import { CollapsibleRail, RailStripStat, useRailCollapsed } from '../../components/CollapsibleRail';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { Icon } from '../../components/Icon';
 import type { BranchGraphView, GraphRow, OverviewRow } from '../../tauri';
@@ -141,7 +142,7 @@ export function BranchGraph({
 }) {
   const [graph, setGraph] = useState<BranchGraphView | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSED_KEY) === 'true');
+  const [collapsed, toggleCollapsed] = useRailCollapsed(COLLAPSED_KEY);
   const [filter, setFilter] = useState('');
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
 
@@ -158,13 +159,6 @@ export function BranchGraph({
   useEffect(() => {
     load();
   }, [refreshKey, load]);
-
-  const toggleCollapsed = () => {
-    setCollapsed((c) => {
-      localStorage.setItem(COLLAPSED_KEY, String(!c));
-      return !c;
-    });
-  };
 
   const metaByBranch = useMemo(() => {
     const m = new Map<string, OverviewRow>();
@@ -190,7 +184,6 @@ export function BranchGraph({
   const footerLane =
     graph?.branches.find((b) => b.name === footerBranch)?.lane ?? selected?.lane ?? 0;
 
-  const railW = collapsed ? 44 : 248;
   const worktreeCount = (graph?.branches ?? []).filter((b) => b.onWorktree).length;
 
   return (
@@ -206,235 +199,152 @@ export function BranchGraph({
         boxShadow: 'var(--sh-1)',
       }}
     >
-      {/* ── Collapsible branch rail ─────────────────────────────── */}
-      <div
-        style={{
-          width: railW,
-          flex: `0 0 ${railW}px`,
-          borderRight: '1px solid var(--hairline)',
-          background: 'var(--gray-50)',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          transition: 'flex-basis .2s',
-        }}
+      {/* ── Branch rail — the shared collapsible pattern (L7 M2) ── */}
+      <CollapsibleRail
+        side="left"
+        label="Local branches"
+        count={graph?.branches.length ?? 0}
+        collapsed={collapsed}
+        onToggle={toggleCollapsed}
+        width={248}
+        collapsedContent={
+          <>
+            <RailStripStat icon="branch" n={graph?.branches.length ?? 0} title="Local branches" />
+            <RailStripStat icon="folder" n={worktreeCount} title="Worktrees" />
+          </>
+        }
       >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            height: 30,
-            flex: '0 0 30px',
-            padding: '0 10px',
-            borderBottom: '1px solid var(--hairline)',
-          }}
-        >
-          <button
-            type="button"
-            className="btn"
-            onClick={toggleCollapsed}
-            title={collapsed ? 'Expand branch rail' : 'Collapse branch rail'}
-            style={{
-              height: 22,
-              width: 22,
-              padding: 0,
-              justifyContent: 'center',
-              flex: '0 0 22px',
-            }}
-          >
-            <Icon
-              name={collapsed ? 'chevron-right' : 'chevron-left'}
-              size={11}
-              color="var(--gray-600)"
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 6px' }}>
+          <div style={{ position: 'relative', padding: '0 4px 8px' }}>
+            <div
+              style={{
+                position: 'absolute',
+                left: 11,
+                top: 7,
+                color: 'var(--gray-400)',
+                display: 'flex',
+              }}
+            >
+              <Icon name="search" size={11} />
+            </div>
+            <input
+              className="input"
+              placeholder="Filter branches…"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              style={{ paddingLeft: 27, height: 26, fontSize: 12 }}
             />
-          </button>
-          {!collapsed && (
-            <>
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  letterSpacing: 0.5,
-                  textTransform: 'uppercase',
-                  color: 'var(--gray-400)',
-                }}
-              >
-                Local branches
-              </span>
-              <div style={{ flex: 1 }} />
-              <span className="badge">{graph?.branches.length ?? 0}</span>
-            </>
-          )}
-        </div>
-
-        {collapsed ? (
-          <div
-            style={{
-              flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 14,
-              padding: '14px 0',
-            }}
-          >
-            {[
-              { icon: 'branch' as const, n: graph?.branches.length ?? 0, title: 'Local branches' },
-              { icon: 'folder' as const, n: worktreeCount, title: 'Worktrees' },
-            ].map((s) => (
-              <div
-                key={s.icon}
-                title={s.title}
-                style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}
-              >
-                <Icon name={s.icon} size={14} color="var(--gray-600)" />
-                <span
+          </div>
+          {RAIL_GROUPS.map((group) => {
+            const branches = railBranches.filter((b) => b.onWorktree === group.onWorktree);
+            if (branches.length === 0) return null;
+            return (
+              <div key={group.label} style={{ marginBottom: 10 }}>
+                <div
                   style={{
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: s.n ? 'var(--gray-700)' : 'var(--gray-300)',
-                    fontVariantNumeric: 'tabular-nums',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    padding: '4px 8px 3px',
                   }}
                 >
-                  {s.n}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ flex: 1, overflowY: 'auto', padding: '8px 6px' }}>
-            <div style={{ position: 'relative', padding: '0 4px 8px' }}>
-              <div
-                style={{
-                  position: 'absolute',
-                  left: 11,
-                  top: 7,
-                  color: 'var(--gray-400)',
-                  display: 'flex',
-                }}
-              >
-                <Icon name="search" size={11} />
-              </div>
-              <input
-                className="input"
-                placeholder="Filter branches…"
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                style={{ paddingLeft: 27, height: 26, fontSize: 12 }}
-              />
-            </div>
-            {RAIL_GROUPS.map((group) => {
-              const branches = railBranches.filter((b) => b.onWorktree === group.onWorktree);
-              if (branches.length === 0) return null;
-              return (
-                <div key={group.label} style={{ marginBottom: 10 }}>
-                  <div
+                  <span
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 5,
-                      padding: '4px 8px 3px',
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: 0.6,
+                      textTransform: 'uppercase',
+                      color: 'var(--gray-500)',
                     }}
                   >
-                    <span
+                    {group.label}
+                  </span>
+                  <div style={{ flex: 1 }} />
+                  <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--gray-400)' }}>
+                    {branches.length}
+                  </span>
+                </div>
+                {branches.map((b) => {
+                  const meta = metaByBranch.get(b.name)?.branchMeta ?? null;
+                  const sr = meta?.selfReview ?? null;
+                  return (
+                    <div
+                      key={b.name}
                       style={{
-                        fontSize: 10,
-                        fontWeight: 700,
-                        letterSpacing: 0.6,
-                        textTransform: 'uppercase',
-                        color: 'var(--gray-500)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 7,
+                        padding: '6px 9px',
+                        margin: '1px 2px',
+                        borderRadius: 6,
+                        background: b.isHead ? 'var(--blue-tint)' : 'transparent',
+                        border: `1px solid ${b.isHead ? 'rgba(0,122,255,0.28)' : 'transparent'}`,
                       }}
                     >
-                      {group.label}
-                    </span>
-                    <div style={{ flex: 1 }} />
-                    <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--gray-400)' }}>
-                      {branches.length}
-                    </span>
-                  </div>
-                  {branches.map((b) => {
-                    const meta = metaByBranch.get(b.name)?.branchMeta ?? null;
-                    const sr = meta?.selfReview ?? null;
-                    return (
-                      <div
-                        key={b.name}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 7,
-                          padding: '6px 9px',
-                          margin: '1px 2px',
-                          borderRadius: 6,
-                          background: b.isHead ? 'var(--blue-tint)' : 'transparent',
-                          border: `1px solid ${b.isHead ? 'rgba(0,122,255,0.28)' : 'transparent'}`,
-                        }}
-                      >
-                        {b.isHead ? (
-                          <Icon name="check" size={11} color="var(--blue-press)" />
-                        ) : (
-                          <span
-                            style={{
-                              width: 7,
-                              height: 7,
-                              borderRadius: 4,
-                              background: b.lane !== null ? laneColor(b.lane) : 'var(--gray-300)',
-                              flex: '0 0 7px',
-                            }}
-                          />
-                        )}
+                      {b.isHead ? (
+                        <Icon name="check" size={11} color="var(--blue-press)" />
+                      ) : (
                         <span
-                          className="mono"
                           style={{
-                            flex: 1,
-                            minWidth: 0,
-                            fontSize: 11.5,
-                            fontWeight: b.isHead ? 700 : 500,
-                            color: b.isHead ? 'var(--blue-press)' : 'var(--gray-800)',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
+                            width: 7,
+                            height: 7,
+                            borderRadius: 4,
+                            background: b.lane !== null ? laneColor(b.lane) : 'var(--gray-300)',
+                            flex: '0 0 7px',
                           }}
-                          title={b.name}
+                        />
+                      )}
+                      <span
+                        className="mono"
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          fontSize: 11.5,
+                          fontWeight: b.isHead ? 700 : 500,
+                          color: b.isHead ? 'var(--blue-press)' : 'var(--gray-800)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={b.name}
+                      >
+                        {b.name}
+                      </span>
+                      {meta?.debriefFreshness === 'new' && (
+                        <span
+                          title="Debrief · new"
+                          style={{
+                            width: 5,
+                            height: 5,
+                            borderRadius: 3,
+                            background: 'var(--purple)',
+                            flex: '0 0 5px',
+                          }}
+                        />
+                      )}
+                      {sr && sr.viewed > 0 && (
+                        <span
+                          title={`Self-review in progress · ${sr.viewed}/${sr.total}`}
+                          style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--blue-press)' }}
                         >
-                          {b.name}
+                          {sr.viewed}/{sr.total}
                         </span>
-                        {meta?.debriefFreshness === 'new' && (
-                          <span
-                            title="Debrief · new"
-                            style={{
-                              width: 5,
-                              height: 5,
-                              borderRadius: 3,
-                              background: 'var(--purple)',
-                              flex: '0 0 5px',
-                            }}
-                          />
-                        )}
-                        {sr && !sr.done && sr.viewed > 0 && (
-                          <span
-                            title={`Self-review in progress · ${sr.viewed}/${sr.total}`}
-                            style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--blue-press)' }}
-                          >
-                            {sr.viewed}/{sr.total}
-                          </span>
-                        )}
-                        {b.onWorktree && (
-                          <Icon
-                            name="folder"
-                            size={11}
-                            color={b.isHead ? 'var(--blue-press)' : 'var(--gray-500)'}
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                      )}
+                      {b.onWorktree && (
+                        <Icon
+                          name="folder"
+                          size={11}
+                          color={b.isHead ? 'var(--blue-press)' : 'var(--gray-500)'}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </CollapsibleRail>
 
       {/* ── Graph + commit table ───────────────────────────────── */}
       <div

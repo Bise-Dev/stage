@@ -22,7 +22,7 @@ use crate::domain::{
 use crate::error::StageError;
 use crate::repo_key::RepoKey;
 use crate::storyline::StorylineStep;
-use crate::viewed::{SelfReviewDone, ViewedMark};
+use crate::viewed::ViewedMark;
 
 /// Env override for the store location — handy for tests and for pointing the
 /// CLI and app at the same dev DB. When unset, [`default_store_path`] is used.
@@ -309,83 +309,6 @@ impl Store {
             out.entry(branch).or_default().push(mark);
         }
         Ok(out)
-    }
-
-    /// Record the explicit "Mark reviewed" action (F3), bound to `head_sha`.
-    /// Overwrites a previous mark — re-marking after new commits rebinds it.
-    pub fn set_self_review_done(&self, key: &RepoKey, head_sha: &str) -> Result<(), StageError> {
-        self.conn.execute(
-            "INSERT INTO self_review_done \
-                 (repo_owner, repo_name, branch, head_sha, done_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5) \
-             ON CONFLICT (repo_owner, repo_name, branch) \
-             DO UPDATE SET head_sha = excluded.head_sha, done_at = excluded.done_at",
-            params![
-                key.repo_owner,
-                key.repo_name,
-                key.branch,
-                head_sha,
-                now_epoch()
-            ],
-        )?;
-        Ok(())
-    }
-
-    /// Withdraw the "Mark reviewed" state. Idempotent.
-    pub fn clear_self_review_done(&self, key: &RepoKey) -> Result<(), StageError> {
-        self.conn.execute(
-            "DELETE FROM self_review_done \
-             WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
-            params![key.repo_owner, key.repo_name, key.branch],
-        )?;
-        Ok(())
-    }
-
-    /// The stored done state (raw — SHA validity is the caller's derivation).
-    pub fn get_self_review_done(
-        &self,
-        key: &RepoKey,
-    ) -> Result<Option<SelfReviewDone>, StageError> {
-        let row = self
-            .conn
-            .query_row(
-                "SELECT head_sha, done_at FROM self_review_done \
-                 WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
-                params![key.repo_owner, key.repo_name, key.branch],
-                |r| {
-                    Ok(SelfReviewDone {
-                        head_sha: r.get(0)?,
-                        done_at: r.get(1)?,
-                    })
-                },
-            )
-            .optional()?;
-        Ok(row)
-    }
-
-    /// All stored done states for a repo, keyed by branch — one query for the
-    /// overview assembly.
-    pub fn list_self_review_done_by_branch(
-        &self,
-        repo_owner: &str,
-        repo_name: &str,
-    ) -> Result<std::collections::HashMap<String, SelfReviewDone>, StageError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT branch, head_sha, done_at FROM self_review_done \
-             WHERE repo_owner = ?1 AND repo_name = ?2",
-        )?;
-        let rows = stmt
-            .query_map(params![repo_owner, repo_name], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    SelfReviewDone {
-                        head_sha: r.get(1)?,
-                        done_at: r.get(2)?,
-                    },
-                ))
-            })?
-            .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
-        Ok(rows)
     }
 
     /// Delete the Debrief for `key`. Returns whether a row was removed.
@@ -1310,6 +1233,13 @@ const MIGRATIONS: &[&str] = &[
         done_at    INTEGER NOT NULL,
         PRIMARY KEY (repo_owner, repo_name, branch)
     ) WITHOUT ROWID;",
+    // v8 — "Mark reviewed" removed (v6-light L7, flag F3 rescinded): the
+    // explicit per-branch done state never got a clear contract (what sets it,
+    // what invalidates it, how it differs from all-files-viewed), so the
+    // feature is out until full v6 defines it properly. The table drops with
+    // it — the state is cheap to re-derive by re-marking if the feature
+    // returns. Viewed marks (`self_review_viewed`) are untouched.
+    "DROP TABLE IF EXISTS self_review_done;",
 ];
 
 fn migrate(conn: &Connection) -> Result<(), StageError> {
@@ -1409,35 +1339,6 @@ mod tests {
         assert_eq!(by_branch.len(), 2);
         assert_eq!(by_branch["feat/x"][0].blob_oid, SHA_A);
         assert_eq!(by_branch["feat/y"][0].blob_oid, SHA_B);
-    }
-
-    #[test]
-    fn self_review_done_round_trips_and_rebinds() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("debrief.sqlite3")).unwrap();
-        let k = key();
-
-        assert!(store.get_self_review_done(&k).unwrap().is_none());
-        store.set_self_review_done(&k, SHA_A).unwrap();
-        assert_eq!(
-            store.get_self_review_done(&k).unwrap().unwrap().head_sha,
-            SHA_A
-        );
-
-        // Re-marking after new commits rebinds to the new head.
-        store.set_self_review_done(&k, SHA_B).unwrap();
-        assert_eq!(
-            store.get_self_review_done(&k).unwrap().unwrap().head_sha,
-            SHA_B
-        );
-
-        let by_branch = store
-            .list_self_review_done_by_branch(&k.repo_owner, &k.repo_name)
-            .unwrap();
-        assert_eq!(by_branch["feat/x"].head_sha, SHA_B);
-
-        store.clear_self_review_done(&k).unwrap();
-        assert!(store.get_self_review_done(&k).unwrap().is_none());
     }
 
     #[test]

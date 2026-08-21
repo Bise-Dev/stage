@@ -760,53 +760,6 @@ pub fn self_review_viewed_import_legacy(
     Ok(imported)
 }
 
-/// The explicit "Mark reviewed" action (F3): binds to the branch's current
-/// head SHA — a later commit invalidates it (derived on the overview row,
-/// never stored as a boolean). `done: false` withdraws the mark.
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn self_review_done_set(
-    state: State<'_, AppState>,
-    branch: String,
-    done: bool,
-) -> Result<(), AppError> {
-    let (path, key, _worktree) = viewed_ctx(&state, &branch)?;
-    let store = Store::open_default()?;
-    if done {
-        let head = stage_core::branch_head_sha(&path, &branch)?;
-        store.set_self_review_done(&key, &head)?;
-    } else {
-        store.clear_self_review_done(&key)?;
-    }
-    nudge_sync(&state, SyncMsg::LocalChanged);
-    Ok(())
-}
-
-/// The currently-valid "Mark reviewed" state (F3) for a branch: `done_at`
-/// (epoch seconds) while the stored mark's `head_sha` is still the branch
-/// head, `None` otherwise — the same derive-at-read invalidation the overview
-/// row uses, so the shell's button and the table's pill always agree.
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub fn self_review_done_get(
-    state: State<'_, AppState>,
-    branch: String,
-) -> Result<Option<i64>, AppError> {
-    let (path, key, _worktree) = viewed_ctx(&state, &branch)?;
-    let store = Store::open_default()?;
-    let Some(done) = store.get_self_review_done(&key)? else {
-        return Ok(None);
-    };
-    let head = stage_core::branch_head_sha(&path, &branch)?;
-    Ok((done.head_sha == head).then_some(done.done_at))
-}
-
 /// Review notes for the active repo + branch (optionally filtered by `status`),
 /// each carrying its `replies` thread and a computed `outdated` flag.
 /// `outdated` is derived against the current Debrief's base (falling back to the
