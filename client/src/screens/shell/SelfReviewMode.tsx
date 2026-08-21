@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRailCollapsed } from '../../components/CollapsibleRail';
 import { selfReviewDebriefMarkSeen } from '../../tauri';
-import { DebriefRail } from '../selfReview/DebriefRail';
 import {
   DiffPane,
   type DiffPaneHandle,
@@ -9,6 +8,7 @@ import {
   type ViewMode,
 } from '../selfReview/DiffPane';
 import { FileList, committedId } from '../selfReview/FileList';
+import { NotesPopover } from '../selfReview/NotesPopover';
 import { Subheader } from '../selfReview/Subheader';
 import { ResizeHandle, useColumnWidth } from '../selfReview/columnResize';
 import { notesToMarkdown } from '../selfReview/markdown';
@@ -20,10 +20,11 @@ import { useSectionedDiff } from './useSectionedDiff';
 /**
  * Self-Review mode of the review shell — the one review surface (v6-light L7):
  * the author's iterative pass over their own diff, with the agent's Debrief
- * folded in rather than shown as a separate mode (§3b M1). The Debrief renders
- * two ways here: the right rail (chapters + notes, flag F9) and a collapsed
- * chapter banner above each chapter's first file diff. Opening this surface on
- * a branch that has a Debrief marks it seen (M3).
+ * folded in rather than shown as a separate mode (§3b M1). Since L9 (§3c) the
+ * Debrief renders as the chapter-grouped file list on the left plus a
+ * collapsed chapter banner above each chapter's first file diff — the right
+ * rail is gone; general and orphaned notes live in the top-bar notes popover.
+ * Opening this surface on a branch that has a Debrief marks it seen (M3).
  *
  * Scope model (flag F4): the committed diff (`merge_base(base, HEAD) → HEAD`)
  * is the reviewable unit; "+ Uncommitted" folds the working tree in as a
@@ -61,14 +62,12 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
     setViewModeState(v);
   }, []);
 
-  // Resizable file-list + Debrief-rail columns (persisted, clamped), each
-  // collapsible to the shared rail strip (M2).
+  // Resizable file-list column (persisted, clamped), collapsible to the
+  // shared rail strip (M2).
   const fileListCol = useColumnWidth('selfReview:fileListWidth', 260, 180, 480, 'right');
-  const railCol = useColumnWidth('selfReview:railWidth', 360, 280, 560, 'left');
   const [fileListCollapsed, toggleFileListCollapsed] = useRailCollapsed(
     'selfReview:fileListCollapsed',
   );
-  const [railCollapsed, toggleRailCollapsed] = useRailCollapsed('selfReview:debriefRailCollapsed');
 
   const {
     committed,
@@ -91,16 +90,6 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
     deleteNote,
   } = debriefState;
 
-  // A fresh Debrief expands the rail once, so the agent path is discoverable;
-  // a seen one respects the persisted collapse (the author's toggle wins).
-  const autoExpandedRef = useRef(false);
-  useEffect(() => {
-    if (debrief?.freshness === 'new' && railCollapsed && !autoExpandedRef.current) {
-      autoExpandedRef.current = true;
-      toggleRailCollapsed();
-    }
-  }, [debrief, railCollapsed, toggleRailCollapsed]);
-
   // Opening Self-Review on a branch that has a Debrief is what "seen" means
   // (§3b M3) — once per head SHA; a fresh agent pass re-runs this. Loud but
   // non-blocking on failure: the banner explains it, the next open retries.
@@ -122,6 +111,11 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
     [debrief],
   );
   const debriefPaths = useMemo(() => new Set(debriefFileOrder), [debriefFileOrder]);
+  // Title + files per chapter for the grouped file list (L9 §3c N1).
+  const fileListChapters = useMemo(
+    () => (debrief?.chapters ?? []).map((c) => ({ title: c.title, files: c.files })),
+    [debrief],
+  );
 
   // The committed section's ordered file list (see the pre-shell SelfReview
   // for the full rationale): Debrief chapters order the files they narrate,
@@ -279,8 +273,6 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
     },
     [viewLayout],
   );
-  // The rail selects by raw path (committed section).
-  const onSelectFile = useCallback((path: string) => onSelectId(committedId(path)), [onSelectId]);
 
   // Per-file note counts for the sidebar badge — anchored notes only.
   const noteCounts = useMemo(() => {
@@ -308,6 +300,13 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
 
   const selectedUncommittedFiles = includeUncommitted ? (workdir?.files ?? []) : null;
 
+  // Anchored notes on files outside the committed diff have no inline home —
+  // the notes popover surfaces them (L9 §3c N2).
+  const committedPaths = useMemo(
+    () => new Set((committed?.files ?? []).map((f) => f.path)),
+    [committed],
+  );
+
   return (
     <>
       <Subheader
@@ -330,6 +329,18 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
         fetching={shell.fetching}
         onCopyAsMarkdown={onCopy}
         copyState={copyState}
+        notesControl={
+          <NotesPopover
+            debrief={debrief}
+            notes={notes}
+            committedPaths={committedPaths}
+            onCreateNote={createNote}
+            onReplyNote={replyNote}
+            onResolveNote={resolveNote}
+            onReopenNote={reopenNote}
+            onDeleteNote={deleteNote}
+          />
+        }
       />
 
       {/* Committed-only scope + a dirty tree: say what the review does NOT
@@ -350,7 +361,7 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
         <FileList
           files={orderedFiles}
           uncommittedFiles={selectedUncommittedFiles}
-          debriefPaths={debriefPaths}
+          chapters={fileListChapters}
           filter={filter}
           setFilter={setFilter}
           filterRef={filterRef}
@@ -444,31 +455,6 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
             onDeleteNote={deleteNote}
           />
         </div>
-
-        {!railCollapsed && (
-          <ResizeHandle
-            onResizeStart={railCol.onResizeStart}
-            onResizeKey={railCol.onResizeKey}
-            ariaLabel="Resize Debrief rail"
-          />
-        )}
-        <DebriefRail
-          debrief={debrief}
-          notes={notes}
-          files={committed?.files ?? []}
-          selectedPath={selectedId?.startsWith('c:') ? selectedId.slice(2) : null}
-          viewed={viewed}
-          width={railCol.width}
-          onSelectFile={onSelectFile}
-          onToggleViewed={toggleViewed}
-          collapsed={railCollapsed}
-          onToggleCollapsed={toggleRailCollapsed}
-          onCreateNote={createNote}
-          onReplyNote={replyNote}
-          onResolveNote={resolveNote}
-          onReopenNote={reopenNote}
-          onDeleteNote={deleteNote}
-        />
       </div>
     </>
   );

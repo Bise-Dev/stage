@@ -29,7 +29,8 @@ export type ChapterBannerData = {
 };
 
 export function ChapterBanner({ chapter }: { chapter: ChapterBannerData }) {
-  const [open, setOpen] = useState(false);
+  // Expanded by default — the intro is the chapter's narrative, not an aside.
+  const [open, setOpen] = useState(true);
   return (
     <div
       style={{

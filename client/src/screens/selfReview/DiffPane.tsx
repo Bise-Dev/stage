@@ -545,12 +545,58 @@ const FileBlock = memo(function FileBlock({
           <button
             type="button"
             className="btn"
+            onClick={() => setAddingFile(true)}
+            title="Add a file-level Review note"
+          >
+            <Icon name="comment-fill" size={11} /> Note
+          </button>
+          <button
+            type="button"
+            className="btn"
             onClick={() => onToggleViewed(file.path)}
             style={{ background: 'rgba(52,199,89,0.14)', color: 'var(--green-d)' }}
           >
             <Icon name="check" size={11} /> Viewed
           </button>
         </div>
+        {/* Notes stay visible on a viewed file — only the diff collapses. */}
+        {(notes.length > 0 || addingFile) && (
+          <div style={{ padding: '8px 14px', borderTop: '1px solid var(--hairline-2)' }}>
+            {notes.map((n) => (
+              <Thread
+                key={n.id}
+                note={n}
+                onReply={onReplyNote}
+                onResolve={onResolveNote}
+                onReopen={onReopenNote}
+                onDelete={onDeleteNote}
+              />
+            ))}
+            {addingFile && (
+              <Composer
+                placeholder="File-level note…"
+                autoFocus
+                onSave={(body) => {
+                  const trimmed = body.trim();
+                  if (!trimmed) {
+                    setAddingFile(false);
+                    return;
+                  }
+                  onCreateNote(
+                    { file: file.path, lineStart: null, lineEnd: null, side: null },
+                    trimmed,
+                  )
+                    .then(() => setAddingFile(false))
+                    .catch(() => {
+                      // Error surfaced via the hook's banner; keep the composer
+                      // open so the author doesn't lose what they typed.
+                    });
+                }}
+                onCancel={() => setAddingFile(false)}
+              />
+            )}
+          </div>
+        )}
       </div>
     );
   }

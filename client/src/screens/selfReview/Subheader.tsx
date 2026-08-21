@@ -10,7 +10,8 @@ import { relativeTimeFromEpoch } from '../../time';
  * the reviewable unit, and "+ Uncommitted" folds the working tree in as a
  * separate section — greyed out when there is nothing to fold in. The
  * composer's single entry point is the Overview's "New review" button (M4),
- * and "Mark reviewed" is gone (M5, F3 rescinded).
+ * and "Mark reviewed" is gone (M5, F3 rescinded). Since L9 (§3c N3) the
+ * general-notes popover mounts here via `notesControl`.
  */
 export function Subheader({
   branch,
@@ -32,6 +33,7 @@ export function Subheader({
   fetching,
   onCopyAsMarkdown,
   copyState,
+  notesControl,
 }: {
   branch: string;
   /** Committed-section stats (the reviewable unit). */
@@ -60,6 +62,8 @@ export function Subheader({
   fetching: boolean;
   onCopyAsMarkdown: () => void;
   copyState: 'idle' | 'copied' | 'error';
+  /** The general-notes popover (L9 §3c N3), composed by the mode body. */
+  notesControl?: React.ReactNode;
 }) {
   const base = baseRef ?? defaultBranch ?? 'main';
   // M6: nothing to fold in — the toggle is inert unless it's already on (then
@@ -180,6 +184,8 @@ export function Subheader({
         </div>
       </div>
 
+      {notesControl}
+
       <button
         type="button"
         className="btn"
@@ -225,10 +231,10 @@ function BaseFreshness({
       <span style={{ color: 'var(--gray-500)' }}>{fetched}</span>
       <button
         type="button"
-        className="btn btn-ghost"
+        className="btn"
         onClick={onRefreshBase}
         disabled={fetching}
-        style={{ padding: '0 6px', opacity: fetching ? 0.5 : 1 }}
+        style={{ opacity: fetching ? 0.5 : 1 }}
         title="git fetch --prune"
       >
         {fetching ? 'Refreshing…' : 'Refresh'}
