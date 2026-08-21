@@ -348,8 +348,11 @@ function BranchRow({
             </span>
           )}
           {wt && !wt.isRoot && (
-            <span className="badge badge-purple" style={{ flex: '0 0 auto' }} title={wt.path}>
-              wt
+            <span
+              style={{ flex: '0 0 auto', display: 'inline-flex', alignItems: 'center' }}
+              title={`Worktree — ${wt.path}`}
+            >
+              <Icon name="worktree" size={12} color="var(--purple)" />
             </span>
           )}
           {wt?.prunable && (

@@ -525,8 +525,8 @@ export function Overview({
                 alignItems: 'center',
               }}
             >
-              <span>
-                <span className="badge badge-purple">wt</span> worktree
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Icon name="worktree" size={12} color="var(--purple)" /> worktree
               </span>
               <span>
                 <span style={{ color: 'var(--orange)', fontWeight: 600 }}>●3</span> uncommitted
