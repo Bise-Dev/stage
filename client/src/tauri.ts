@@ -79,6 +79,10 @@ import type { StorylinePreview } from './generated/StorylinePreview';
 import type { StorylineStep } from './generated/StorylineStep';
 import type { StorylineStepView } from './generated/StorylineStepView';
 import type { SubmittedVerdict } from './generated/SubmittedVerdict';
+import type { SwitchOutcome } from './generated/SwitchOutcome';
+import type { SwitchPlan } from './generated/SwitchPlan';
+import type { SwitchPlanOutcome } from './generated/SwitchPlanOutcome';
+import type { SwitchStep } from './generated/SwitchStep';
 import type { SyncScope } from './generated/SyncScope';
 import type { SyncStatus } from './generated/SyncStatus';
 import type { SyncUpdate } from './generated/SyncUpdate';
@@ -139,6 +143,10 @@ export type {
   StorylinePreview,
   StorylineStep,
   StorylineStepView,
+  SwitchOutcome,
+  SwitchPlan,
+  SwitchPlanOutcome,
+  SwitchStep,
   UncommittedDisposition,
   UncommittedFile,
   WorktreeInfo,
@@ -199,6 +207,17 @@ export const repoWorktrees = () => invoke<WorktreeInfo[]>('repo_worktrees');
  *  active (focused) repo info. */
 export const setFocusedWorktree = (path: string) =>
   invoke<RepoInfo>('set_focused_worktree', { path });
+
+/** Plan an explicit switch of the focused worktree to `branch` — the exact git
+ *  steps a confirmation must show (ADR-0027 as amended, v6-light L3). Mutates
+ *  nothing; "checked out elsewhere" comes back as a structured outcome. */
+export const branchSwitchPlan = (branch: string) =>
+  invoke<SwitchPlanOutcome>('branch_switch_plan', { branch });
+
+/** Execute the confirmed switch (stash → checkout → pop as planned). Rejects
+ *  with the engine's complete message on any failure — render it verbatim. */
+export const branchSwitchExecute = (branch: string) =>
+  invoke<SwitchOutcome>('branch_switch_execute', { branch });
 
 /** Fires when git's worktree set may have changed (e.g. an external tool added
  *  or finished a worktree). Re-fetch {@link repoWorktrees}. Returns the unlisten

@@ -24,6 +24,7 @@ pub mod staleness;
 pub mod status;
 pub mod store;
 pub mod storyline;
+pub mod switch;
 pub mod viewed;
 pub mod worktree;
 
@@ -71,6 +72,10 @@ pub use store::{default_store_path, Store, STORE_PATH_ENV};
 pub use storyline::{
     add_step, assemble_preview, committed_diff_file_set, preview, StorylinePreview, StorylineStep,
     StorylineStepView,
+};
+pub use switch::{
+    switch_execute, switch_plan, SwitchOutcome, SwitchPlan, SwitchPlanOutcome, SwitchStep,
+    SwitchStepKind,
 };
 pub use viewed::{
     current_post_image_oid, import_legacy_viewed, SelfReviewDone, ViewedMark, ABSENT_POST_IMAGE,

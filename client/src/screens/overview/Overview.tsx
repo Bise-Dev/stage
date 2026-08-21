@@ -1,9 +1,11 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar } from '../../components/Avatar';
 import { FetchButton } from '../../components/FetchButton';
+import { GitStepsDialog } from '../../components/GitStepsDialog';
 import { Icon } from '../../components/Icon';
 import { RepoMenu } from '../../components/RepoMenu';
 import { TitleBar } from '../../components/TitleBar';
+import type { SwitchPlanOutcome } from '../../generated/SwitchPlanOutcome';
 import { RELOAD } from '../../lib/shortcuts';
 import { useShortcut } from '../../lib/useShortcut';
 import {
@@ -12,6 +14,8 @@ import {
   type PrRef,
   type ReviewStatus,
   type SyncStatus,
+  branchSwitchExecute,
+  branchSwitchPlan,
   getActiveRepo,
   ghIdentity,
   gitFetch,
@@ -115,6 +119,14 @@ export function Overview({
   const [newReviewOpen, setNewReviewOpen] = useState(false);
   const [newReviewBranch, setNewReviewBranch] = useState<string | undefined>(undefined);
   const [discardTarget, setDiscardTarget] = useState<OverviewRow | null>(null);
+  // The explicit "Switch to branch…" flow (v6-light L3, ADR-0027 as amended):
+  // a planned outcome opens the command-listing confirmation; planning errors
+  // land in the banner like every other loud failure.
+  const [switchTarget, setSwitchTarget] = useState<{
+    branch: string;
+    outcome: SwitchPlanOutcome;
+  } | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
 
   const openNewReview = useCallback((branch?: string) => {
     setNewReviewBranch(branch);
@@ -228,6 +240,19 @@ export function Overview({
     },
     [onStartSelfReview],
   );
+
+  // Plan an explicit switch of the focused worktree to `branch` and open the
+  // command-listing confirmation (ADR-0027). Planning never mutates.
+  const openSwitchDialog = useCallback(async (branch: string) => {
+    setSwitchError(null);
+    try {
+      const outcome = await branchSwitchPlan(branch);
+      setSwitchTarget({ branch, outcome });
+    } catch (e) {
+      console.warn('branch_switch_plan_failed', e);
+      setSwitchError(String(e));
+    }
+  }, []);
 
   // Focus the row's worktree, then open the storyline composer (cwd-bound: the
   // composer reads the focused worktree's branch).
@@ -457,6 +482,7 @@ export function Overview({
               <ErrorNote>Couldn't refresh the overview: {sync.localError}</ErrorNote>
             )}
             {overviewError && <ErrorNote>Couldn't load the overview: {overviewError}</ErrorNote>}
+            {switchError && <ErrorNote>Couldn't plan the switch: {switchError}</ErrorNote>}
 
             <div
               style={{
@@ -489,6 +515,7 @@ export function Overview({
                           r={r}
                           onStartSelfReview={startSelfReviewAt}
                           onReadyToShare={openNewReview}
+                          onSwitchTo={openSwitchDialog}
                         />
                       ))}
                     </Bucket>
@@ -659,6 +686,59 @@ export function Overview({
             onClose={() => setDiscardTarget(null)}
           />
         )}
+        {switchTarget && switchTarget.outcome.kind === 'plan' && (
+          <GitStepsDialog
+            title={
+              <>
+                Switch to <span className="mono">{switchTarget.branch}</span>?
+              </>
+            }
+            body={
+              switchTarget.outcome.plan.uncommittedCount > 0 ? (
+                <>
+                  Stage switches this working tree to the branch you picked — your{' '}
+                  <span style={{ color: 'var(--orange)', fontWeight: 600 }}>
+                    {switchTarget.outcome.plan.uncommittedCount} uncommitted{' '}
+                    {switchTarget.outcome.plan.uncommittedCount === 1 ? 'file' : 'files'}
+                  </span>{' '}
+                  will be stashed and restored automatically.
+                </>
+              ) : (
+                <>Stage switches this working tree to the branch you picked.</>
+              )
+            }
+            steps={switchTarget.outcome.plan.steps}
+            confirmLabel="Switch branch"
+            onConfirm={async () => {
+              await branchSwitchExecute(switchTarget.branch);
+              await load(showArchived);
+            }}
+            onClose={() => setSwitchTarget(null)}
+          />
+        )}
+        {switchTarget &&
+          switchTarget.outcome.kind === 'checkedOutElsewhere' &&
+          (() => {
+            const { worktreePath } = switchTarget.outcome;
+            return (
+              <ConfirmDialog
+                title={`Already checked out — ${switchTarget.branch}`}
+                body={
+                  <>
+                    <span className="mono">{switchTarget.branch}</span> is checked out in another
+                    worktree (<span className="mono">{worktreePath}</span>) — git forbids a second
+                    checkout. Focus that worktree instead.
+                  </>
+                }
+                confirmLabel="Focus that worktree"
+                onConfirm={async () => {
+                  await setFocusedWorktree(worktreePath);
+                  await load(showArchived);
+                }}
+                onClose={() => setSwitchTarget(null)}
+              />
+            );
+          })()}
       </div>
     </div>
   );
@@ -955,14 +1035,19 @@ function BranchRowCompact({
   r,
   onStartSelfReview,
   onReadyToShare,
+  onSwitchTo,
 }: {
   r: OverviewRow;
   onStartSelfReview: (worktreePath: string) => void;
   onReadyToShare: (branch: string) => void;
+  onSwitchTo: (branch: string) => void;
 }) {
   const meta = r.branchMeta;
   const wt = meta?.worktree ?? null;
   const actionable = wt !== null && !wt.prunable;
+  // The explicit switch targets the FOCUSED worktree, so it applies to any
+  // local branch that isn't already checked out there — worktree or not.
+  const switchable = meta !== null && !meta.isCurrent;
   return (
     // `group` drives the hover-reveal of the action buttons, matching the
     // reference branch rows.
@@ -1039,6 +1124,16 @@ function BranchRowCompact({
           (the engine keys the draft off the focused worktree's branch, ADR-0022
           §3). A branch with no worktree renders without actions. Hover-reveal
           (opacity-0 keeps the space so the row doesn't reflow). */}
+      {switchable && (
+        <button
+          type="button"
+          className="btn opacity-0 group-hover:opacity-100 focus:opacity-100"
+          onClick={() => onSwitchTo(r.branch)}
+          style={{ transition: 'opacity 80ms ease' }}
+        >
+          <Icon name="branch" size={10} color="var(--gray-700)" /> Switch to…
+        </button>
+      )}
       {actionable && (
         <button
           type="button"
