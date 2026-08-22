@@ -6,21 +6,18 @@ import { StageLogo } from '../../components/StageLogo';
 import { TitleBar } from '../../components/TitleBar';
 import { type GitHubUser, ghIdentity } from '../../tauri';
 
-type SectionId = 'account' | 'about';
-
-const SECTIONS: { id: SectionId; label: string; icon: 'gh' | 'eye' }[] = [
-  { id: 'account', label: 'Account', icon: 'gh' },
-  { id: 'about', label: 'About', icon: 'eye' },
-];
-
+/**
+ * Settings is a single scrolling page: the GitHub identity Stage acts as, and
+ * what this copy of Stage is. There is little enough of it that a two-entry
+ * sidebar cost a click to read one screen's worth of content, so both sections
+ * sit on the page.
+ */
 export function Settings({
   onClose,
 }: {
   /** Return to the screen Settings was opened from. */
   onClose: () => void;
 }) {
-  const [section, setSection] = useState<SectionId>('account');
-
   // Esc closes Settings, matching the dismiss pattern used by the app's other
   // overlays (RepoMenu). Ignored while typing so it can't eat an Escape meant
   // for a focused field.
@@ -48,72 +45,32 @@ export function Settings({
           }
         />
 
-        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-          {/* Sidebar nav */}
-          <div
-            style={{
-              width: 200,
-              flex: '0 0 200px',
-              borderRight: '1px solid var(--hairline)',
-              background: '#fbfaf8',
-              padding: '14px 8px',
-            }}
-          >
-            {SECTIONS.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => setSection(s.id)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  width: '100%',
-                  textAlign: 'left',
-                  border: 'none',
-                  padding: '6px 10px',
-                  borderRadius: 5,
-                  margin: '1px 0',
-                  background: section === s.id ? 'rgba(0,0,0,0.06)' : 'transparent',
-                  color: 'var(--gray-800)',
-                  fontFamily: 'inherit',
-                  fontSize: 13,
-                  fontWeight: section === s.id ? 600 : 500,
-                  cursor: 'default',
-                }}
-              >
-                <Icon name={s.icon} size={13} color="var(--gray-600)" />
-                {s.label}
-              </button>
-            ))}
-          </div>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '24px 32px' }}>
+          <div style={{ maxWidth: 560 }}>
+            <div
+              style={{
+                fontSize: 20,
+                fontWeight: 700,
+                color: 'var(--gray-900)',
+                letterSpacing: -0.02,
+                marginBottom: 4,
+              }}
+            >
+              Settings
+            </div>
+            <div style={{ fontSize: 12.5, color: 'var(--gray-500)', marginBottom: 24 }}>
+              The GitHub identity Stage acts as, and this copy of Stage.
+            </div>
 
-          {/* Content */}
-          <div style={{ flex: 1, overflow: 'auto', padding: '24px 32px' }}>
-            {section === 'account' ? <AccountSection /> : <AboutSection />}
+            <AccountSection />
+
+            <div style={{ borderTop: '1px solid var(--hairline)', margin: '24px 0 20px' }} />
+
+            <AboutSection />
           </div>
         </div>
       </div>
     </div>
-  );
-}
-
-function SectionHeader({ title, hint }: { title: string; hint: string }) {
-  return (
-    <>
-      <div
-        style={{
-          fontSize: 20,
-          fontWeight: 700,
-          color: 'var(--gray-900)',
-          letterSpacing: -0.02,
-          marginBottom: 4,
-        }}
-      >
-        {title}
-      </div>
-      <div style={{ fontSize: 12.5, color: 'var(--gray-500)', marginBottom: 24 }}>{hint}</div>
-    </>
   );
 }
 
@@ -159,63 +116,61 @@ function AccountSection() {
       });
   }, []);
 
-  return (
-    <>
-      <SectionHeader title="Account" hint="The GitHub identity Stage acts as on your behalf." />
-
-      {error ? (
-        <Card label="GitHub CLI not ready">
-          <div
-            style={{
-              padding: '14px',
-              background: '#fff',
-              border: '1px solid var(--hairline)',
-              borderRadius: 'var(--r-md)',
-              fontSize: 12.5,
-              color: 'var(--gray-700)',
-              lineHeight: 1.5,
-            }}
-          >
-            <div style={{ color: 'var(--red-d)', marginBottom: 6 }}>{error}</div>
-            Stage uses your local <span className="mono">gh</span> CLI for every GitHub action — it
-            stores no token of its own. Run <span className="mono">gh auth login</span> in a
-            terminal, then reopen Stage.
-          </div>
-        </Card>
-      ) : (
-        <Card
-          label="Connected via the GitHub CLI"
-          hint="Stage uses your local `gh` credentials to open PRs, post reviews, and read PR state. It holds no token of its own."
+  if (error) {
+    return (
+      <Card label="Account" hint="GitHub CLI not ready">
+        <div
+          style={{
+            padding: '14px',
+            background: '#fff',
+            border: '1px solid var(--hairline)',
+            borderRadius: 'var(--r-md)',
+            fontSize: 12.5,
+            color: 'var(--gray-700)',
+            lineHeight: 1.5,
+          }}
         >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 14,
-              padding: '12px 14px',
-              background: '#fff',
-              border: '1px solid var(--hairline)',
-              borderRadius: 'var(--r-md)',
-            }}
-          >
-            <Avatar name={user?.name || user?.login || '…'} size="lg" />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--gray-900)' }}>
-                {user ? user.name || user.login : 'Resolving…'}
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>
-                {user ? `@${user.login}` : 'gh api user'}
-              </div>
-            </div>
-            {user && (
-              <span className="badge badge-green">
-                <Icon name="check" size={9} color="var(--green-d)" /> gh
-              </span>
-            )}
+          <div style={{ color: 'var(--red-d)', marginBottom: 6 }}>{error}</div>
+          Stage uses your local <span className="mono">gh</span> CLI for every GitHub action — it
+          stores no token of its own. Run <span className="mono">gh auth login</span> in a terminal,
+          then reopen Stage.
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card
+      label="Account"
+      hint="Stage uses your local `gh` credentials to open PRs, post reviews, and read PR state. It holds no token of its own."
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 14,
+          padding: '12px 14px',
+          background: '#fff',
+          border: '1px solid var(--hairline)',
+          borderRadius: 'var(--r-md)',
+        }}
+      >
+        <Avatar name={user?.name || user?.login || '…'} size="lg" />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--gray-900)' }}>
+            {user ? user.name || user.login : 'Resolving…'}
           </div>
-        </Card>
-      )}
-    </>
+          <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+            {user ? `@${user.login}` : 'gh api user'}
+          </div>
+        </div>
+        {user && (
+          <span className="badge badge-green">
+            <Icon name="check" size={9} color="var(--green-d)" /> gh
+          </span>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -235,15 +190,23 @@ function AboutSection() {
   }, []);
 
   return (
-    <>
-      <SectionHeader title="About" hint="About this copy of Stage." />
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 18 }}>
+    <Card label="About">
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 16,
+          padding: '14px',
+          background: '#fff',
+          border: '1px solid var(--hairline)',
+          borderRadius: 'var(--r-md)',
+        }}
+      >
         <StageLogo size={48} />
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div
             style={{
-              fontSize: 20,
+              fontSize: 15,
               fontWeight: 700,
               color: 'var(--gray-900)',
               letterSpacing: -0.02,
@@ -251,7 +214,7 @@ function AboutSection() {
           >
             Stage
           </div>
-          <div style={{ fontSize: 12.5, color: 'var(--gray-500)', marginTop: 2 }}>
+          <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 2 }}>
             {versionError ? (
               <span style={{ color: 'var(--red-d)' }}>Couldn't read version: {versionError}</span>
             ) : version ? (
@@ -260,12 +223,11 @@ function AboutSection() {
               'Version …'
             )}
           </div>
+          <div style={{ fontSize: 12.5, color: 'var(--gray-600)', marginTop: 6, lineHeight: 1.5 }}>
+            A local-first tool for human-tailored pull request review.
+          </div>
         </div>
       </div>
-
-      <div style={{ fontSize: 12.5, color: 'var(--gray-600)', maxWidth: 420, lineHeight: 1.5 }}>
-        A local-first tool for human-tailored pull request review.
-      </div>
-    </>
+    </Card>
   );
 }
