@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar } from '../../components/Avatar';
 import { FetchButton } from '../../components/FetchButton';
-import { GitStepsDialog } from '../../components/GitStepsDialog';
+import { GitDialog } from '../../components/GitDialog';
 import { Icon } from '../../components/Icon';
 import { RepoMenu } from '../../components/RepoMenu';
 import { TitleBar } from '../../components/TitleBar';
@@ -99,13 +99,16 @@ export function Overview({
   const [newReviewOpen, setNewReviewOpen] = useState(false);
   const [discardTarget, setDiscardTarget] = useState<OverviewRow | null>(null);
   // The explicit "Switch to branch…" flow (v6-light L3, ADR-0027 as amended):
-  // a planned outcome opens the command-listing confirmation; planning errors
-  // land in the banner like every other loud failure.
+  // a planned outcome opens the command-listing confirmation; a
+  // checked-out-elsewhere outcome opens the "focus that worktree" variant.
   const [switchTarget, setSwitchTarget] = useState<{
     branch: string;
     outcome: SwitchPlanOutcome;
   } | null>(null);
-  const [switchError, setSwitchError] = useState<string | null>(null);
+  // A git action that failed outright (a refused plan, a worktree that couldn't
+  // be focused). It answers a click, so it answers in the same dialog the click
+  // opened — `GitDialog` tone `error`, the engine's message verbatim.
+  const [gitError, setGitError] = useState<{ title: string; message: string } | null>(null);
 
   const openNewReview = useCallback(() => setNewReviewOpen(true), []);
 
@@ -217,13 +220,12 @@ export function Overview({
   // Plan an explicit switch of the focused worktree to `branch` and open the
   // command-listing confirmation (ADR-0027). Planning never mutates.
   const openSwitchDialog = useCallback(async (branch: string) => {
-    setSwitchError(null);
     try {
       const outcome = await branchSwitchPlan(branch);
       setSwitchTarget({ branch, outcome });
     } catch (e) {
       console.warn('branch_switch_plan_failed', e);
-      setSwitchError(String(e));
+      setGitError({ title: `Can't switch to ${branch}`, message: String(e) });
     }
   }, []);
 
@@ -237,7 +239,10 @@ export function Overview({
         await setFocusedWorktree(wt.path);
         onOpenStoryline();
       } catch (e) {
+        // Fail loud (CLAUDE.md): the composer reads the *focused* worktree, so a
+        // failed focus would have opened it on the wrong branch. Say so instead.
         console.warn('overview_focus_worktree_failed', e);
+        setGitError({ title: "Couldn't open that worktree", message: String(e) });
       }
     },
     [onOpenStoryline],
@@ -361,7 +366,6 @@ export function Overview({
             <ErrorNote>Couldn't refresh the overview: {sync.localError}</ErrorNote>
           )}
           {overviewError && <ErrorNote>Couldn't load the overview: {overviewError}</ErrorNote>}
-          {switchError && <ErrorNote>Couldn't plan the switch: {switchError}</ErrorNote>}
 
           {/* Summary strip */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '0 2px 10px' }}>
@@ -547,7 +551,8 @@ export function Overview({
           />
         )}
         {discardTarget && (
-          <ConfirmDialog
+          <GitDialog
+            icon="doc-stack"
             title="Discard this review?"
             body={
               <>
@@ -565,7 +570,7 @@ export function Overview({
           />
         )}
         {switchTarget && switchTarget.outcome.kind === 'plan' && (
-          <GitStepsDialog
+          <GitDialog
             title={
               <>
                 Switch to <span className="mono">{switchTarget.branch}</span>?
@@ -599,24 +604,35 @@ export function Overview({
           (() => {
             const { worktreePath } = switchTarget.outcome;
             return (
-              <ConfirmDialog
+              // Report only: Stage says what git refuses and where the branch
+              // already lives, and does nothing. Re-pointing the observed
+              // worktree from here was offered once and removed — the switch
+              // the user asked for isn't possible, and quietly observing a
+              // different tree instead isn't the same thing.
+              <GitDialog
+                tone="blocked"
+                icon="folder"
                 title={`Already checked out — ${switchTarget.branch}`}
                 body={
                   <>
-                    <span className="mono">{switchTarget.branch}</span> is checked out in another
-                    worktree (<span className="mono">{worktreePath}</span>) — git forbids a second
-                    checkout. Focus that worktree instead.
+                    Git forbids a second checkout of a branch another worktree holds, so this
+                    working tree can't switch to <span className="mono">{switchTarget.branch}</span>
+                    . It's already checked out here:
                   </>
                 }
-                confirmLabel="Focus that worktree"
-                onConfirm={async () => {
-                  await setFocusedWorktree(worktreePath);
-                  await load(showArchived);
-                }}
+                details={[{ label: 'Worktree', value: worktreePath }]}
                 onClose={() => setSwitchTarget(null)}
               />
             );
           })()}
+        {gitError && (
+          <GitDialog
+            tone="error"
+            title={gitError.title}
+            body={gitError.message}
+            onClose={() => setGitError(null)}
+          />
+        )}
       </div>
     </div>
   );
@@ -962,118 +978,6 @@ function NewReviewModal({
             style={{ opacity: submitting ? 0.6 : 1 }}
           >
             {submitting ? 'Creating…' : 'Create'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ConfirmDialog({
-  title,
-  body,
-  confirmLabel,
-  onConfirm,
-  onClose,
-}: {
-  title: string;
-  body: ReactNode;
-  confirmLabel: string;
-  onConfirm: () => Promise<void>;
-  onClose: () => void;
-}) {
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const confirm = async () => {
-    setSubmitting(true);
-    setError(null);
-    try {
-      await onConfirm();
-      onClose();
-    } catch (e) {
-      console.warn('confirm_action_failed', e);
-      setError(String(e));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    // biome-ignore lint/a11y/useSemanticElements: overlay modal; a styled div with role="dialog" matches the existing NewReviewModal/RepoMenu pattern rather than a native <dialog>.
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.28)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 50,
-      }}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        style={{
-          width: 380,
-          background: '#fff',
-          borderRadius: 'var(--r-lg)',
-          boxShadow: 'var(--sh-pop)',
-          padding: 18,
-        }}
-      >
-        <div
-          style={{
-            fontSize: 15,
-            fontWeight: 700,
-            color: 'var(--gray-900)',
-            marginBottom: 8,
-          }}
-        >
-          {title}
-        </div>
-        <div
-          style={{
-            fontSize: 12.5,
-            color: 'var(--gray-700)',
-            lineHeight: 1.5,
-            marginBottom: 14,
-          }}
-        >
-          {body}
-        </div>
-        {error && (
-          <div
-            style={{
-              fontSize: 11.5,
-              color: 'var(--red-d)',
-              background: 'rgba(255,59,48,0.08)',
-              border: '1px solid rgba(255,59,48,0.20)',
-              borderRadius: 'var(--r-sm)',
-              padding: '6px 10px',
-              marginBottom: 8,
-            }}
-          >
-            {error}
-          </div>
-        )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button type="button" className="btn" onClick={onClose} disabled={submitting}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={confirm}
-            disabled={submitting}
-            style={{ opacity: submitting ? 0.6 : 1 }}
-          >
-            {submitting ? 'Working…' : confirmLabel}
           </button>
         </div>
       </div>

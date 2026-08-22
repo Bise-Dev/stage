@@ -65,7 +65,17 @@ export function ErrorBanner({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        <div style={{ flex: 1, fontWeight: 600, lineHeight: 1.4, minWidth: 0 }}>{title}</div>
+        <div
+          style={{
+            flex: 1,
+            fontWeight: 600,
+            lineHeight: 1.4,
+            minWidth: 0,
+            overflowWrap: 'anywhere',
+          }}
+        >
+          {title}
+        </div>
         <button
           type="button"
           className="btn"

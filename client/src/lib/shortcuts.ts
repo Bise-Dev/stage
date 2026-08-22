@@ -24,3 +24,10 @@ export type Shortcut = {
  * (which would wipe app state) never fires.
  */
 export const RELOAD: Shortcut = { key: 'r', mod: true };
+
+/**
+ * Dismiss the frontmost transient surface — a modal, a popover. Bare Escape,
+ * and deliberately *not* `ignoreWhileTyping`: inside a dialog, Escape while the
+ * caret is in a field still means "get me out of here".
+ */
+export const DISMISS: Shortcut = { key: 'escape' };
