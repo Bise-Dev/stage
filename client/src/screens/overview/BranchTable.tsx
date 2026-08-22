@@ -127,17 +127,39 @@ function SelfReviewPill({ sr }: { sr: SelfReviewProgress | null }) {
 }
 
 export type BranchTableActions = {
-  /** Focus the row's worktree and enter Self-Review. Caller guards on a
-   *  materialized worktree; the table disables the affordance otherwise. */
+  /** Focus the row's worktree and enter Self-Review — the one local-review
+   *  surface (L7 M1): the agent Debrief renders inside it as the chaptered
+   *  file list + inline banners, so there is no separate debrief route.
+   *  Caller guards on a materialized worktree; the table disables the
+   *  affordance otherwise. */
   onSelfReview: (r: OverviewRow) => void;
-  /** Same route (L7 M1 — one surface): the Debrief renders inside Self-Review
-   *  as the rail + inline chapter banners; a fresh one expands the rail. */
-  onViewDebrief: (r: OverviewRow) => void;
   onOpenStoryline: (r: OverviewRow) => void;
   onOpenReview: (pr: PrRef) => void;
   onSwitchTo: (branch: string) => void;
   onDiscardDraft: (r: OverviewRow) => void;
 };
+
+/**
+ * Which menu entries a row offers, and whether each can act right now.
+ *
+ * Self-Review and the agent Debrief are one entry (L7 M1 — one surface), so a
+ * debrief is reason enough to offer it even on the default branch. `any` is
+ * false when the row has nothing actionable at all (the default branch you are
+ * already on): the caller then renders no chevron rather than a menu whose
+ * every item is dead.
+ */
+function rowMenuActions(r: OverviewRow) {
+  const meta = r.branchMeta;
+  const wt = meta?.worktree ?? null;
+  const materialized = wt !== null && !wt.prunable;
+  const entries = {
+    review: { shown: !!meta && (!meta.isDefault || meta.hasDebrief), enabled: materialized },
+    storyline: { shown: r.kind === 'draft' || r.kind === 'published', enabled: materialized },
+    discard: { shown: r.kind === 'draft', enabled: true },
+    switchTo: { shown: !!meta && !meta.isCurrent, enabled: true },
+  };
+  return { ...entries, any: Object.values(entries).some((e) => e.shown && e.enabled) };
+}
 
 const CELL: CSSProperties = {
   padding: '0 10px',
@@ -292,6 +314,8 @@ function BranchRow({
   // the repo default (the DTO says so) — name it when we know it.
   const base = r.baseRef ?? (meta.isDefault ? null : defaultBase);
   const selfLabel = sr && sr.viewed > 0 ? 'Continue' : 'Self-review';
+  const acts = rowMenuActions(r);
+  const showSelfButton = !meta.isDefault;
   const localChip =
     r.kind === 'draft' || (r.kind === 'published' && r.prNumber === null) ? (
       <button
@@ -436,7 +460,7 @@ function BranchRow({
       </td>
       <td style={{ ...CELL, width: 170, paddingRight: 14, position: 'relative' }}>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          {!meta.isDefault && (
+          {showSelfButton && (
             <button
               type="button"
               className="btn"
@@ -449,33 +473,37 @@ function BranchRow({
               }
               style={{
                 height: 24,
-                borderTopRightRadius: 0,
-                borderBottomRightRadius: 0,
-                borderRight: 'none',
                 gap: 4,
                 color: 'var(--blue-press)',
                 opacity: materialized ? 1 : 0.5,
+                // Only flatten the side the chevron butts against; a row with
+                // no menu keeps a plain, fully-rounded button.
+                ...(acts.any
+                  ? { borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRight: 'none' }
+                  : {}),
               }}
             >
               <Icon name="eye" size={10} color="var(--blue)" /> {selfLabel}
             </button>
           )}
-          <button
-            type="button"
-            className="btn"
-            onClick={onToggleMenu}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-label={`Actions on ${r.branch}`}
-            style={{
-              height: 24,
-              padding: '0 6px',
-              background: menuOpen ? 'var(--gray-100)' : '#fff',
-              ...(meta.isDefault ? {} : { borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }),
-            }}
-          >
-            <Icon name="chevron-down" size={10} color="var(--gray-500)" />
-          </button>
+          {acts.any && (
+            <button
+              type="button"
+              className="btn"
+              onClick={onToggleMenu}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              aria-label={`Actions on ${r.branch}`}
+              style={{
+                height: 24,
+                padding: '0 6px',
+                background: menuOpen ? 'var(--gray-100)' : '#fff',
+                ...(showSelfButton ? { borderTopLeftRadius: 0, borderBottomLeftRadius: 0 } : {}),
+              }}
+            >
+              <Icon name="chevron-down" size={10} color="var(--gray-500)" />
+            </button>
+          )}
         </div>
         {menuOpen && (
           <div
@@ -492,10 +520,11 @@ function BranchRow({
 }
 
 /** The per-branch action menu (design `V6L_ActionMenu` + F1; trimmed per L7
- *  M4 — the composer's single entry is the toolbar's "New review"): the two
- *  local-review actions, the draft/published entries, and the explicit
- *  switch. No auto-switch notice — switching is its own confirmed action
- *  (ADR-0027). */
+ *  M4 — the composer's single entry is the toolbar's "New review"): the one
+ *  local-review entry (Self-Review, debrief included), the draft/published
+ *  entries, and the explicit switch. No auto-switch notice — switching is its
+ *  own confirmed action (ADR-0027). Only rendered when `rowMenuActions().any`,
+ *  so every menu that opens has at least one live entry. */
 function BranchActionMenu({
   r,
   actions,
@@ -507,11 +536,9 @@ function BranchActionMenu({
 }) {
   const meta = r.branchMeta;
   if (!meta) return null;
-  const wt = meta.worktree;
-  const materialized = wt !== null && !wt.prunable;
   const sr = meta.selfReview;
   const hasDebrief = meta.hasDebrief;
-  const freshness = meta.debriefFreshness;
+  const acts = rowMenuActions(r);
   const selfLabel =
     sr && sr.viewed > 0 ? `Continue self-review · ${sr.viewed}/${sr.total}` : 'Self-review';
 
@@ -539,56 +566,48 @@ function BranchActionMenu({
           {r.branch}
         </span>
       </div>
-      {!meta.isDefault && (
+      {/* One local-review entry: the agent Debrief is part of Self-Review, so
+          it rides along as the freshness pill instead of a second item. */}
+      {acts.review.shown && (
         <MenuItem
           icon="eye"
           color="var(--blue)"
           label={selfLabel}
-          primary={materialized}
-          dim={!materialized}
-          onClick={materialized ? run(() => actions.onSelfReview(r)) : undefined}
+          primary={acts.review.enabled}
+          dim={!acts.review.enabled}
+          onClick={acts.review.enabled ? run(() => actions.onSelfReview(r)) : undefined}
           sub={
-            materialized
-              ? 'Browse your changes by file, entirely on this machine.'
-              : 'Not checked out — switch to this branch (below) to self-review it here.'
+            acts.review.enabled
+              ? hasDebrief
+                ? "Browse your changes by file, with your agent's debrief alongside them."
+                : 'Browse your changes by file, entirely on this machine.'
+              : hasDebrief
+                ? 'Not checked out — switch to this branch (below) to read the debrief alongside its diff.'
+                : 'Not checked out — switch to this branch (below) to self-review it here.'
           }
-          right={sr && sr.viewed > 0 ? <span className="badge badge-blue">ongoing</span> : null}
+          right={
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              {sr && sr.viewed > 0 && <span className="badge badge-blue">ongoing</span>}
+              <DebriefPill r={r} />
+            </span>
+          }
         />
       )}
-      <MenuItem
-        icon="doc-stack"
-        color="var(--purple)"
-        label="View agent debrief"
-        dim={!hasDebrief || !materialized}
-        onClick={hasDebrief && materialized ? run(() => actions.onViewDebrief(r)) : undefined}
-        sub={
-          !hasDebrief
-            ? 'Only your coding agent can start a debrief.'
-            : materialized
-              ? 'Received from your agent (Claude Code).'
-              : 'Check the branch out to read the debrief alongside its diff.'
-        }
-        right={
-          <span className="badge badge-purple" style={{ fontSize: 10 }}>
-            {freshness ?? 'agent-only'}
-          </span>
-        }
-      />
-      {(r.kind === 'draft' || r.kind === 'published') && (
+      {acts.storyline.shown && (
         <MenuItem
           icon="doc-stack"
           color="var(--gray-600)"
           label="Storyline"
-          dim={!materialized}
-          onClick={materialized ? run(() => actions.onOpenStoryline(r)) : undefined}
+          dim={!acts.storyline.enabled}
+          onClick={acts.storyline.enabled ? run(() => actions.onOpenStoryline(r)) : undefined}
           sub={
-            materialized
+            acts.storyline.enabled
               ? 'Open the storyline composer for this review.'
               : 'Check the branch out in a worktree to compose its storyline.'
           }
         />
       )}
-      {r.kind === 'draft' && (
+      {acts.discard.shown && (
         <MenuItem
           icon="chevron-left"
           color="var(--gray-600)"
@@ -597,9 +616,12 @@ function BranchActionMenu({
           sub="Remove the draft; the branch returns to Self-Review."
         />
       )}
-      {!meta.isCurrent && (
+      {acts.switchTo.shown && (
         <>
-          <hr style={{ border: 0, borderTop: '1px solid var(--hairline)', margin: '5px 2px' }} />
+          {/* Separator only when there is something above it to separate. */}
+          {(acts.review.shown || acts.storyline.shown || acts.discard.shown) && (
+            <hr style={{ border: 0, borderTop: '1px solid var(--hairline)', margin: '5px 2px' }} />
+          )}
           <MenuItem
             icon="branch"
             color="var(--gray-700)"
