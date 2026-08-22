@@ -4,8 +4,11 @@ version = "0.0.0"
 edition = "2021"
 rust-version = "1.77"
 
+# Named `st`, not `stage`: the Tauri app's binary is `Stage`, and macOS
+# filesystems are case-insensitive — two bins named `stage`/`Stage` in the
+# shared `target/<profile>/` dir are one file, silently clobbering each other.
 [[bin]]
-name = "stage"
+name = "st"
 path = "src/main.rs"
 
 [dependencies]

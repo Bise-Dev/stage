@@ -13,15 +13,15 @@ build:
 install:
     bun install
 
-# Build the desktop bundle + the release `stage` CLI, and link the CLI onto
-# PATH so `stage open` can launch the app (ADR-0014). The release CLI's sibling
+# Build the desktop bundle + the release `st` CLI, and link the CLI onto
+# PATH so `st open` can launch the app (ADR-0014). The release CLI's sibling
 # `target/release/Stage` is the local launch target; set STAGE_GUI_BIN
 # to point at an installed bundle instead.
 install-cli:
     bun run tauri build --bundles app
     cargo build -p stage-cli --release
     mkdir -p ~/.local/bin
-    ln -sf "$(pwd)/target/release/stage" ~/.local/bin/stage
+    ln -sf "$(pwd)/target/release/st" ~/.local/bin/st
 
 # Lint: Biome (TS) + cargo fmt --check (whole cargo workspace)
 lint:

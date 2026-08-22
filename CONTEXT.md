@@ -19,7 +19,7 @@ Local Client  ⇄  GitHub          (API via `gh`, git transport via `git`)
      └─ a per-machine SQLite store             (private pre-publish drafts + Self-Review)
 ```
 
-- **There is no Stage backend.** `stage-core` (Rust) is the whole engine: git2 reads, `git`/`gh` shell-outs, `.stage` read/write + scoped commits, the SQLite store, dashboard assembly, and identity. `src-tauri` is thin command bindings + watchers + window; `stage-cli` adds `stage open`.
+- **There is no Stage backend.** `stage-core` (Rust) is the whole engine: git2 reads, `git`/`gh` shell-outs, `.stage` read/write + scoped commits, the SQLite store, dashboard assembly, and identity. `src-tauri` is thin command bindings + watchers + window; `stage-cli` adds the `st` CLI (`st open`).
 - **No Stage credentials.** GitHub API calls shell out to the user's `gh` (which owns its token); git transport (push/fetch) uses the user's `git`. Stage holds, stores, and brokers **no** token. `gh` is a hard requirement — absent or unauthenticated is a loud, one-time "install `gh` / run `gh auth login`" error, with no broker fallback.
 - **Identity** is the `gh` token owner, resolved read-only via `gh api user` (cached). There is no Stage account, session, sign-in, or "local-only" axis — the whole app is local.
 - The shareable artifact (storyline + metadata) lives as **committed files in `.stage/<branch>/`** on the feature branch; it merges into the default branch with the PR and is visible in the diff. **One folder per Review, keyed by branch, with no shared index** — the dashboard discovers Reviews by listing folders, not a registry. The storyline is **single-writer** (author only); a genuine same-branch conflict surfaces as a normal git conflict, never a silent clobber.
@@ -102,7 +102,7 @@ _Avoid_: "frozen" (former name); implying a manual archive action or a stored fl
 A planned export of an archived Review into a single self-contained artifact (markdown / structured) capturing the storyline + intros + the GitHub review activity (verdict, threads). Out of scope today.
 
 **Reviewer entry** (open a PR read-only):
-How a reviewer reaches a change. Default is fully local and read-only: a GitHub PR search (the dashboard) or `stage open <pr-url>` resolves the PR to a local clone by `origin` match, `git fetch`es the PR head, and renders the storyline + diff **tree-to-tree** (ADR-0018) with **no working-tree mutation**. The lone exception is a user-confirmed **"Check out this branch"** for reviewers who want to build/run. A PR with no `.stage` storyline degrades gracefully to a plain read-only diff (Stage is a thin review wrapper, never refusing service). There is **no "import"** — the storyline rides the branch, so there is nothing to import.
+How a reviewer reaches a change. Default is fully local and read-only: a GitHub PR search (the dashboard) or `st open <pr-url>` resolves the PR to a local clone by `origin` match, `git fetch`es the PR head, and renders the storyline + diff **tree-to-tree** (ADR-0018) with **no working-tree mutation**. The lone exception is a user-confirmed **"Check out this branch"** for reviewers who want to build/run. A PR with no `.stage` storyline degrades gracefully to a plain read-only diff (Stage is a thin review wrapper, never refusing service). There is **no "import"** — the storyline rides the branch, so there is nothing to import.
 _Avoid_: "import this PR into Stage" (deliberately absent); treating a clone-less github.com review as a Stage flow (it falls back to the raw diff with `.stage/*` files visible).
 
 **Repo**:

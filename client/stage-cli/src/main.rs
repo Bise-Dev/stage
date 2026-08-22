@@ -1,4 +1,4 @@
-//! `stage` — the local CLI a coding agent drives to author a Debrief (and, in
+//! `st` — the local CLI a coding agent drives to author a Debrief (and, in
 //! later PRs, to read the author's Review notes back). No network, no Stage
 //! token, no GitHub credentials: it writes through `stage-core` into the
 //! app-data store the desktop app shares (ADR-0011).
@@ -17,7 +17,7 @@ use stage_core::{
 };
 
 #[derive(Parser)]
-#[command(name = "stage", about = "Stage — local agent self-review", version)]
+#[command(name = "st", about = "Stage — local agent self-review", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -110,7 +110,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             // Fail loud (CLAUDE.md): the complete cause to stderr, nonzero exit.
-            eprintln!("stage: {err}");
+            eprintln!("st: {err}");
             ExitCode::FAILURE
         }
     }
@@ -130,7 +130,7 @@ fn run(cli: Cli) -> Result<(), StageError> {
     }
 }
 
-/// `stage open [<pr-url>]`. With no argument, open the current repo in
+/// `st open [<pr-url>]`. With no argument, open the current repo in
 /// Self-Review (the existing behaviour). With a PR URL (or `owner/repo#number`),
 /// resolve it to a local clone by `origin` match and open it in read-only review
 /// mode (ADR-0022 §6, milestone F). Fail loud on an unparseable target or when no
@@ -150,7 +150,7 @@ fn open(target: Option<String>, cwd: &Path) -> Result<(), StageError> {
 }
 
 /// Resolve the PR to a local clone by `origin` match (ADR-0022 §6). The reviewer
-/// runs `stage open <pr-url>` from within (or above) their clone, so the cwd's
+/// runs `st open <pr-url>` from within (or above) their clone, so the cwd's
 /// repo is the candidate; a cwd that isn't a git repo simply yields no candidate
 /// and falls through to [`resolve_clone`]'s loud "no local clone" error.
 fn resolve_review_clone(pr: &PrRef, cwd: &Path) -> Result<PathBuf, StageError> {
@@ -181,7 +181,7 @@ fn open_gui(root: &Path) -> Result<(), StageError> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    eprintln!("stage: opening Stage at {}", root.display());
+    eprintln!("st: opening Stage at {}", root.display());
     Ok(())
 }
 
@@ -203,7 +203,7 @@ fn open_review_gui(pr: &PrRef, clone: &Path) -> Result<(), StageError> {
         .stderr(Stdio::null())
         .spawn()?;
     eprintln!(
-        "stage: opening {}/{} PR #{} for review",
+        "st: opening {}/{} PR #{} for review",
         pr.owner, pr.name, pr.number
     );
     Ok(())
@@ -356,7 +356,7 @@ fn self_review(cmd: SelfReviewCmd, cwd: &Path, root: &Path) -> Result<(), StageE
             let store = Store::open_default()?;
             let removed = store.clear_debrief(&key)?;
             eprintln!(
-                "stage: {}",
+                "st: {}",
                 if removed {
                     "debrief cleared"
                 } else {

@@ -42,7 +42,7 @@ Everything else — PR data, comments/reviews once submitted, CI, branches — l
 | Self-Review diff rendering stack | 0010 |
 | Agent self-review (Debrief) is a local CLI, not a service | 0011 |
 | Self-Review's one annotation concept: Self-Review notes | 0012 |
-| `stage open` — CLI launches the GUI into Self-Review | 0014 |
+| `st open` — CLI launches the GUI into Self-Review (named `stage` in ADR-0014) | 0014 |
 | Keyboard shortcuts + reload | 0015 |
 | Git worktrees: observe-only, Repo keyed by common-dir | 0016 |
 | Storyline diff is a committed tree↔tree diff | 0018 |
