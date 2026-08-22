@@ -3,5 +3,5 @@ resolver = "2"
 members = ["src-tauri", "stage-core", "stage-cli"]
 
 # `src-tauri` (the Tauri app) keeps its own dependency block. `stage-core` and
-# `stage-cli` are the Tauri-independent halves: the `stage` CLI must NOT compile
+# `stage-cli` are the Tauri-independent halves: the `st` CLI must NOT compile
 # Tauri, which is the whole reason the core is extracted into its own crate.

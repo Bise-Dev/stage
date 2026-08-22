@@ -1,4 +1,4 @@
-//! `stage` — the local CLI a coding agent drives to author a Debrief (and, in
+//! `st` — the local CLI a coding agent drives to author a Debrief (and, in
 //! later PRs, to read the author's Review notes back). No network, no Stage
 //! token, no GitHub credentials: it writes through `stage-core` into the
 //! app-data store the desktop app shares (ADR-0011).
@@ -17,7 +17,7 @@ use stage_core::{
 };
 
 #[derive(Parser)]
-#[command(name = "stage", about = "Stage — local agent self-review", version)]
+#[command(name = "st", about = "Stage — local agent self-review", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -110,7 +110,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             // Fail loud (CLAUDE.md): the complete cause to stderr, nonzero exit.
-            eprintln!("stage: {err}");
+            eprintln!("st: {err}");
             ExitCode::FAILURE
         }
     }
@@ -130,7 +130,7 @@ fn run(cli: Cli) -> Result<(), StageError> {
     }
 }
 
-/// `stage open [<pr-url>]`. With no argument, open the current repo in
+/// `st open [<pr-url>]`. With no argument, open the current repo in
 /// Self-Review (the existing behaviour). With a PR URL (or `owner/repo#number`),
 /// resolve it to a local clone by `origin` match and open it in read-only review
 /// mode (ADR-0022 §6, milestone F). Fail loud on an unparseable target or when no
@@ -150,7 +150,7 @@ fn open(target: Option<String>, cwd: &Path) -> Result<(), StageError> {
 }
 
 /// Resolve the PR to a local clone by `origin` match (ADR-0022 §6). The reviewer
-/// runs `stage open <pr-url>` from within (or above) their clone, so the cwd's
+/// runs `st open <pr-url>` from within (or above) their clone, so the cwd's
 /// repo is the candidate; a cwd that isn't a git repo simply yields no candidate
 /// and falls through to [`resolve_clone`]'s loud "no local clone" error.
 fn resolve_review_clone(pr: &PrRef, cwd: &Path) -> Result<PathBuf, StageError> {
@@ -158,9 +158,11 @@ fn resolve_review_clone(pr: &PrRef, cwd: &Path) -> Result<PathBuf, StageError> {
     resolve_clone(&candidates, pr)
 }
 
-/// The bundled GUI binary's name (the Tauri app), a sibling of this CLI in the
-/// shared `target/` dir and inside the installed app bundle.
-const GUI_BIN_NAME: &str = "stage-client";
+/// The GUI binary's name (the Tauri app), a sibling of this CLI in the shared
+/// `target/` dir and inside the app bundle. `Stage` is the current name (the
+/// `[[bin]]` target in `src-tauri/Cargo.toml`); `stage-client` is what it was
+/// called before, kept so an app bundle built by an older checkout still launches.
+const GUI_BIN_NAMES: &[&str] = &["Stage", "stage-client"];
 
 /// Launch the Stage desktop app in Self-Review for `root` (ADR-0014). Spawns
 /// detached and returns: on a cold start the GUI keeps running; on a warm start
@@ -179,7 +181,7 @@ fn open_gui(root: &Path) -> Result<(), StageError> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    eprintln!("stage: opening Stage at {}", root.display());
+    eprintln!("st: opening Stage at {}", root.display());
     Ok(())
 }
 
@@ -201,7 +203,7 @@ fn open_review_gui(pr: &PrRef, clone: &Path) -> Result<(), StageError> {
         .stderr(Stdio::null())
         .spawn()?;
     eprintln!(
-        "stage: opening {}/{} PR #{} for review",
+        "st: opening {}/{} PR #{} for review",
         pr.owner, pr.name, pr.number
     );
     Ok(())
@@ -235,14 +237,12 @@ fn resolve_gui_binary() -> Result<PathBuf, StageError> {
             // binary is what gives the proper Dock/launcher icon — its
             // `mainBundle` resolves to the .app's Info.plist + icon.icns. A bare
             // binary has no enclosing bundle, so macOS shows a generic icon.
-            candidates.push(
-                dir.join("bundle/macos/Stage.app/Contents/MacOS")
-                    .join(GUI_BIN_NAME),
-            );
+            let bundled = dir.join("bundle/macos/Stage.app/Contents/MacOS");
+            candidates.extend(GUI_BIN_NAMES.iter().map(|name| bundled.join(name)));
             // Bare sibling: the `tauri dev` / plain-build fallback. Functional
             // (single-instance dedups by app id, not path), but launched cold it
             // has no launcher icon — that's why the bundle is preferred above.
-            candidates.push(dir.join(GUI_BIN_NAME));
+            candidates.extend(GUI_BIN_NAMES.iter().map(|name| dir.join(name)));
         }
     }
 
@@ -280,9 +280,10 @@ fn installed_candidates() -> Vec<PathBuf> {
             .into_iter()
             .flat_map(|root| {
                 let macos = root.join("Stage.app").join("Contents").join("MacOS");
-                // Tauri names the inner binary after the cargo package; some
-                // setups use the productName ("Stage"). Try both.
-                [macos.join(GUI_BIN_NAME), macos.join("Stage")]
+                GUI_BIN_NAMES
+                    .iter()
+                    .map(move |name| macos.join(name))
+                    .collect::<Vec<_>>()
             })
             .collect()
     }
@@ -355,7 +356,7 @@ fn self_review(cmd: SelfReviewCmd, cwd: &Path, root: &Path) -> Result<(), StageE
             let store = Store::open_default()?;
             let removed = store.clear_debrief(&key)?;
             eprintln!(
-                "stage: {}",
+                "st: {}",
                 if removed {
                     "debrief cleared"
                 } else {
