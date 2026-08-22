@@ -416,10 +416,9 @@ export function Overview({
                 rows={filteredLocal}
                 defaultBase={defaultBase}
                 actions={{
+                  // One surface (L7 M1): the debrief has no route of its own —
+                  // it renders inside Self-Review as the chaptered file list.
                   onSelfReview: startSelfReviewAt,
-                  // One surface (L7 M1): "View agent debrief" opens Self-Review;
-                  // the Debrief shows as the rail + inline chapter banners.
-                  onViewDebrief: startSelfReviewAt,
                   onOpenStoryline: openStorylineAt,
                   onOpenReview,
                   onSwitchTo: openSwitchDialog,
