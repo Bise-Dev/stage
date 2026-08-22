@@ -8,6 +8,7 @@ export type IconName =
   | 'arrow-right'
   | 'plus'
   | 'branch'
+  | 'worktree'
   | 'play'
   | 'doc-stack'
   | 'search'
@@ -151,6 +152,21 @@ export function Icon({ name, size = 14, color = 'currentColor', className }: Ico
           <circle cx="3.5" cy="11" r="1.4" />
           <circle cx="10.5" cy="3" r="1.4" />
           <path d="M3.5 4.4v5.2M10.5 4.4v1.6a2 2 0 0 1-2 2H5.5" />
+        </svg>
+      );
+    case 'worktree':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <circle cx="2.8" cy="2.8" r="1.3" />
+          <path d="M2.8 4.1v3.3a1.5 1.5 0 0 0 1.5 1.5h1.2" />
+          <rect x="5.8" y="5.8" width="6.7" height="6.2" rx="1.2" />
         </svg>
       );
     case 'search':
