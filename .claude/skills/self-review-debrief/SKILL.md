@@ -7,7 +7,7 @@ description: Author and revise a Stage Debrief — an agent's reviewable account
 
 You just changed code on a branch. This skill produces a **Debrief**: an ordered account of *what you did and why*, told in **Chapters** (ADR-0025) — each Chapter a titled group of changed files with **one** markdown intro; files carry no per-file title or intro. It is written for the **author** to review locally inside Stage's Self-Review screen. The author leaves **Review notes** — feedback anchored to specific diff lines; you read them back, fix the code, reply, and regenerate the Debrief. That is the local author↔agent loop.
 
-It is **local and auth-free**: no network, no tokens. You write through the `stage` CLI into a local store the Stage app reads. The author never sees raw JSON — they see your intros and notes in the app.
+It is **local and auth-free**: no network, no tokens. You write through the `st` CLI into a local store the Stage app reads. The author never sees raw JSON — they see your intros and notes in the app.
 
 ## Caveman voice
 
@@ -33,9 +33,9 @@ Not: "I refactored the loader by extracting the parsing logic into its own funct
 
 Resume terse after the part that needs care.
 
-## Locating the `stage` binary
+## Locating the `st` binary
 
-The CLI is built inside the **Stage repo** at `client/target/debug/stage` — **not on `PATH`**. It is **not** bound to the repo you're reviewing: the binary lives in your Stage clone, but it discovers the repo + branch under review from your **current working directory** and keys the Debrief by `(repo, branch)`. So you resolve the binary once, then run it from wherever you're working.
+The CLI is built inside the **Stage repo** at `client/target/debug/st` — **not on `PATH`**. It is **not** bound to the repo you're reviewing: the binary lives in your Stage clone, but it discovers the repo + branch under review from your **current working directory** and keys the Debrief by `(repo, branch)`. So you resolve the binary once, then run it from wherever you're working.
 
 Resolve it at the start, in this order — `$STAGE_REPO` (set when the skill is installed globally), then an in-repo relative path (when your CWD already *is* the Stage clone), then `$PATH`:
 
@@ -44,13 +44,13 @@ if [ -n "$STAGE_REPO" ]; then ROOT="$STAGE_REPO"
 elif [ -e client/stage-cli/Cargo.toml ]; then ROOT="$PWD"; fi
 
 if [ -n "$ROOT" ]; then
-  BIN="$ROOT/client/target/debug/stage"
+  BIN="$ROOT/client/target/debug/st"
   # Build once if missing, or after stage-cli / stage-core changes — from inside client/.
   [ -x "$BIN" ] || (cd "$ROOT/client" && cargo build -p stage-cli)
-elif command -v stage >/dev/null 2>&1; then
-  BIN="$(command -v stage)"   # on PATH; note it can't self-build from here
+elif command -v st >/dev/null 2>&1; then
+  BIN="$(command -v st)"   # on PATH; note it can't self-build from here
 else
-  echo "stage CLI not found: set STAGE_REPO to your Stage repo root, or put 'stage' on PATH." >&2
+  echo "st CLI not found: set STAGE_REPO to your Stage repo root, or put 'st' on PATH." >&2
   exit 1
 fi
 ```

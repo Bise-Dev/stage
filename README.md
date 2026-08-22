@@ -2,6 +2,8 @@
 
 A local-first tool for human-tailored pull-request review. Authors craft a guided walkthrough ("storyline") over their branch; reviewers follow it and comment. GitHub stays the backend of record.
 
+**So far only the local self-review/debrief aspect is supported**
+
 ## Install
 
 There are no prebuilt releases yet — you build the app once from this repo.
