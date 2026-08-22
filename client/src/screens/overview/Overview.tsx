@@ -604,6 +604,11 @@ export function Overview({
           (() => {
             const { worktreePath } = switchTarget.outcome;
             return (
+              // Report only: Stage says what git refuses and where the branch
+              // already lives, and does nothing. Re-pointing the observed
+              // worktree from here was offered once and removed — the switch
+              // the user asked for isn't possible, and quietly observing a
+              // different tree instead isn't the same thing.
               <GitDialog
                 tone="blocked"
                 icon="folder"
@@ -612,17 +617,10 @@ export function Overview({
                   <>
                     Git forbids a second checkout of a branch another worktree holds, so this
                     working tree can't switch to <span className="mono">{switchTarget.branch}</span>
-                    . Stage can point at that worktree instead — it then reads the branch from
-                    there. Nothing is checked out, stashed or moved (ADR-0016: worktrees are
-                    observe-only).
+                    . It's already checked out here:
                   </>
                 }
                 details={[{ label: 'Worktree', value: worktreePath }]}
-                confirmLabel="Focus that worktree"
-                onConfirm={async () => {
-                  await setFocusedWorktree(worktreePath);
-                  await load(showArchived);
-                }}
                 onClose={() => setSwitchTarget(null)}
               />
             );

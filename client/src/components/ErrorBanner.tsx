@@ -65,8 +65,6 @@ export function ErrorBanner({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        {/* `overflowWrap: anywhere` — git/gh messages carry unbreakable tokens
-            (a 70-char worktree path, a URL) that would otherwise overflow. */}
         <div
           style={{
             flex: 1,
