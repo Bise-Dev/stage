@@ -555,6 +555,9 @@ function BranchActionMenu({
         borderRadius: 'var(--r-lg)',
         boxShadow: 'var(--sh-pop)',
         padding: 5,
+        // The menu lives inside a table cell, and `CELL` is `nowrap` — without
+        // this the item subtitles run straight out of the card's right edge.
+        whiteSpace: 'normal',
       }}
     >
       <div
@@ -562,7 +565,19 @@ function BranchActionMenu({
         style={{ padding: '6px 10px 4px', display: 'flex', alignItems: 'center', gap: 5 }}
       >
         <Icon name="branch" size={10} color="var(--gray-400)" />{' '}
-        <span className="mono" style={{ textTransform: 'none', letterSpacing: 0 }}>
+        <span
+          className="mono"
+          style={{
+            textTransform: 'none',
+            letterSpacing: 0,
+            // Long branch names truncate rather than widening/wrapping the card.
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={r.branch}
+        >
           {r.branch}
         </span>
       </div>
@@ -687,6 +702,8 @@ function MenuItem({
             display: 'flex',
             alignItems: 'center',
             gap: 6,
+            // Badges drop to a second line rather than pushing past the card.
+            flexWrap: 'wrap',
           }}
         >
           {label}
