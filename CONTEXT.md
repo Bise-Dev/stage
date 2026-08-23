@@ -4,9 +4,9 @@ A local-first tool for human-tailored pull request review. Authors craft a guide
 
 ## Shipping scope (read this before the glossary)
 
-That paragraph describes the **domain**, which this document defines in full. It does not describe what the **current version supports**, which is narrower: **local Self-Review, with the agent's Debrief folded into it, and nothing else** (ADR-0028).
+That paragraph describes the **domain**, which this document defines in full. It does not describe what the **current version supports**, which is narrower: **local Self-Review, with the agent's Debrief folded into it, and nothing else**.
 
-Everything downstream of **Ready to share** — the **Review** artifact, **Storyline** composition, **Publish**, **Reviewer entry**, **Verdict**, and post-publish **Step discussion** — is implemented in `stage-core` and hidden in the UI behind one flag (`client/src/featureFlags.ts`). The terms below stay authoritative because the engine, the store and the `.stage` format still use them; they are marked **[gated]** where a reader might otherwise expect to find them in the app.
+Everything downstream of **Ready to share** — the **Review** artifact, **Storyline** composition, **Publish**, **Reviewer entry**, **Verdict**, and post-publish **Step discussion** — is implemented in `stage-core`, but its UI is **commented out** in the webview and refused by the CLI. The terms below stay authoritative because the engine, the store and the `.stage` format still use them; they are marked **[gated]** where a reader might otherwise expect to find them in the app.
 
 Live in the shipping app: **Self-Review**, **Debrief**, **Chapter** (as the Debrief's unit), **Self-Review note**, **Base branch**, **Repo**, **Worktree**, **Branch**.
 

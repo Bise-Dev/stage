@@ -6,7 +6,7 @@ Stage shows your branch's diff as a walkthrough you can annotate, entirely on yo
 
 > **Scope of this version.** Stage today supports **one flow: local self-review, with the agent debrief folded into it.** Nothing leaves your machine and no GitHub account is needed.
 >
-> The wider goal — authors publishing a curated **storyline** over a branch and reviewers following it on the PR — is built but **switched off** (see [Not in this version](#not-in-this-version)).
+> The wider goal — authors publishing a curated **storyline** over a branch and reviewers following it on the PR — is built, but its UI is **commented out** (see [Not in this version](#not-in-this-version)).
 
 ## Install
 
@@ -59,7 +59,7 @@ The agent talks to Stage only through the `st` CLI against the shared local stor
 
 ## Not in this version
 
-These are implemented in the engine and covered by tests, but their UI is switched off behind one flag (`client/src/featureFlags.ts`), so you will not find them in the app:
+These are implemented in the engine, but their UI is commented out, so you will not find them in the app:
 
 | Not available yet | What it will be |
 | --- | --- |
@@ -69,7 +69,7 @@ These are implemented in the engine and covered by tests, but their UI is switch
 | **Reviewer entry** (`st open <pr-url>`) | Opening someone's PR read-only and following their storyline. Currently refused with a loud error. |
 | PR status columns, **verdicts**, PR discussion | GitHub review activity posted through your own `gh`. |
 
-Why gated rather than deleted: the code works and is meant to come back on. See [ADR-0028](./docs/adr/0028-review-surface-is-gated-until-supported.md) for the decision and how to flip it.
+Commented out rather than deleted because the code works and is meant to come back on. Each site carries a comment saying why; search the client for `COMMENTED OUT with the review surface`.
 
 ## Learn more
 

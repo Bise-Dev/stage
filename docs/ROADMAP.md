@@ -6,9 +6,9 @@ Forward-looking goals that we are deliberately *not* building yet, but are aimin
 
 What shipped: the v6-light baseline (2026-07-26 decisions; durable parts in ADR-0025/0026/0027 + CONTEXT.md) — a branch-table home replacing the Overview, one shared shell whose Self-review mode renders the agent's Debrief inline, and confirmed git actions.
 
-What the current version **supports** is narrower still: **local Self-Review + Debrief only**. The storyline / publish / reviewer half is implemented but gated behind one flag (ADR-0028).
+What the current version **supports** is narrower still: **local Self-Review + Debrief only**. The storyline / publish / reviewer half is implemented, but its UI is commented out.
 
-So the near-term goal is not new capability, it's **making the gated half good enough to un-gate**: the create-review wizard, publish, and reviewer entry need the polish and end-to-end confidence the self-review flow already has. This is active work, not a deferred goal — it's listed here only so the deferred items below read in context. **Implication:** don't build on the assumption that a user can publish today, and don't delete gated code to simplify — ADR-0028 exists so it comes back on cheaply.
+So the near-term goal is not new capability, it's **making that half good enough to uncomment**: the create-review wizard, publish, and reviewer entry need the polish and end-to-end confidence the self-review flow already has. This is active work, not a deferred goal — it's listed here only so the deferred items below read in context. **Implication:** don't build on the assumption that a user can publish today, and don't delete the commented-out code to tidy up — it's meant to come back.
 
 ## MCP as an agent interface
 

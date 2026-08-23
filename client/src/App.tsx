@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { REVIEW_SURFACE_ENABLED } from './featureFlags';
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { Overview } from './screens/overview/Overview';
-import { LocalReview } from './screens/review/LocalReview';
 import { Settings } from './screens/settings/Settings';
 import { ReviewShell } from './screens/shell/ReviewShell';
-import { Storyline } from './screens/storyline/Storyline';
+// import { LocalReview } from './screens/review/LocalReview';
+// import { Storyline } from './screens/storyline/Storyline';
 import {
   type OpenIntent,
-  type PrRef,
   onOpenIntent,
   onOpenSettings,
   setActiveRepo,
@@ -22,10 +20,13 @@ import {
 // L4) — from which the author works locally in the review shell (Self-Review,
 // with the agent's Debrief folded in — v6-light L7).
 //
-// The `localStoryline` and `localReview` views belong to the review surface,
-// which this version does not support (ADR-0028): they stay wired but are
-// unreachable while `REVIEW_SURFACE_ENABLED` is false.
-type View = 'openRepo' | 'overview' | 'shell' | 'localStoryline' | 'localReview' | 'settings';
+// COMMENTED OUT: this version of Stage supports local Self-Review + the agent's
+// Debrief only. Everything downstream of "Ready to share" — the Review artifact,
+// storyline composition, Publish, and reviewer entry — works in stage-core but
+// isn't good enough to show yet, so its routes are commented out rather than
+// deleted. Uncomment `localStoryline` / `localReview` here and in Overview to
+// bring it back.
+type View = 'openRepo' | 'overview' | 'shell' | 'settings';
 
 export function App() {
   // `booting` covers draining this launch's `stage open` intent before we pick a
@@ -33,9 +34,6 @@ export function App() {
   const [booting, setBooting] = useState(true);
   const [view, setView] = useState<View>('openRepo');
   const [hasRepo, setHasRepo] = useState(false);
-  // The PR opened for local-first read-only review via `stage open <pr-url>`
-  // (ADR-0022 §6) or an overview row.
-  const [localReviewPr, setLocalReviewPr] = useState<PrRef | null>(null);
   // True when Self-Review was reached via `stage open`: seed its base from the
   // Debrief's base, overriding the per-repo localStorage default (ADR-0014).
   const [seedBase, setSeedBase] = useState(false);
@@ -46,22 +44,21 @@ export function App() {
   const viewRef = useRef(view);
   viewRef.current = view;
 
-  // Set the active repo and route per the `stage open` intent's mode (ADR-0014,
-  // ADR-0022 §6): `Review` opens the carried PR read-only; otherwise Self-Review.
-  // While the review surface is off (ADR-0028) a `Review` intent can't arrive —
-  // `st open <pr-url>` refuses at the CLI — so this falls through to Self-Review.
+  // Set the active repo and route the `stage open` intent (ADR-0014). Every
+  // intent lands in Self-Review now: the CLI refuses a PR target, so the
+  // `Review` mode branch (commented out below) can't be reached.
   // Fail-loud (CLAUDE.md): a bad repo path surfaces and falls back to the picker.
   const routeToIntent = useCallback(async (intent: OpenIntent) => {
     try {
       await setActiveRepo(intent.repo);
       setHasRepo(true);
-      if (REVIEW_SURFACE_ENABLED && intent.mode === 'review' && intent.pr) {
-        setLocalReviewPr(intent.pr);
-        setView('localReview');
-      } else {
-        setSeedBase(true);
-        setView('shell');
-      }
+      // if (intent.mode === 'review' && intent.pr) {
+      //   setLocalReviewPr(intent.pr);
+      //   setView('localReview');
+      //   return;
+      // }
+      setSeedBase(true);
+      setView('shell');
     } catch (e) {
       console.warn('open_intent_set_repo_failed', e);
       setView('openRepo');
@@ -114,19 +111,6 @@ export function App() {
   }, []);
   const exitShell = useCallback(() => setView('overview'), []);
 
-  const enterLocalStoryline = useCallback(() => setView('localStoryline'), []);
-  const exitLocalStoryline = useCallback(() => setView('overview'), []);
-
-  // Open a PR in the local-first reviewer (from an overview row, or `stage open`).
-  const openLocalReview = useCallback((pr: PrRef) => {
-    setLocalReviewPr(pr);
-    setView('localReview');
-  }, []);
-  const backFromLocalReview = useCallback(
-    () => setView(hasRepo ? 'overview' : 'openRepo'),
-    [hasRepo],
-  );
-
   // Open Settings, stashing the current screen to return to. No-op if already
   // there (so re-firing ⌘, doesn't lose the original return target).
   const openSettings = useCallback(() => {
@@ -159,21 +143,22 @@ export function App() {
       />
     );
   }
-  if (REVIEW_SURFACE_ENABLED && view === 'localReview' && localReviewPr) {
-    return <LocalReview pr={localReviewPr} onBack={backFromLocalReview} />;
-  }
   if (view === 'shell') {
     return <ReviewShell onExit={exitShell} seedBaseFromDebrief={seedBase} />;
   }
-  if (REVIEW_SURFACE_ENABLED && view === 'localStoryline') {
-    return <Storyline onBack={exitLocalStoryline} />;
-  }
+  // The reviewer + storyline routes, commented out with the rest of the review
+  // surface (see the note at the top of this file):
+  //
+  // if (view === 'localReview' && localReviewPr) {
+  //   return <LocalReview pr={localReviewPr} onBack={backFromLocalReview} />;
+  // }
+  // if (view === 'localStoryline') {
+  //   return <Storyline onBack={exitLocalStoryline} />;
+  // }
   return (
     <Overview
       onChangeRepo={changeRepo}
       onStartSelfReview={startSelfReview}
-      onOpenStoryline={enterLocalStoryline}
-      onOpenReview={openLocalReview}
       onOpenSettings={openSettings}
     />
   );
