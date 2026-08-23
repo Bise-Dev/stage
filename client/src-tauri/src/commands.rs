@@ -836,7 +836,12 @@ pub fn self_review_note_create(
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
     let id = uuid::Uuid::new_v4().to_string();
-    Ok(store.create_note(&key, &id, anchor.as_ref(), &body)?)
+    let note = store.create_note(&key, &id, anchor.as_ref(), &body)?;
+    // Same reason as `self_review_viewed_set`: the FS watcher can't be relied
+    // on to see the SQLite store move, and the note count drives the overview's
+    // "self-review · started" pill — nudge so the row reflects it immediately.
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    Ok(note)
 }
 
 /// Author action: append an author reply to a note's thread. Re-raises an
@@ -900,7 +905,11 @@ pub fn self_review_note_delete(state: State<'_, AppState>, id: String) -> Result
     let path = active_repo_path(&state)?;
     let key = repo_key_from_cwd(&path)?;
     let store = Store::open_default()?;
-    Ok(store.delete_note(&key, &id)?)
+    store.delete_note(&key, &id)?;
+    // Deleting the last note drops the row back to "not started" — same
+    // snapshot nudge as `self_review_note_create`.
+    nudge_sync(&state, SyncMsg::LocalChanged);
+    Ok(())
 }
 
 // --- Draft Review + storyline (local, no auth — ADR-0022 §1/§3, milestone B) -

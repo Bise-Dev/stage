@@ -6,5 +6,14 @@
  * the file's current post-image counts as unviewed). `total` is the
  * branch-vs-base changed file count — the same diff as `changed_file_count`.
  * (The explicit "Mark reviewed" done state was removed in L7 — F3 rescinded.)
+ *
+ * `notes` is the branch's stored Self-Review note count, every status
+ * included. It is the *other* half of "the author has started": a note
+ * written without any file marked viewed leaves `viewed` at 0, and the row
+ * would otherwise read as untouched.
  */
-export type SelfReviewProgress = { viewed: number, total: number, };
+export type SelfReviewProgress = { viewed: number, total: number, 
+/**
+ * Notes the author has written on this branch, any status.
+ */
+notes: number, };

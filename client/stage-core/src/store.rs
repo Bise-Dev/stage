@@ -311,6 +311,26 @@ impl Store {
         Ok(out)
     }
 
+    /// Note counts for a repo, keyed by branch — one query for the overview
+    /// assembly, the note-side twin of [`Store::list_viewed_by_branch`]. Every
+    /// note counts regardless of status: a resolved note is still proof the
+    /// author started reviewing this branch.
+    pub fn count_notes_by_branch(
+        &self,
+        repo_owner: &str,
+        repo_name: &str,
+    ) -> Result<std::collections::HashMap<String, u32>, StageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT branch, COUNT(*) FROM review_note \
+             WHERE repo_owner = ?1 AND repo_name = ?2 \
+             GROUP BY branch",
+        )?;
+        let rows = stmt.query_map(params![repo_owner, repo_name], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()?)
+    }
+
     /// Delete the Debrief for `key`. Returns whether a row was removed.
     pub fn clear_debrief(&self, key: &RepoKey) -> Result<bool, StageError> {
         let removed = self.conn.execute(
