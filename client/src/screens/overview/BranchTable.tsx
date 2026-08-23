@@ -1,17 +1,10 @@
-import {
-  type CSSProperties,
-  type ComponentProps,
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
+import type { CSSProperties } from 'react';
 import { Icon } from '../../components/Icon';
-import type { SelfReviewProgress } from '../../generated/SelfReviewProgress';
-
-type IconName = ComponentProps<typeof Icon>['name'];
+import { isMaterialized } from '../../lib/worktree';
 import type { OverviewRow, ReviewStatus } from '../../tauri';
 import { relativeTimeFromEpoch } from '../../time';
+import { type BranchActions, useBranchMenu } from './BranchMenu';
+import { DebriefPill, SelfReviewPill, selfReviewStarted } from './pills';
 
 /**
  * The dense branch table — the v6-light home (design `V6L_Branches`). One row
@@ -51,157 +44,6 @@ function DiffStat({ signal }: { signal: OverviewRow['signal'] }) {
       <span style={{ color: 'var(--red-d)' }}>−{signal.removed}</span>
     </span>
   );
-}
-
-/** Purple "debrief · new" pill / muted "debrief" / orange "debrief · outdated"
- *  — straight off L2's derived `DebriefFreshness`. */
-function DebriefPill({ r }: { r: OverviewRow }) {
-  const f = r.branchMeta?.debriefFreshness ?? null;
-  if (f === null) return null;
-  if (f === 'new') {
-    return (
-      <span
-        className="badge badge-purple"
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flex: '0 0 auto' }}
-      >
-        <span style={{ width: 5, height: 5, borderRadius: 3, background: 'var(--purple)' }} />
-        debrief · new
-      </span>
-    );
-  }
-  if (f === 'outdated') {
-    return (
-      <span className="badge badge-orange" style={{ flex: '0 0 auto' }}>
-        debrief · outdated
-      </span>
-    );
-  }
-  return (
-    <span style={{ fontSize: 10.5, color: 'var(--gray-500)', flex: '0 0 auto' }}>debrief</span>
-  );
-}
-
-/**
- * Has the author started reviewing this branch locally? Either local signal
- * counts: a file marked viewed, **or** a note written. Notes matter on their
- * own — commenting without marking anything viewed is a real way to work, and
- * a viewed-only test reads that branch as untouched.
- */
-export function selfReviewStarted(sr: SelfReviewProgress | null | undefined): boolean {
-  return !!sr && (sr.viewed > 0 || sr.notes > 0);
-}
-
-/** Shared shell for the blue self-review pill (progress and started alike). */
-const SR_PILL: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  padding: '2px 7px 2px 6px',
-  borderRadius: 20,
-  background: 'var(--blue-tint)',
-  border: '1px solid rgba(0,122,255,0.28)',
-  flex: '0 0 auto',
-};
-
-const SR_TEXT: CSSProperties = { fontSize: 10.5, fontWeight: 700, color: 'var(--blue-press)' };
-
-/** `n note(s)`, or '' when there are none — the notes half of the tooltip. */
-function noteSuffix(notes: number): string {
-  return notes > 0 ? ` · ${notes} note${notes === 1 ? '' : 's'}` : '';
-}
-
-/** Blue pill while a self-review is underway (the done state was removed in L7
- *  — F3 rescinded). Two shapes off the same signals: viewed/total progress from
- *  the content-anchored marks, or — when notes are the only thing there — a
- *  plain "started", since a 0/N bar would read as untouched. */
-function SelfReviewPill({ sr }: { sr: SelfReviewProgress | null }) {
-  if (!sr || !selfReviewStarted(sr)) return null;
-  if (sr.viewed === 0) {
-    return (
-      <span title={`Self-review started${noteSuffix(sr.notes)}`} style={SR_PILL}>
-        <Icon name="comment-fill" size={9} color="var(--blue)" />
-        <span style={SR_TEXT}>self-review · started</span>
-      </span>
-    );
-  }
-  const pct = sr.total > 0 ? Math.min(100, Math.round((sr.viewed / sr.total) * 100)) : 0;
-  return (
-    <span
-      title={`Self-review in progress · ${sr.viewed}/${sr.total} files viewed${noteSuffix(sr.notes)}`}
-      style={SR_PILL}
-    >
-      <span
-        style={{
-          position: 'relative',
-          width: 22,
-          height: 4,
-          borderRadius: 2,
-          background: 'rgba(0,122,255,0.2)',
-          display: 'inline-block',
-        }}
-      >
-        <span
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            height: '100%',
-            width: `${pct}%`,
-            borderRadius: 2,
-            background: 'var(--blue)',
-          }}
-        />
-      </span>
-      <span style={SR_TEXT}>
-        {sr.viewed}/{sr.total}
-      </span>
-      {sr.notes > 0 && (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, ...SR_TEXT }}>
-          <Icon name="comment-fill" size={9} color="var(--blue)" />
-          {sr.notes}
-        </span>
-      )}
-    </span>
-  );
-}
-
-export type BranchTableActions = {
-  /** Focus the row's worktree and enter Self-Review — the one local-review
-   *  surface (L7 M1): the agent Debrief renders inside it as the chaptered
-   *  file list + inline banners, so there is no separate debrief route.
-   *  Caller guards on a materialized worktree; the table disables the
-   *  affordance otherwise. */
-  onSelfReview: (r: OverviewRow) => void;
-  onSwitchTo: (branch: string) => void;
-  // Commented out with the review surface (see the note at the top of the file):
-  // onOpenStoryline: (r: OverviewRow) => void;
-  // onOpenReview: (pr: PrRef) => void;
-  // onDiscardDraft: (r: OverviewRow) => void;
-};
-
-/**
- * Which menu entries a row offers, and whether each can act right now.
- *
- * Self-Review and the agent Debrief are one entry (L7 M1 — one surface), so a
- * debrief is reason enough to offer it even on the default branch. `any` is
- * false when the row has nothing actionable at all (the default branch you are
- * already on): the caller then renders no chevron rather than a menu whose
- * every item is dead.
- */
-function rowMenuActions(r: OverviewRow) {
-  const meta = r.branchMeta;
-  const wt = meta?.worktree ?? null;
-  const materialized = wt !== null && !wt.prunable;
-  // `storyline` and `discard` acted on the Review artifact — commented out with
-  // the review surface, so the menu is Self-review + Switch only:
-  //
-  //   storyline: { shown: r.kind === 'draft' || r.kind === 'published', enabled: materialized },
-  //   discard: { shown: r.kind === 'draft', enabled: true },
-  const entries = {
-    review: { shown: !!meta && (!meta.isDefault || meta.hasDebrief), enabled: materialized },
-    switchTo: { shown: !!meta && !meta.isCurrent, enabled: true },
-  };
-  return { ...entries, any: Object.values(entries).some((e) => e.shown && e.enabled) };
 }
 
 const CELL: CSSProperties = {
@@ -248,28 +90,11 @@ export function BranchTable({
 }: {
   rows: OverviewRow[];
   defaultBase: string | null;
-  actions: BranchTableActions;
+  actions: BranchActions;
 }) {
-  // One menu open at a time, keyed by branch. Escape / click-outside dismiss
-  // per the RepoMenu popover pattern.
-  const [menuBranch, setMenuBranch] = useState<string | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (menuBranch === null) return;
-    const onDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuBranch(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenuBranch(null);
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [menuBranch]);
+  // The menu itself lives in the BranchMenuProvider (ADR-0028): one instance
+  // for the whole overview, fixed-positioned, so the card no longer has to open
+  // its overflow to let a menu overhang.
 
   return (
     <div
@@ -278,9 +103,7 @@ export function BranchTable({
         border: '1px solid var(--hairline)',
         borderRadius: 'var(--r-lg)',
         boxShadow: 'var(--sh-1)',
-        // The open menu overhangs the table card; scrolling happens on the
-        // page column, not inside the card, so visible overflow is safe.
-        overflow: menuBranch !== null ? 'visible' : 'hidden',
+        overflow: 'hidden',
       }}
     >
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -304,16 +127,7 @@ export function BranchTable({
         </thead>
         <tbody>
           {rows.map((r) => (
-            <BranchRow
-              key={r.branch}
-              r={r}
-              defaultBase={defaultBase}
-              actions={actions}
-              menuOpen={menuBranch === r.branch}
-              menuRef={menuBranch === r.branch ? menuRef : undefined}
-              onToggleMenu={() => setMenuBranch((cur) => (cur === r.branch ? null : r.branch))}
-              closeMenu={() => setMenuBranch(null)}
-            />
+            <BranchRow key={r.branch} r={r} defaultBase={defaultBase} actions={actions} />
           ))}
           {rows.length === 0 && (
             <tr>
@@ -335,23 +149,17 @@ function BranchRow({
   r,
   defaultBase,
   actions,
-  menuOpen,
-  menuRef,
-  onToggleMenu,
-  closeMenu,
 }: {
   r: OverviewRow;
   defaultBase: string | null;
-  actions: BranchTableActions;
-  menuOpen: boolean;
-  menuRef?: React.RefObject<HTMLDivElement | null>;
-  onToggleMenu: () => void;
-  closeMenu: () => void;
+  actions: BranchActions;
 }) {
+  const { openAt, triggerProps, openBranch } = useBranchMenu();
   const meta = r.branchMeta;
   if (!meta) return null; // table rows are branch-backed by construction
   const wt = meta.worktree;
-  const materialized = wt !== null && !wt.prunable;
+  const materialized = isMaterialized(meta);
+  const menuOpen = openBranch === r.branch;
   const sr = meta.selfReview;
   // Both only fed the commented-out Review chip + PR cell:
   // const st = statusBadge(r);
@@ -360,7 +168,6 @@ function BranchRow({
   // the repo default (the DTO says so) — name it when we know it.
   const base = r.baseRef ?? (meta.isDefault ? null : defaultBase);
   const selfLabel = selfReviewStarted(sr) ? 'Continue' : 'Self-review';
-  const acts = rowMenuActions(r);
   const showSelfButton = !meta.isDefault;
   // The draft/published Review chip, commented out with the review surface — the
   // Self-review column now shows only local state (debrief + viewed progress):
@@ -391,6 +198,9 @@ function BranchRow({
 
   return (
     <tr
+      // The row *is* the branch, so the whole row is the right-click target
+      // (ADR-0028) — the same menu the chevron raises.
+      onContextMenu={(e) => openAt(e, r.branch)}
       style={{
         borderBottom: '1px solid var(--hairline-2)',
         background: meta.isCurrent ? 'var(--blue-tint-2)' : '#fff',
@@ -512,7 +322,7 @@ function BranchRow({
       <td style={{ ...CELL, textAlign: 'right', color: 'var(--gray-400)', fontSize: 11 }}>
         {relativeTimeFromEpoch(meta.updatedAt)}
       </td>
-      <td style={{ ...CELL, width: 170, paddingRight: 14, position: 'relative' }}>
+      <td style={{ ...CELL, width: 170, paddingRight: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           {showSelfButton && (
             <button
@@ -530,260 +340,31 @@ function BranchRow({
                 gap: 4,
                 color: 'var(--blue-press)',
                 opacity: materialized ? 1 : 0.5,
-                // Only flatten the side the chevron butts against; a row with
-                // no menu keeps a plain, fully-rounded button.
-                ...(acts.any
-                  ? { borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRight: 'none' }
-                  : {}),
+                // Flatten the side the chevron butts against — every row has
+                // one now (ADR-0028).
+                borderTopRightRadius: 0,
+                borderBottomRightRadius: 0,
+                borderRight: 'none',
               }}
             >
               <Icon name="eye" size={10} color="var(--blue)" /> {selfLabel}
             </button>
           )}
-          {acts.any && (
-            <button
-              type="button"
-              className="btn"
-              onClick={onToggleMenu}
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              aria-label={`Actions on ${r.branch}`}
-              style={{
-                height: 24,
-                padding: '0 6px',
-                background: menuOpen ? 'var(--gray-100)' : '#fff',
-                ...(showSelfButton ? { borderTopLeftRadius: 0, borderBottomLeftRadius: 0 } : {}),
-              }}
-            >
-              <Icon name="chevron-down" size={10} color="var(--gray-500)" />
-            </button>
-          )}
-        </div>
-        {menuOpen && (
-          <div
-            ref={menuRef}
-            role="menu"
-            style={{ position: 'absolute', top: 'calc(100% - 4px)', right: 12, zIndex: 30 }}
-          >
-            <BranchActionMenu r={r} actions={actions} closeMenu={closeMenu} />
-          </div>
-        )}
-      </td>
-    </tr>
-  );
-}
-
-/** The per-branch action menu (design `V6L_ActionMenu` + F1; trimmed per L7
- *  M4 — the composer's single entry is the toolbar's "New review"): the one
- *  local-review entry (Self-Review, debrief included), the draft/published
- *  entries, and the explicit switch. No auto-switch notice — switching is its
- *  own confirmed action (ADR-0027). Only rendered when `rowMenuActions().any`,
- *  so every menu that opens has at least one live entry. */
-function BranchActionMenu({
-  r,
-  actions,
-  closeMenu,
-}: {
-  r: OverviewRow;
-  actions: BranchTableActions;
-  closeMenu: () => void;
-}) {
-  const meta = r.branchMeta;
-  if (!meta) return null;
-  const sr = meta.selfReview;
-  const hasDebrief = meta.hasDebrief;
-  const acts = rowMenuActions(r);
-  const selfLabel = !selfReviewStarted(sr)
-    ? 'Self-review'
-    : sr && sr.viewed > 0
-      ? `Continue self-review · ${sr.viewed}/${sr.total}`
-      : 'Continue self-review';
-
-  const run = (fn: () => void) => () => {
-    closeMenu();
-    fn();
-  };
-
-  return (
-    <div
-      style={{
-        width: 300,
-        background: '#fff',
-        borderRadius: 'var(--r-lg)',
-        boxShadow: 'var(--sh-pop)',
-        padding: 5,
-        // The menu lives inside a table cell, and `CELL` is `nowrap` — without
-        // this the item subtitles run straight out of the card's right edge.
-        whiteSpace: 'normal',
-      }}
-    >
-      <div
-        className="section-label"
-        style={{ padding: '6px 10px 4px', display: 'flex', alignItems: 'center', gap: 5 }}
-      >
-        <Icon name="branch" size={10} color="var(--gray-400)" />{' '}
-        <span
-          className="mono"
-          style={{
-            textTransform: 'none',
-            letterSpacing: 0,
-            // Long branch names truncate rather than widening/wrapping the card.
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-          title={r.branch}
-        >
-          {r.branch}
-        </span>
-      </div>
-      {/* One local-review entry: the agent Debrief is part of Self-Review, so
-          it rides along as the freshness pill instead of a second item. */}
-      {acts.review.shown && (
-        <MenuItem
-          icon="eye"
-          color="var(--blue)"
-          label={selfLabel}
-          primary={acts.review.enabled}
-          dim={!acts.review.enabled}
-          onClick={acts.review.enabled ? run(() => actions.onSelfReview(r)) : undefined}
-          sub={
-            acts.review.enabled
-              ? hasDebrief
-                ? "Browse your changes by file, with your agent's debrief alongside them."
-                : 'Browse your changes by file, entirely on this machine.'
-              : hasDebrief
-                ? 'Not checked out — switch to this branch (below) to read the debrief alongside its diff.'
-                : 'Not checked out — switch to this branch (below) to self-review it here.'
-          }
-          right={
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              {selfReviewStarted(sr) && <span className="badge badge-blue">ongoing</span>}
-              <DebriefPill r={r} />
-            </span>
-          }
-        />
-      )}
-      {/* The Storyline and Discard-review entries, commented out with the
-          review surface:
-
-      {acts.storyline.shown && (
-        <MenuItem
-          icon="doc-stack"
-          color="var(--gray-600)"
-          label="Storyline"
-          dim={!acts.storyline.enabled}
-          onClick={acts.storyline.enabled ? run(() => actions.onOpenStoryline(r)) : undefined}
-          sub={
-            acts.storyline.enabled
-              ? 'Open the storyline composer for this review.'
-              : 'Check the branch out in a worktree to compose its storyline.'
-          }
-        />
-      )}
-      {acts.discard.shown && (
-        <MenuItem
-          icon="chevron-left"
-          color="var(--gray-600)"
-          label="Discard review…"
-          onClick={run(() => actions.onDiscardDraft(r))}
-          sub="Remove the draft; the branch returns to Self-Review."
-        />
-      )}
-      */}
-      {acts.switchTo.shown && (
-        <>
-          {/* Separator only when there is something above it to separate. */}
-          {acts.review.shown && (
-            <hr style={{ border: 0, borderTop: '1px solid var(--hairline)', margin: '5px 2px' }} />
-          )}
-          <MenuItem
-            icon="branch"
-            color="var(--gray-700)"
-            label="Switch to branch…"
-            onClick={run(() => actions.onSwitchTo(r.branch))}
-            sub="Stage lists the exact git commands and runs them only after you confirm."
-          />
-        </>
-      )}
-    </div>
-  );
-}
-
-function MenuItem({
-  icon,
-  color,
-  label,
-  sub,
-  dim,
-  right,
-  primary,
-  onClick,
-}: {
-  icon: IconName;
-  color: string;
-  label: string;
-  sub?: string;
-  dim?: boolean;
-  right?: ReactNode;
-  primary?: boolean;
-  onClick?: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      onClick={onClick}
-      disabled={!onClick}
-      style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 10,
-        width: '100%',
-        textAlign: 'left',
-        padding: '9px 10px',
-        borderRadius: 7,
-        opacity: dim ? 0.6 : 1,
-        background: primary ? 'var(--blue-tint)' : 'transparent',
-        border: `1px solid ${primary ? 'rgba(0,122,255,0.20)' : 'transparent'}`,
-        cursor: 'default',
-        fontFamily: 'inherit',
-      }}
-    >
-      <span style={{ flex: '0 0 16px', marginTop: 1, display: 'flex' }}>
-        <Icon name={icon} size={13} color={color} />
-      </span>
-      <span style={{ flex: 1, minWidth: 0 }}>
-        <span
-          style={{
-            fontSize: 12.5,
-            fontWeight: 600,
-            color: 'var(--gray-900)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            // Badges drop to a second line rather than pushing past the card.
-            flexWrap: 'wrap',
-          }}
-        >
-          {label}
-          {right}
-        </span>
-        {sub && (
-          <span
+          <button
+            type="button"
+            className="btn"
+            {...triggerProps(r.branch)}
             style={{
-              display: 'block',
-              fontSize: 11,
-              color: 'var(--gray-500)',
-              marginTop: 1,
-              lineHeight: 1.4,
+              height: 24,
+              padding: '0 6px',
+              background: menuOpen ? 'var(--gray-100)' : '#fff',
+              ...(showSelfButton ? { borderTopLeftRadius: 0, borderBottomLeftRadius: 0 } : {}),
             }}
           >
-            {sub}
-          </span>
-        )}
-      </span>
-    </button>
+            <Icon name="chevron-down" size={10} color="var(--gray-500)" />
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 }

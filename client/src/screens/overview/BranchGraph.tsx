@@ -3,16 +3,25 @@ import { Avatar } from '../../components/Avatar';
 import { CollapsibleRail, RailStripStat, useRailCollapsed } from '../../components/CollapsibleRail';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { Icon } from '../../components/Icon';
+import type { BranchMeta } from '../../generated/BranchMeta';
+import type { GraphBranch } from '../../generated/GraphBranch';
 import type { BranchGraphView, GraphRow, OverviewRow } from '../../tauri';
 import { branchGraph } from '../../tauri';
 import { relativeTimeFromEpoch } from '../../time';
-import { selfReviewStarted } from './BranchTable';
+import { useBranchMenu } from './BranchMenu';
+import { selfReviewStarted } from './pills';
 
 /**
  * The branch graph view — v6-light L6 (design `V6_BranchGraph`). A pure
  * renderer over the engine's precomputed lane geometry: straight vertical
- * lanes, orthogonal fork elbows, one fixed-height row per commit. Read-only —
- * clicking a row highlights it locally and drives nothing else (light scope).
+ * lanes, orthogonal fork elbows, one fixed-height row per commit. Clicking a
+ * commit row highlights it locally and drives nothing else.
+ *
+ * Branch *names* here are action surfaces, though (ADR-0028): a rail row and a
+ * branch-tip chip raise the same menu the table's chevron does, since they name
+ * the same branch. L6's read-only scope note is superseded — nothing
+ * destructive rides on the gesture, as the switch keeps its command-listing
+ * confirmation (ADR-0027).
  *
  * The left rail reuses the overview snapshot's `BranchMeta` pills (debrief
  * freshness, self-review progress) joined by branch name; lane colors come
@@ -82,7 +91,9 @@ function RowSvg({ row, width }: { row: GraphRow; width: number }) {
   );
 }
 
-/** Branch-tip chip inline with the commit subject. */
+/** Branch-tip chip inline with the commit subject. The chip *is* a branch name,
+ *  so it right-clicks to the branch menu — the commit row around it does not,
+ *  since a commit is not a branch (ADR-0028). */
 function LabelChip({
   label,
   lane,
@@ -91,8 +102,10 @@ function LabelChip({
   lane: number;
 }) {
   const color = laneColor(lane);
+  const { openAt } = useBranchMenu();
   return (
     <span
+      onContextMenu={(e) => openAt(e, label.branch)}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -123,6 +136,123 @@ function LabelChip({
       </span>
       {label.onWorktree && <Icon name="branch" size={9} color={color} />}
     </span>
+  );
+}
+
+/**
+ * One branch in the rail. The row *is* the branch, so the whole row right-clicks
+ * to the branch menu, and a chevron appears on hover/focus so the affordance is
+ * visible and keyboard-reachable — the same pair the table row offers
+ * (ADR-0028). Left-click stays inert: the menu is what the two views share,
+ * not navigation.
+ */
+function RailBranchRow({ b, meta }: { b: GraphBranch; meta: BranchMeta | null }) {
+  const { openAt, triggerProps } = useBranchMenu();
+  const sr = meta?.selfReview ?? null;
+  return (
+    <div
+      className="rail-row"
+      onContextMenu={(e) => openAt(e, b.name)}
+      style={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        padding: '6px 9px',
+        margin: '1px 2px',
+        borderRadius: 6,
+        background: b.isHead ? 'var(--blue-tint)' : 'transparent',
+        border: `1px solid ${b.isHead ? 'rgba(0,122,255,0.28)' : 'transparent'}`,
+      }}
+    >
+      {b.isHead ? (
+        <Icon name="check" size={11} color="var(--blue-press)" />
+      ) : (
+        <span
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: 4,
+            background: b.lane !== null ? laneColor(b.lane) : 'var(--gray-300)',
+            flex: '0 0 7px',
+          }}
+        />
+      )}
+      <span
+        className="mono"
+        style={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: 11.5,
+          fontWeight: b.isHead ? 700 : 500,
+          color: b.isHead ? 'var(--blue-press)' : 'var(--gray-800)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+        title={b.name}
+      >
+        {b.name}
+      </span>
+      {meta?.debriefFreshness === 'new' && (
+        <span
+          title="Debrief · new"
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: 3,
+            background: 'var(--purple)',
+            flex: '0 0 5px',
+          }}
+        />
+      )}
+      {selfReviewStarted(sr) && sr && (
+        /* Notes with nothing viewed still count as started —
+                           the rail shows a comment glyph rather than "0/N". */
+        <span
+          title={
+            sr.viewed > 0
+              ? `Self-review in progress · ${sr.viewed}/${sr.total}`
+              : `Self-review started · ${sr.notes} note${sr.notes === 1 ? '' : 's'}`
+          }
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 2,
+            fontSize: 9.5,
+            fontWeight: 700,
+            color: 'var(--blue-press)',
+          }}
+        >
+          {sr.viewed > 0 ? (
+            `${sr.viewed}/${sr.total}`
+          ) : (
+            <Icon name="comment-fill" size={9} color="var(--blue)" />
+          )}
+        </span>
+      )}
+      {b.onWorktree && (
+        <Icon name="folder" size={11} color={b.isHead ? 'var(--blue-press)' : 'var(--gray-500)'} />
+      )}
+
+      {/* Overlays the pills rather than reserving width — the rail is 248px
+                          and the pills were there first. Opaque (`.btn`) so it masks them. */}
+      <button
+        type="button"
+        className="btn rail-row-menu"
+        {...triggerProps(b.name)}
+        style={{
+          position: 'absolute',
+          right: 4,
+          top: '50%',
+          transform: 'translateY(-50%)',
+          height: 20,
+          padding: '0 5px',
+        }}
+      >
+        <Icon name="chevron-down" size={10} color="var(--gray-500)" />
+      </button>
+    </div>
   );
 }
 
@@ -265,99 +395,13 @@ export function BranchGraph({
                     {branches.length}
                   </span>
                 </div>
-                {branches.map((b) => {
-                  const meta = metaByBranch.get(b.name)?.branchMeta ?? null;
-                  const sr = meta?.selfReview ?? null;
-                  return (
-                    <div
-                      key={b.name}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 7,
-                        padding: '6px 9px',
-                        margin: '1px 2px',
-                        borderRadius: 6,
-                        background: b.isHead ? 'var(--blue-tint)' : 'transparent',
-                        border: `1px solid ${b.isHead ? 'rgba(0,122,255,0.28)' : 'transparent'}`,
-                      }}
-                    >
-                      {b.isHead ? (
-                        <Icon name="check" size={11} color="var(--blue-press)" />
-                      ) : (
-                        <span
-                          style={{
-                            width: 7,
-                            height: 7,
-                            borderRadius: 4,
-                            background: b.lane !== null ? laneColor(b.lane) : 'var(--gray-300)',
-                            flex: '0 0 7px',
-                          }}
-                        />
-                      )}
-                      <span
-                        className="mono"
-                        style={{
-                          flex: 1,
-                          minWidth: 0,
-                          fontSize: 11.5,
-                          fontWeight: b.isHead ? 700 : 500,
-                          color: b.isHead ? 'var(--blue-press)' : 'var(--gray-800)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                        title={b.name}
-                      >
-                        {b.name}
-                      </span>
-                      {meta?.debriefFreshness === 'new' && (
-                        <span
-                          title="Debrief · new"
-                          style={{
-                            width: 5,
-                            height: 5,
-                            borderRadius: 3,
-                            background: 'var(--purple)',
-                            flex: '0 0 5px',
-                          }}
-                        />
-                      )}
-                      {selfReviewStarted(sr) && sr && (
-                        /* Notes with nothing viewed still count as started —
-                           the rail shows a comment glyph rather than "0/N". */
-                        <span
-                          title={
-                            sr.viewed > 0
-                              ? `Self-review in progress · ${sr.viewed}/${sr.total}`
-                              : `Self-review started · ${sr.notes} note${sr.notes === 1 ? '' : 's'}`
-                          }
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 2,
-                            fontSize: 9.5,
-                            fontWeight: 700,
-                            color: 'var(--blue-press)',
-                          }}
-                        >
-                          {sr.viewed > 0 ? (
-                            `${sr.viewed}/${sr.total}`
-                          ) : (
-                            <Icon name="comment-fill" size={9} color="var(--blue)" />
-                          )}
-                        </span>
-                      )}
-                      {b.onWorktree && (
-                        <Icon
-                          name="folder"
-                          size={11}
-                          color={b.isHead ? 'var(--blue-press)' : 'var(--gray-500)'}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
+                {branches.map((b) => (
+                  <RailBranchRow
+                    key={b.name}
+                    b={b}
+                    meta={metaByBranch.get(b.name)?.branchMeta ?? null}
+                  />
+                ))}
               </div>
             );
           })}

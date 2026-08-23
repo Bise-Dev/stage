@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FetchButton } from '../../components/FetchButton';
 import { GitDialog } from '../../components/GitDialog';
 import { Icon } from '../../components/Icon';
@@ -7,6 +7,7 @@ import { TitleBar } from '../../components/TitleBar';
 import type { SwitchPlanOutcome } from '../../generated/SwitchPlanOutcome';
 import { RELOAD } from '../../lib/shortcuts';
 import { useShortcut } from '../../lib/useShortcut';
+import { materializedWorktree } from '../../lib/worktree';
 // Imports used only by the commented-out review surface below:
 //   import { Avatar } from '../../components/Avatar';
 //   import { gitRemoteBranches, openUrl, reviewDraftCreate, reviewDraftDiscard } from '../../tauri';
@@ -29,7 +30,9 @@ import {
 } from '../../tauri';
 import { relativeTimeFromEpoch } from '../../time';
 import { BranchGraph } from './BranchGraph';
-import { BranchTable, selfReviewStarted } from './BranchTable';
+import { type BranchActions, BranchMenuProvider } from './BranchMenu';
+import { BranchTable } from './BranchTable';
+import { selfReviewStarted } from './pills';
 
 /**
  * The branch table — the app's home screen (v6-light L4, design
@@ -93,8 +96,9 @@ export function Overview({
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   // Archived (closed/merged-PR) reviews are hidden by default (DB-5 #88). The
-  // toggle that flipped this lived in the commented-out "On GitHub" section, so
-  // it stays false for now — the loads below still thread it through.
+  // load always fetches them (ADR-0028) and this filters the *view*, so the
+  // toggle — which lived in the commented-out "On GitHub" section — can come
+  // back by uncommenting, with no reload. It stays false meanwhile.
   const [showArchived] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -129,11 +133,16 @@ export function Overview({
   // owns freshness — `gh` is never on this path), so this guard only drops
   // redundant event-driven reloads; the next event reloads.
   const loadInFlight = useRef(false);
-  const load = useCallback(async (withArchived: boolean) => {
+  // Always ask for every row, archived included: the branch menu's name→row
+  // lookup has to cover every branch git can show, and a merged PR whose
+  // branch still exists locally is the ordinary case (ADR-0028). "Show
+  // archived" is a view filter applied below — which is what the Rust side
+  // always claimed it was.
+  const load = useCallback(async () => {
     if (loadInFlight.current) return;
     loadInFlight.current = true;
     try {
-      const view = await overview(withArchived);
+      const view = await overview(true);
       setRows(view.rows);
       setGithubIncluded(view.githubIncluded);
       setOverviewError(null);
@@ -169,8 +178,8 @@ export function Overview({
   }, []);
 
   useEffect(() => {
-    void load(showArchived);
-  }, [load, showArchived]);
+    void load();
+  }, [load]);
 
   // Live refresh: the sync engine pings whenever the snapshot changed (a local
   // commit/branch/worktree/draft change, or a GitHub poll landing new rows).
@@ -178,12 +187,12 @@ export function Overview({
   useEffect(() => {
     const off = onSyncUpdated((u) => {
       setSync(u.status);
-      if (u.scope === 'overview') void load(showArchived);
+      if (u.scope === 'overview') void load();
     });
     return () => {
       void off.then((f) => f());
     };
-  }, [load, showArchived]);
+  }, [load]);
 
   const runFetch = async () => {
     // Guard re-entry: the Fetch button is disabled while fetching, but ⌘R can
@@ -218,7 +227,7 @@ export function Overview({
   // state).
   const startSelfReviewAt = useCallback(
     async (r: OverviewRow) => {
-      const wt = r.branchMeta?.worktree;
+      const wt = materializedWorktree(r.branchMeta);
       if (!wt) return;
       try {
         await setFocusedWorktree(wt.path);
@@ -263,6 +272,23 @@ export function Overview({
   //   [onOpenStoryline],
   // );
 
+  // What every branch surface can do — one bundle, shared by the menu provider
+  // and the table's own row buttons (ADR-0028).
+  const branchActions = useMemo<BranchActions>(
+    () => ({
+      // One surface (L7 M1): the debrief has no route of its own — it renders
+      // inside Self-Review as the chaptered file list.
+      onSelfReview: startSelfReviewAt,
+      onSwitchTo: openSwitchDialog,
+      onError: (title, message) => setGitError({ title, message }),
+      // Commented out with the review surface:
+      // onOpenStoryline: openStorylineAt,
+      // onOpenReview,
+      // onDiscardDraft: setDiscardTarget,
+    }),
+    [startSelfReviewAt, openSwitchDialog],
+  );
+
   // --- Row split (display only — every row's state came derived) ------------
   // The table shows every row backed by a local branch (branch, draft,
   // published, or an authored PR whose branch is in this clone). Rows without
@@ -277,7 +303,9 @@ export function Overview({
     (r.prNumber !== null && `#${r.prNumber}`.includes(q)) ||
     (r.branchMeta?.lastCommit?.toLowerCase().includes(q) ?? false);
 
-  const localRows = rows
+  // Every row backed by a local branch, archived included — what the branch
+  // menu resolves names against (ADR-0028).
+  const allLocalRows = rows
     .filter((r) => r.branchMeta !== null)
     .sort((a, b) => {
       const am = a.branchMeta;
@@ -286,8 +314,10 @@ export function Overview({
       if (am.isCurrent !== bm.isCurrent) return am.isCurrent ? -1 : 1;
       return bm.updatedAt - am.updatedAt;
     });
+  // "Show archived" is a display filter from here down.
+  const localRows = allLocalRows.filter((r) => showArchived || !r.archived);
   // Fed the commented-out "On GitHub" section:
-  // const ghRows = rows.filter((r) => r.branchMeta === null);
+  // const ghRows = rows.filter((r) => r.branchMeta === null).filter(visible);
   const defaultBase = localRows.find((r) => r.branchMeta?.isDefault)?.branch ?? null;
 
   const debriefNew = localRows.filter((r) => r.branchMeta?.debriefFreshness === 'new').length;
@@ -304,149 +334,143 @@ export function Overview({
   // );
 
   return (
-    <div className="stage">
-      <div className="win">
-        <TitleBar title="Stage" />
-        <div
-          style={{
-            flex: 1,
-            minHeight: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            padding: '14px 18px 0',
-          }}
-        >
-          {/* Toolbar */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-            <div style={{ flex: 1, position: 'relative' }}>
-              <div
-                style={{
-                  position: 'absolute',
-                  left: 9,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  color: 'var(--gray-400)',
-                  display: 'flex',
-                }}
-              >
-                <Icon name="search" size={13} />
+    <BranchMenuProvider rows={allLocalRows} actions={branchActions}>
+      <div className="stage">
+        <div className="win">
+          <TitleBar title="Stage" />
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              padding: '14px 18px 0',
+            }}
+          >
+            {/* Toolbar */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <div style={{ flex: 1, position: 'relative' }}>
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: 9,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: 'var(--gray-400)',
+                    display: 'flex',
+                  }}
+                >
+                  <Icon name="search" size={13} />
+                </div>
+                <input
+                  className="input lg"
+                  placeholder="Search by branch, title, author or PR #…"
+                  style={{ paddingLeft: 28, maxWidth: 340 }}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
               </div>
-              <input
-                className="input lg"
-                placeholder="Search by branch, title, author or PR #…"
-                style={{ paddingLeft: 28, maxWidth: 340 }}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-            <div className="seg" style={{ height: 26 }}>
-              <div
-                className={homeView === 'table' ? 'active' : ''}
-                onClick={() => pickHomeView('table')}
-                onKeyDown={(e) => e.key === 'Enter' && pickHomeView('table')}
-                role="tab"
-                tabIndex={0}
-                aria-selected={homeView === 'table'}
-              >
-                Table
+              <div className="seg" style={{ height: 26 }}>
+                <div
+                  className={homeView === 'table' ? 'active' : ''}
+                  onClick={() => pickHomeView('table')}
+                  onKeyDown={(e) => e.key === 'Enter' && pickHomeView('table')}
+                  role="tab"
+                  tabIndex={0}
+                  aria-selected={homeView === 'table'}
+                >
+                  Table
+                </div>
+                <div
+                  className={homeView === 'graph' ? 'active' : ''}
+                  onClick={() => pickHomeView('graph')}
+                  onKeyDown={(e) => e.key === 'Enter' && pickHomeView('graph')}
+                  role="tab"
+                  tabIndex={0}
+                  aria-selected={homeView === 'graph'}
+                >
+                  Graph
+                </div>
               </div>
-              <div
-                className={homeView === 'graph' ? 'active' : ''}
-                onClick={() => pickHomeView('graph')}
-                onKeyDown={(e) => e.key === 'Enter' && pickHomeView('graph')}
-                role="tab"
-                tabIndex={0}
-                aria-selected={homeView === 'graph'}
-              >
-                Graph
-              </div>
-            </div>
-            <SyncedAgo status={sync} />
-            <FetchButton onFetch={runFetch} fetching={fetching} />
-            {/* The composer's only entry (L7 M4), commented out with the review
+              <SyncedAgo status={sync} />
+              <FetchButton onFetch={runFetch} fetching={fetching} />
+              {/* The composer's only entry (L7 M4), commented out with the review
                 surface — there is no Review to create in this version:
 
             <button type="button" className="btn btn-lg" onClick={() => openNewReview()}>
               <Icon name="plus" size={12} color="var(--gray-700)" /> New review…
             </button>
             */}
-          </div>
-
-          {fetchError && <ErrorNote>Fetch failed: {fetchError}</ErrorNote>}
-          {sync?.githubState === 'degraded' && sync.githubError && (
-            <ErrorNote>
-              GitHub sync degraded — showing the last synced state: {sync.githubError}
-            </ErrorNote>
-          )}
-          {sync?.autoFetchError && (
-            <ErrorNote>Background fetch failed: {sync.autoFetchError}</ErrorNote>
-          )}
-          {sync?.localError && (
-            <ErrorNote>Couldn't refresh the overview: {sync.localError}</ErrorNote>
-          )}
-          {overviewError && <ErrorNote>Couldn't load the overview: {overviewError}</ErrorNote>}
-
-          {/* Summary strip */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '0 2px 10px' }}>
-            <span style={{ fontSize: 12, color: 'var(--gray-600)' }}>
-              {localRows.length} {localRows.length === 1 ? 'branch' : 'branches'}
-            </span>
-            {debriefNew > 0 && (
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  fontSize: 11.5,
-                  color: '#7b2cab',
-                }}
-              >
-                <span
-                  style={{ width: 5, height: 5, borderRadius: 3, background: 'var(--purple)' }}
-                />
-                {debriefNew} debrief new
-              </span>
-            )}
-            {selfInProgress > 0 && (
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  fontSize: 11.5,
-                  color: 'var(--blue-press)',
-                }}
-              >
-                <Icon name="eye" size={10} color="var(--blue)" />
-                {selfInProgress} self-review in progress
-              </span>
-            )}
-          </div>
-
-          {homeView === 'graph' ? (
-            /* The graph fills the scroll area; the "On GitHub" tail is a
-               table-view companion and stays there. */
-            <div style={{ flex: 1, minHeight: 0, display: 'flex', paddingBottom: 14 }}>
-              <BranchGraph rows={localRows} refreshKey={sync?.generation ?? 0} />
             </div>
-          ) : (
-            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingBottom: 14 }}>
-              <BranchTable
-                rows={filteredLocal}
-                defaultBase={defaultBase}
-                actions={{
-                  // One surface (L7 M1): the debrief has no route of its own —
-                  // it renders inside Self-Review as the chaptered file list.
-                  onSelfReview: startSelfReviewAt,
-                  onSwitchTo: openSwitchDialog,
-                  // Commented out with the review surface:
-                  // onOpenStoryline: openStorylineAt,
-                  // onOpenReview,
-                  // onDiscardDraft: setDiscardTarget,
-                }}
-              />
 
-              {/* PRs with no local branch — awaiting your review, or yours with
+            {fetchError && <ErrorNote>Fetch failed: {fetchError}</ErrorNote>}
+            {sync?.githubState === 'degraded' && sync.githubError && (
+              <ErrorNote>
+                GitHub sync degraded — showing the last synced state: {sync.githubError}
+              </ErrorNote>
+            )}
+            {sync?.autoFetchError && (
+              <ErrorNote>Background fetch failed: {sync.autoFetchError}</ErrorNote>
+            )}
+            {sync?.localError && (
+              <ErrorNote>Couldn't refresh the overview: {sync.localError}</ErrorNote>
+            )}
+            {overviewError && <ErrorNote>Couldn't load the overview: {overviewError}</ErrorNote>}
+
+            {/* Summary strip */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '0 2px 10px' }}>
+              <span style={{ fontSize: 12, color: 'var(--gray-600)' }}>
+                {localRows.length} {localRows.length === 1 ? 'branch' : 'branches'}
+              </span>
+              {debriefNew > 0 && (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    fontSize: 11.5,
+                    color: '#7b2cab',
+                  }}
+                >
+                  <span
+                    style={{ width: 5, height: 5, borderRadius: 3, background: 'var(--purple)' }}
+                  />
+                  {debriefNew} debrief new
+                </span>
+              )}
+              {selfInProgress > 0 && (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    fontSize: 11.5,
+                    color: 'var(--blue-press)',
+                  }}
+                >
+                  <Icon name="eye" size={10} color="var(--blue)" />
+                  {selfInProgress} self-review in progress
+                </span>
+              )}
+            </div>
+
+            {homeView === 'graph' ? (
+              /* The graph fills the scroll area; the "On GitHub" tail is a
+               table-view companion and stays there. */
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', paddingBottom: 14 }}>
+                {/* The rail lists every local branch git reports, so join the pills
+                  against every local row — not the archived-filtered view. */}
+                <BranchGraph rows={allLocalRows} refreshKey={sync?.generation ?? 0} />
+              </div>
+            ) : (
+              <div style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingBottom: 14 }}>
+                <BranchTable
+                  rows={filteredLocal}
+                  defaultBase={defaultBase}
+                  actions={branchActions}
+                />
+
+                {/* PRs with no local branch — awaiting your review, or yours with
                   the branch gone locally — plus the archived-Reviews toggle.
                   Commented out with the review surface: every row here exists
                   only to be opened as a Review, and there's no local branch to
@@ -523,49 +547,49 @@ export function Overview({
                 </div>
               )}
               */}
-            </div>
-          )}
+              </div>
+            )}
 
-          {/* Footer: repo menu + legend */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 16,
-              padding: '8px 0 10px',
-              borderTop: '1px solid var(--hairline-2)',
-            }}
-          >
-            <div style={{ width: 260, flex: '0 0 260px' }}>
-              <RepoMenu
-                slug={repoSlug}
-                path={repoPath}
-                onChangeRepo={onChangeRepo}
-                onOpenSettings={onOpenSettings}
-              />
-            </div>
+            {/* Footer: repo menu + legend */}
             <div
               style={{
                 display: 'flex',
-                gap: 16,
-                fontSize: 11.5,
-                color: 'var(--gray-500)',
                 alignItems: 'center',
+                gap: 16,
+                padding: '8px 0 10px',
+                borderTop: '1px solid var(--hairline-2)',
               }}
             >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <Icon name="worktree" size={12} color="var(--purple)" /> worktree
-              </span>
-              <span>
-                <span style={{ color: 'var(--orange)', fontWeight: 600 }}>●3</span> uncommitted
-                files
-              </span>
-              <span>everything stays on this machine</span>
+              <div style={{ width: 260, flex: '0 0 260px' }}>
+                <RepoMenu
+                  slug={repoSlug}
+                  path={repoPath}
+                  onChangeRepo={onChangeRepo}
+                  onOpenSettings={onOpenSettings}
+                />
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 16,
+                  fontSize: 11.5,
+                  color: 'var(--gray-500)',
+                  alignItems: 'center',
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <Icon name="worktree" size={12} color="var(--purple)" /> worktree
+                </span>
+                <span>
+                  <span style={{ color: 'var(--orange)', fontWeight: 600 }}>●3</span> uncommitted
+                  files
+                </span>
+                <span>everything stays on this machine</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* The "New review" composer modal and the draft-discard confirmation,
+          {/* The "New review" composer modal and the draft-discard confirmation,
             commented out with the review surface:
 
         {newReviewOpen && (
@@ -589,78 +613,80 @@ export function Overview({
             confirmLabel="Discard"
             onConfirm={async () => {
               await reviewDraftDiscard(discardTarget.branch);
-              await load(showArchived);
+              await load();
             }}
             onClose={() => setDiscardTarget(null)}
           />
         )}
         */}
-        {switchTarget && switchTarget.outcome.kind === 'plan' && (
-          <GitDialog
-            title={
-              <>
-                Switch to <span className="mono">{switchTarget.branch}</span>?
-              </>
-            }
-            body={
-              switchTarget.outcome.plan.uncommittedCount > 0 ? (
+          {switchTarget && switchTarget.outcome.kind === 'plan' && (
+            <GitDialog
+              title={
                 <>
-                  Stage switches this working tree to the branch you picked — your{' '}
-                  <span style={{ color: 'var(--orange)', fontWeight: 600 }}>
-                    {switchTarget.outcome.plan.uncommittedCount} uncommitted{' '}
-                    {switchTarget.outcome.plan.uncommittedCount === 1 ? 'file' : 'files'}
-                  </span>{' '}
-                  will be stashed and restored automatically.
+                  Switch to <span className="mono">{switchTarget.branch}</span>?
                 </>
-              ) : (
-                <>Stage switches this working tree to the branch you picked.</>
-              )
-            }
-            steps={switchTarget.outcome.plan.steps}
-            confirmLabel="Switch branch"
-            onConfirm={async () => {
-              await branchSwitchExecute(switchTarget.branch);
-              await load(showArchived);
-            }}
-            onClose={() => setSwitchTarget(null)}
-          />
-        )}
-        {switchTarget &&
-          switchTarget.outcome.kind === 'checkedOutElsewhere' &&
-          (() => {
-            const { worktreePath } = switchTarget.outcome;
-            return (
-              // Report only: Stage says what git refuses and where the branch
-              // already lives, and does nothing. Re-pointing the observed
-              // worktree from here was offered once and removed — the switch
-              // the user asked for isn't possible, and quietly observing a
-              // different tree instead isn't the same thing.
-              <GitDialog
-                tone="blocked"
-                icon="folder"
-                title={`Already checked out — ${switchTarget.branch}`}
-                body={
+              }
+              body={
+                switchTarget.outcome.plan.uncommittedCount > 0 ? (
                   <>
-                    Git forbids a second checkout of a branch another worktree holds, so this
-                    working tree can't switch to <span className="mono">{switchTarget.branch}</span>
-                    . It's already checked out here:
+                    Stage switches this working tree to the branch you picked — your{' '}
+                    <span style={{ color: 'var(--orange)', fontWeight: 600 }}>
+                      {switchTarget.outcome.plan.uncommittedCount} uncommitted{' '}
+                      {switchTarget.outcome.plan.uncommittedCount === 1 ? 'file' : 'files'}
+                    </span>{' '}
+                    will be stashed and restored automatically.
                   </>
-                }
-                details={[{ label: 'Worktree', value: worktreePath }]}
-                onClose={() => setSwitchTarget(null)}
-              />
-            );
-          })()}
-        {gitError && (
-          <GitDialog
-            tone="error"
-            title={gitError.title}
-            body={gitError.message}
-            onClose={() => setGitError(null)}
-          />
-        )}
+                ) : (
+                  <>Stage switches this working tree to the branch you picked.</>
+                )
+              }
+              steps={switchTarget.outcome.plan.steps}
+              confirmLabel="Switch branch"
+              onConfirm={async () => {
+                await branchSwitchExecute(switchTarget.branch);
+                await load();
+              }}
+              onClose={() => setSwitchTarget(null)}
+            />
+          )}
+          {switchTarget &&
+            switchTarget.outcome.kind === 'checkedOutElsewhere' &&
+            (() => {
+              const { worktreePath } = switchTarget.outcome;
+              return (
+                // Report only: Stage says what git refuses and where the branch
+                // already lives, and does nothing. Re-pointing the observed
+                // worktree from here was offered once and removed — the switch
+                // the user asked for isn't possible, and quietly observing a
+                // different tree instead isn't the same thing.
+                <GitDialog
+                  tone="blocked"
+                  icon="folder"
+                  title={`Already checked out — ${switchTarget.branch}`}
+                  body={
+                    <>
+                      Git forbids a second checkout of a branch another worktree holds, so this
+                      working tree can't switch to{' '}
+                      <span className="mono">{switchTarget.branch}</span>. It's already checked out
+                      here:
+                    </>
+                  }
+                  details={[{ label: 'Worktree', value: worktreePath }]}
+                  onClose={() => setSwitchTarget(null)}
+                />
+              );
+            })()}
+          {gitError && (
+            <GitDialog
+              tone="error"
+              title={gitError.title}
+              body={gitError.message}
+              onClose={() => setGitError(null)}
+            />
+          )}
+        </div>
       </div>
-    </div>
+    </BranchMenuProvider>
   );
 }
 

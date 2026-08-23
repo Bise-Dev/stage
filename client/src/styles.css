@@ -340,6 +340,21 @@ body {
 .dropdown-trigger[aria-expanded="true"] .dropdown-caret {
   transform: rotate(180deg);
 }
+/* Graph rail rows advertise the branch menu the way a table row does, but only
+   while pointed at or focused, so the rail's pills keep their width (ADR-0028).
+   The chevron stays in the DOM either way — that's the keyboard path. */
+.rail-row-menu {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms ease-out;
+}
+.rail-row:hover .rail-row-menu,
+.rail-row:focus-within .rail-row-menu,
+.rail-row-menu[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .dropdown-menu {
   position: absolute;
   top: calc(100% + 4px);

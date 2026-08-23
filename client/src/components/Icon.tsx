@@ -11,6 +11,7 @@ export type IconName =
   | 'worktree'
   | 'play'
   | 'doc-stack'
+  | 'copy'
   | 'search'
   | 'eye'
   | 'grip'
@@ -223,6 +224,20 @@ export function Icon({ name, size = 14, color = 'currentColor', className }: Ico
         >
           <rect x="3" y="3" width="8" height="9" rx="1.2" />
           <path d="M5 1.5h6a1 1 0 0 1 1 1V10" />
+        </svg>
+      );
+    case 'copy':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <rect x="5" y="5" width="7.5" height="7.5" rx="1.2" />
+          <path d="M9 3.2V2.7a1.2 1.2 0 0 0-1.2-1.2H2.7a1.2 1.2 0 0 0-1.2 1.2v5.1A1.2 1.2 0 0 0 2.7 9h.5" />
         </svg>
       );
     case 'play':

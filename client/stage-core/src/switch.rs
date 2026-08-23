@@ -122,6 +122,23 @@ pub fn switch_plan(repo_path: &Path, target_branch: &str) -> Result<SwitchPlanOu
             "`{target_branch}` is already checked out in this working tree."
         )));
     }
+    // git keeps holding a branch whose worktree directory was deleted behind
+    // its back, so no checkout can succeed until the author prunes it. Refuse
+    // here rather than at execute time: the plan would otherwise look valid,
+    // and a dirty tree would be stashed before git rejected the checkout.
+    if let Some((path, reason)) = branch_prunable_worktree(repo_path, target_branch)? {
+        return Err(StageError::Invalid(format!(
+            "Couldn't switch to `{target_branch}` — git still holds it on a worktree it \
+             reports as prunable ({}{}). Stage never prunes worktrees, so run \
+             `git worktree prune` yourself, then Fetch.",
+            path.display(),
+            if reason.is_empty() {
+                String::new()
+            } else {
+                format!(": {reason}")
+            }
+        )));
+    }
     if let Some(other) = branch_worktree_elsewhere(repo_path, target_branch)? {
         return Ok(SwitchPlanOutcome::CheckedOutElsewhere {
             target_branch: target_branch.to_string(),
@@ -265,6 +282,26 @@ fn pop_stash_by_id(repo_path: &Path, sha: &str) -> Result<(), StageError> {
         .to_string();
     let out = run_git(repo_path, &["stash", "pop", &stash_ref])?;
     check_git(&out, "git stash pop")
+}
+
+/// The prunable worktree holding `branch`, with git's own reason, if any.
+///
+/// A prunable worktree is not a Worktree for Stage's purposes (CONTEXT.md), but
+/// git still refuses a second checkout of its branch — so this is the one place
+/// that has to look at the dead ones.
+fn branch_prunable_worktree(
+    repo_path: &Path,
+    branch: &str,
+) -> Result<Option<(PathBuf, String)>, StageError> {
+    for wt in list_worktrees(repo_path)? {
+        if wt.branch.as_deref() != Some(branch) {
+            continue;
+        }
+        if let Some(reason) = wt.prunable {
+            return Ok(Some((wt.path, reason)));
+        }
+    }
+    Ok(None)
 }
 
 /// The branch another linked worktree has checked out, if any.
@@ -451,6 +488,28 @@ mod tests {
             }
             other => panic!("expected CheckedOutElsewhere, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn plan_refuses_a_branch_held_by_a_prunable_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        init_repo(&repo);
+        let linked = tmp.path().join("repo-feat");
+        git(
+            &repo,
+            &["worktree", "add", "-q", linked.to_str().unwrap(), "feat"],
+        );
+        // Delete the directory behind git's back: the worktree is now prunable,
+        // but git keeps holding `feat` until someone prunes it.
+        fs::remove_dir_all(&linked).unwrap();
+
+        let err = switch_plan(&repo, "feat").unwrap_err();
+        assert!(err.to_string().contains("prunable"), "got: {err}");
+        assert!(
+            err.to_string().contains("worktree prune"),
+            "the message must name the command the author has to run: {err}"
+        );
     }
 
     #[test]
