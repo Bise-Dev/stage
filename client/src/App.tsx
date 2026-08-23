@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { REVIEW_SURFACE_ENABLED } from './featureFlags';
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { Overview } from './screens/overview/Overview';
 import { LocalReview } from './screens/review/LocalReview';
@@ -19,8 +20,11 @@ import {
 // or sign-in (§5) — identity is the local `gh` user, resolved lazily where needed.
 // A repo is opened onto ONE home screen — the branch-table Overview (v6-light
 // L4) — from which the author works locally in the review shell (Self-Review,
-// with the agent's Debrief folded in — v6-light L7) and the Storyline → Publish
-// flow, or reviews a PR read-only (LocalReview), all via `gh`/`git`.
+// with the agent's Debrief folded in — v6-light L7).
+//
+// The `localStoryline` and `localReview` views belong to the review surface,
+// which this version does not support (ADR-0028): they stay wired but are
+// unreachable while `REVIEW_SURFACE_ENABLED` is false.
 type View = 'openRepo' | 'overview' | 'shell' | 'localStoryline' | 'localReview' | 'settings';
 
 export function App() {
@@ -44,12 +48,14 @@ export function App() {
 
   // Set the active repo and route per the `stage open` intent's mode (ADR-0014,
   // ADR-0022 §6): `Review` opens the carried PR read-only; otherwise Self-Review.
+  // While the review surface is off (ADR-0028) a `Review` intent can't arrive —
+  // `st open <pr-url>` refuses at the CLI — so this falls through to Self-Review.
   // Fail-loud (CLAUDE.md): a bad repo path surfaces and falls back to the picker.
   const routeToIntent = useCallback(async (intent: OpenIntent) => {
     try {
       await setActiveRepo(intent.repo);
       setHasRepo(true);
-      if (intent.mode === 'review' && intent.pr) {
+      if (REVIEW_SURFACE_ENABLED && intent.mode === 'review' && intent.pr) {
         setLocalReviewPr(intent.pr);
         setView('localReview');
       } else {
@@ -153,13 +159,13 @@ export function App() {
       />
     );
   }
-  if (view === 'localReview' && localReviewPr) {
+  if (REVIEW_SURFACE_ENABLED && view === 'localReview' && localReviewPr) {
     return <LocalReview pr={localReviewPr} onBack={backFromLocalReview} />;
   }
   if (view === 'shell') {
     return <ReviewShell onExit={exitShell} seedBaseFromDebrief={seedBase} />;
   }
-  if (view === 'localStoryline') {
+  if (REVIEW_SURFACE_ENABLED && view === 'localStoryline') {
     return <Storyline onBack={exitLocalStoryline} />;
   }
   return (

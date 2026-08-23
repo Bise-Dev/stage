@@ -2,6 +2,8 @@
 
 Stage is a local-first tool for human-tailored pull-request review: authors craft a guided walkthrough (a **Storyline** of **Chapters**) over their own branch; reviewers follow it and comment. GitHub stays the system of record; Stage stores only what git and GitHub can't represent.
 
+> **What ships today is narrower than what this map describes.** The current version supports **local Self-Review with the agent's Debrief folded in, and nothing else**; the storyline / publish / reviewer half is built in `stage-core` but hidden in the webview behind one flag (`client/src/featureFlags.ts`) and refused by the CLI. See **ADR-0028**. The layers, stores and decisions below are unchanged by that gate — it is a webview + CLI concern only.
+
 This page is a **map**, not a spec — it carries no detail of its own. Each concern points to where the canonical answer lives:
 
 - **Domain language** → [`CONTEXT.md`](../CONTEXT.md) (the glossary; the single source for what each term means).
@@ -52,5 +54,8 @@ Everything else — PR data, comments/reviews once submitted, CI, branches — l
 | Chapters replace steps as the storyline unit (.stage format v2) | 0025 |
 | Review comments draft locally, submit as one GitHub review | 0026 |
 | Working-tree mutations are scoped, confirmed actions | 0027 |
+| The review surface is gated, not deleted, until it ships | 0028 |
 
 ADRs 0001–0009, 0013, 0017, 0020–0021 concern the retired backend/auth architecture and stand as history; ADR-0003's write-through principle is superseded by 0026 for composing a review.
+
+ADR-0028 does not supersede 0014, 0018, 0019, 0024, 0025 or 0026 — it scopes them: they still describe how the review surface works, just not what a user of this version can reach.

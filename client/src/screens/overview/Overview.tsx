@@ -5,6 +5,7 @@ import { GitDialog } from '../../components/GitDialog';
 import { Icon } from '../../components/Icon';
 import { RepoMenu } from '../../components/RepoMenu';
 import { TitleBar } from '../../components/TitleBar';
+import { REVIEW_SURFACE_ENABLED } from '../../featureFlags';
 import type { SwitchPlanOutcome } from '../../generated/SwitchPlanOutcome';
 import { RELOAD } from '../../lib/shortcuts';
 import { useShortcut } from '../../lib/useShortcut';
@@ -347,10 +348,14 @@ export function Overview({
             <SyncedAgo status={sync} />
             <FetchButton onFetch={runFetch} fetching={fetching} />
             {/* Kept per F5 (build order, not feature removal) — plain style;
-                the light design drops the *primary* Create button. */}
-            <button type="button" className="btn btn-lg" onClick={() => openNewReview()}>
-              <Icon name="plus" size={12} color="var(--gray-700)" /> New review…
-            </button>
+                the light design drops the *primary* Create button. Hidden while
+                the review surface is unsupported (ADR-0028): with no Review to
+                create, this is the composer's only entry (L7 M4). */}
+            {REVIEW_SURFACE_ENABLED && (
+              <button type="button" className="btn btn-lg" onClick={() => openNewReview()}>
+                <Icon name="plus" size={12} color="var(--gray-700)" /> New review…
+              </button>
+            )}
           </div>
 
           {fetchError && <ErrorNote>Fetch failed: {fetchError}</ErrorNote>}
@@ -427,8 +432,11 @@ export function Overview({
               />
 
               {/* PRs with no local branch — awaiting your review, or yours with
-                the branch gone locally. Compact, but the capability stays. */}
-              {(filteredGh.length > 0 || !githubIncluded) && (
+                the branch gone locally. Compact, but the capability stays.
+                Hidden while the review surface is unsupported (ADR-0028): every
+                row here exists only to be opened as a Review, and there is no
+                local branch to self-review instead. */}
+              {REVIEW_SURFACE_ENABLED && (filteredGh.length > 0 || !githubIncluded) && (
                 <div style={{ marginTop: 16 }}>
                   <div
                     style={{
@@ -536,20 +544,26 @@ export function Overview({
                 files
               </span>
               <span>
-                reviews live locally in <span className="mono">.stage/</span>
+                everything stays on this machine
+                {REVIEW_SURFACE_ENABLED ? (
+                  <>
+                    {' '}
+                    · reviews live in <span className="mono">.stage/</span>
+                  </>
+                ) : null}
               </span>
             </div>
           </div>
         </div>
 
-        {newReviewOpen && (
+        {REVIEW_SURFACE_ENABLED && newReviewOpen && (
           <NewReviewModal
             branchRows={branchRowsForModal}
             onClose={() => setNewReviewOpen(false)}
             onCreated={onOpenStoryline}
           />
         )}
-        {discardTarget && (
+        {REVIEW_SURFACE_ENABLED && discardTarget && (
           <GitDialog
             icon="doc-stack"
             title="Discard this review?"

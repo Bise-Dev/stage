@@ -1,5 +1,5 @@
 //! `st` — Stage's command line: launch the desktop app, and give a coding agent
-//! a way to author a Debrief and read the author's Review notes back. No
+//! a way to author a Debrief and read the author's Self-Review notes back. No
 //! network, no Stage token, no GitHub credentials: it writes through
 //! `stage-core` into the app-data store the desktop app shares (ADR-0011).
 
@@ -12,8 +12,8 @@ use stage_core::diff::{
     assert_files_in_base_diff, default_base, self_review_diff, DiffLineIndex, SelfReviewScope,
 };
 use stage_core::{
-    branch_head_sha, parse_pr_ref, repo_key_from_cwd, repo_root_from_cwd, resolve_clone,
-    DebriefInput, NoteStatus, PrRef, StageError, Store,
+    branch_head_sha, repo_key_from_cwd, repo_root_from_cwd, resolve_clone, DebriefInput,
+    NoteStatus, PrRef, StageError, Store,
 };
 
 /// Stage — local-first pull request review.
@@ -42,21 +42,18 @@ enum Command {
     SelfReview(SelfReviewCmd),
     /// Open the Stage desktop app, or focus it if it is already running.
     ///
-    /// With no argument, opens the current repo so you can walk your own branch.
+    /// Opens the current repo so you can walk your own branch.
     ///
-    /// Given a pull request, opens it for review: Stage picks the local clone
-    /// whose remote matches, fetches the pull request's head, and shows its
-    /// walkthrough and diff. Your working tree is left exactly as it was, and
-    /// nothing is checked out. If you have no clone of that repo, `st` says so
-    /// instead of guessing.
+    /// Opening a pull request is not supported in this version of Stage — it
+    /// only does local self-review — so passing one is refused rather than
+    /// quietly opening your own branch instead.
     ///
     /// Run this from inside the repo you want to open. Set `STAGE_GUI_BIN` if
     /// the Stage app lives somewhere `st` cannot find on its own.
     Open {
-        /// The pull request to review: a GitHub URL, e.g.
-        /// `https://github.com/owner/repo/pull/123`, or the short form
-        /// `owner/repo#123`. Omit to open the current repo instead.
-        #[arg(value_name = "PR")]
+        /// Reserved for a pull request (a GitHub URL, or `owner/repo#123`).
+        /// Not supported in this version — omit it to open the current repo.
+        #[arg(value_name = "PR", hide = true)]
         target: Option<String>,
     },
 }
@@ -150,28 +147,31 @@ fn run(cli: Cli) -> Result<(), StageError> {
             let root = repo_root_from_cwd(&cwd)?;
             self_review(cmd, &cwd, &root)
         }
-        // `open` may be run from anywhere for a PR URL, so it resolves its own
-        // repo (it must not require cwd to be a repo for the review path).
+        // `open` resolves its own repo: it kept the PR path's freedom to run
+        // from outside a repo, and now refuses a PR target there (ADR-0028).
         Command::Open { target } => open(target, &cwd),
     }
 }
 
-/// `st open [<pr-url>]`. With no argument, open the current repo in
-/// Self-Review (the existing behaviour). With a PR URL (or `owner/repo#number`),
-/// resolve it to a local clone by `origin` match and open it in read-only review
-/// mode (ADR-0022 §6, milestone F). Fail loud on an unparseable target or when no
-/// matching local clone exists.
+/// `st open`. Opens the current repo in Self-Review — the one flow this version
+/// supports.
+///
+/// A PR target is refused, not ignored (ADR-0028, CLAUDE.md fail-loud): the
+/// read-only reviewer entry (ADR-0022 §6, milestone F) is implemented below and
+/// stays covered by tests, but opening it would land the user on a screen the
+/// app no longer routes to. Deleting the review path instead of gating it would
+/// throw away working code we intend to switch back on.
 fn open(target: Option<String>, cwd: &Path) -> Result<(), StageError> {
     match target {
         None => {
             let root = repo_root_from_cwd(cwd)?;
             open_gui(&root)
         }
-        Some(target) => {
-            let pr = parse_pr_ref(&target)?;
-            let clone = resolve_review_clone(&pr, cwd)?;
-            open_review_gui(&pr, &clone)
-        }
+        Some(target) => Err(StageError::Invalid(format!(
+            "Opening a pull request isn't supported in this version of Stage — \
+             it only does local self-review of the branch you're on. \
+             Run `st open` with no argument inside the repo instead (got '{target}')."
+        ))),
     }
 }
 
@@ -179,6 +179,10 @@ fn open(target: Option<String>, cwd: &Path) -> Result<(), StageError> {
 /// runs `st open <pr-url>` from within (or above) their clone, so the cwd's
 /// repo is the candidate; a cwd that isn't a git repo simply yields no candidate
 /// and falls through to [`resolve_clone`]'s loud "no local clone" error.
+///
+/// Unreachable from `open` while the review surface is off (ADR-0028) — kept,
+/// with its tests, so switching the surface back on is a one-line change.
+#[allow(dead_code)]
 fn resolve_review_clone(pr: &PrRef, cwd: &Path) -> Result<PathBuf, StageError> {
     let candidates: Vec<PathBuf> = repo_root_from_cwd(cwd).map(|r| vec![r]).unwrap_or_default();
     resolve_clone(&candidates, pr)
@@ -216,6 +220,9 @@ fn open_gui(root: &Path) -> Result<(), StageError> {
 /// `--review <owner>/<repo>#<number>` into an `OpenMode::Review` intent and, on a
 /// warm start, the single-instance plugin forwards this argv to the live app.
 /// Detached stdio for the same reason as [`open_gui`].
+///
+/// Unreachable while the review surface is off (ADR-0028) — see [`open`].
+#[allow(dead_code)]
 fn open_review_gui(pr: &PrRef, clone: &Path) -> Result<(), StageError> {
     let bin = resolve_gui_binary()?;
     let spec = format!("{}/{}#{}", pr.owner, pr.name, pr.number);

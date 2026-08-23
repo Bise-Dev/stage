@@ -7,6 +7,7 @@ import {
   useState,
 } from 'react';
 import { Icon } from '../../components/Icon';
+import { REVIEW_SURFACE_ENABLED } from '../../featureFlags';
 import type { SelfReviewProgress } from '../../generated/SelfReviewProgress';
 
 type IconName = ComponentProps<typeof Icon>['name'];
@@ -152,10 +153,15 @@ function rowMenuActions(r: OverviewRow) {
   const meta = r.branchMeta;
   const wt = meta?.worktree ?? null;
   const materialized = wt !== null && !wt.prunable;
+  // `storyline` and `discard` act on the Review artifact, which this version
+  // doesn't support (ADR-0028) — they drop out of the menu while it's off.
   const entries = {
     review: { shown: !!meta && (!meta.isDefault || meta.hasDebrief), enabled: materialized },
-    storyline: { shown: r.kind === 'draft' || r.kind === 'published', enabled: materialized },
-    discard: { shown: r.kind === 'draft', enabled: true },
+    storyline: {
+      shown: REVIEW_SURFACE_ENABLED && (r.kind === 'draft' || r.kind === 'published'),
+      enabled: materialized,
+    },
+    discard: { shown: REVIEW_SURFACE_ENABLED && r.kind === 'draft', enabled: true },
     switchTo: { shown: !!meta && !meta.isCurrent, enabled: true },
   };
   return { ...entries, any: Object.values(entries).some((e) => e.shown && e.enabled) };
@@ -251,8 +257,10 @@ export function BranchTable({
             <Head label="Branch" />
             <Head label="Base" right />
             <Head label="Diff" right />
-            <Head label="Local review" />
-            <Head label="GitHub" />
+            <Head label="Self-review" />
+            {/* The PR column carries GitHub's review decision, so it goes with
+                the rest of the review surface (ADR-0028). */}
+            {REVIEW_SURFACE_ENABLED && <Head label="GitHub" />}
             <Head label="Updated" right />
             <Head label="" right />
           </tr>
@@ -316,8 +324,11 @@ function BranchRow({
   const selfLabel = sr && sr.viewed > 0 ? 'Continue' : 'Self-review';
   const acts = rowMenuActions(r);
   const showSelfButton = !meta.isDefault;
+  // The draft/published Review chip — hidden with the rest of the review
+  // surface (ADR-0028), so the column shows only local self-review state.
   const localChip =
-    r.kind === 'draft' || (r.kind === 'published' && r.prNumber === null) ? (
+    REVIEW_SURFACE_ENABLED &&
+    (r.kind === 'draft' || (r.kind === 'published' && r.prNumber === null)) ? (
       <button
         type="button"
         className={`badge ${st.cls}`}
@@ -432,29 +443,31 @@ function BranchRow({
           )}
         </div>
       </td>
-      <td style={{ ...CELL }}>
-        {r.prNumber !== null ? (
-          <button
-            type="button"
-            className={`badge ${st.cls || 'badge-green'}`}
-            onClick={() => pr && actions.onOpenReview(pr)}
-            disabled={!pr}
-            title={r.url ?? undefined}
-            style={{
-              border: 'none',
-              cursor: 'default',
-              fontFamily: 'inherit',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 3,
-            }}
-          >
-            <Icon name="gh" size={9} color="currentColor" /> #{r.prNumber} · {st.label}
-          </button>
-        ) : (
-          <span style={{ fontSize: 11, color: 'var(--gray-300)' }}>—</span>
-        )}
-      </td>
+      {REVIEW_SURFACE_ENABLED && (
+        <td style={{ ...CELL }}>
+          {r.prNumber !== null ? (
+            <button
+              type="button"
+              className={`badge ${st.cls || 'badge-green'}`}
+              onClick={() => pr && actions.onOpenReview(pr)}
+              disabled={!pr}
+              title={r.url ?? undefined}
+              style={{
+                border: 'none',
+                cursor: 'default',
+                fontFamily: 'inherit',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+              }}
+            >
+              <Icon name="gh" size={9} color="currentColor" /> #{r.prNumber} · {st.label}
+            </button>
+          ) : (
+            <span style={{ fontSize: 11, color: 'var(--gray-300)' }}>—</span>
+          )}
+        </td>
+      )}
       <td style={{ ...CELL, textAlign: 'right', color: 'var(--gray-400)', fontSize: 11 }}>
         {relativeTimeFromEpoch(meta.updatedAt)}
       </td>
