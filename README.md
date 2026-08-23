@@ -16,7 +16,7 @@ There are no prebuilt releases yet — you build the app once from this repo.
 - [`gh`](https://cli.github.com), authenticated (`gh auth login`) — Stage does all GitHub API work through it.
 - macOS: Xcode Command Line Tools (`xcode-select --install`).
 
-### Build & install
+### Build & install the CLI
 
 ```sh
 just client::install-cli
@@ -28,6 +28,18 @@ This builds the desktop app plus the `st` CLI and links the CLI to `~/.local/bin
 st open              # open the current repo in Stage
 st open <pr-url>     # open a specific PR
 ```
+
+### Install the app into /Applications
+
+`install-cli` leaves the app inside the build tree, which is enough for `st open`. To get a real Mac app, one you can launch from the Dock or Spotlight, install the production build:
+
+```sh
+just client::install-app
+```
+
+That builds the release bundle and copies it to `/Applications/Stage.app`, replacing any copy already there. `st open` launches the build tree's app when there is one and falls back to `/Applications` (then `~/Applications`), so it keeps working either way — set `STAGE_GUI_BIN` to point it at a specific app.
+
+Because Stage has no prebuilt releases yet, an installed copy can quietly fall behind the repo. **Settings → About** shows the version and the date and time this copy was built — check it there, and re-run `just client::install-app` after pulling.
 
 ## How to use
 

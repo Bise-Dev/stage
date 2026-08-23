@@ -56,6 +56,32 @@ pub struct RepoInfo {
     pub path: PathBuf,
 }
 
+/// When this copy of Stage was built. There are no prebuilt releases — every
+/// user builds the app themselves — so the version string alone says nothing
+/// about how fresh an installed copy is; the build time does.
+#[derive(Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct BuildInfo {
+    /// The moment this binary was compiled, as Unix epoch seconds. Baked in by
+    /// `src-tauri/build.rs`; a JSON number on the wire (see `Debrief`).
+    #[ts(type = "number")]
+    pub built_at: i64,
+}
+
+/// Report this binary's build time (the About section). The stamp is a
+/// compile-time constant from `build.rs`, so there is nothing to fail here.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn build_info() -> BuildInfo {
+    // `build.rs` writes this as decimal epoch seconds and fails the build on
+    // anything else, so the parse is infallible in practice; a panic here would
+    // mean the stamp was corrupted between compile and run.
+    let built_at = env!("STAGE_BUILD_TIMESTAMP")
+        .parse::<i64>()
+        .expect("STAGE_BUILD_TIMESTAMP is stamped as epoch seconds by build.rs");
+    BuildInfo { built_at }
+}
+
 #[tauri::command]
 // `pill = "cmd"` tags this span so the dev Activity-log layer records one row
 // per invocation with its duration (debug builds only). `skip_all` keeps the

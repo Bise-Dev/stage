@@ -4,7 +4,7 @@ import { Avatar } from '../../components/Avatar';
 import { Icon } from '../../components/Icon';
 import { StageLogo } from '../../components/StageLogo';
 import { TitleBar } from '../../components/TitleBar';
-import { type GitHubUser, ghIdentity } from '../../tauri';
+import { type GitHubUser, buildInfo, ghIdentity } from '../../tauri';
 
 /**
  * Settings is a single scrolling page: the GitHub identity Stage acts as, and
@@ -174,9 +174,23 @@ function AccountSection() {
   );
 }
 
+/**
+ * Render a build timestamp (Unix epoch seconds) as a local date and time. Stage
+ * has no prebuilt releases — every copy is built from source — so "when was this
+ * built" is the honest answer to "how old is my install?".
+ */
+function formatBuiltAt(builtAt: number): string {
+  return new Date(builtAt * 1000).toLocaleString(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+}
+
 function AboutSection() {
   const [version, setVersion] = useState<string | null>(null);
   const [versionError, setVersionError] = useState<string | null>(null);
+  const [builtAt, setBuiltAt] = useState<number | null>(null);
+  const [builtAtError, setBuiltAtError] = useState<string | null>(null);
 
   useEffect(() => {
     getVersion()
@@ -186,6 +200,14 @@ function AboutSection() {
         // blank or fabricated version.
         console.warn('app_version_failed', e);
         setVersionError(String(e));
+      });
+    buildInfo()
+      .then((info) => setBuiltAt(info.built_at))
+      .catch((e) => {
+        // Same rule as the version above: a missing build time is shown as a
+        // failure, never quietly omitted.
+        console.warn('build_info_failed', e);
+        setBuiltAtError(String(e));
       });
   }, []);
 
@@ -221,6 +243,17 @@ function AboutSection() {
               `Version ${version}`
             ) : (
               'Version …'
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 2 }}>
+            {builtAtError ? (
+              <span style={{ color: 'var(--red-d)' }}>
+                Couldn't read build time: {builtAtError}
+              </span>
+            ) : builtAt !== null ? (
+              `Built ${formatBuiltAt(builtAt)}`
+            ) : (
+              'Built …'
             )}
           </div>
           <div style={{ fontSize: 12.5, color: 'var(--gray-600)', marginTop: 6, lineHeight: 1.5 }}>

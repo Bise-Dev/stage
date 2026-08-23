@@ -5,9 +5,11 @@ default:
 dev:
     bun run tauri dev
 
-# Production build
+# Production build: the app bundle plus the platform installers, into
+# target/release/bundle/. STAGE_BUILD_TIMESTAMP stamps the binary with the
+# moment it was compiled (shown in the app's About section).
 build:
-    bun run tauri build
+    STAGE_BUILD_TIMESTAMP="$(date +%s)" bun run tauri build
 
 # Install JS deps
 install:
@@ -18,10 +20,20 @@ install:
 # `target/release/Stage` is the local launch target; set STAGE_GUI_BIN
 # to point at an installed bundle instead.
 install-cli:
-    bun run tauri build --bundles app
+    STAGE_BUILD_TIMESTAMP="$(date +%s)" bun run tauri build --bundles app
     cargo build -p stage-cli --release
     mkdir -p ~/.local/bin
     ln -sf "$(pwd)/target/release/st" ~/.local/bin/st
+
+# Install the production build into /Applications, replacing whatever copy is
+# there. That makes Stage launchable from the Dock/Spotlight and lets `st open`
+# find it without a build tree. `ditto` (not `cp -R`) so the bundle's metadata
+# and code signature survive the copy. macOS only.
+install-app:
+    STAGE_BUILD_TIMESTAMP="$(date +%s)" bun run tauri build --bundles app
+    rm -rf /Applications/Stage.app
+    ditto target/release/bundle/macos/Stage.app /Applications/Stage.app
+    @echo "installed /Applications/Stage.app"
 
 # Lint: Biome (TS) + cargo fmt --check (whole cargo workspace)
 lint:

@@ -1,7 +1,7 @@
-//! `st` — the local CLI a coding agent drives to author a Debrief (and, in
-//! later PRs, to read the author's Review notes back). No network, no Stage
-//! token, no GitHub credentials: it writes through `stage-core` into the
-//! app-data store the desktop app shares (ADR-0011).
+//! `st` — Stage's command line: launch the desktop app, and give a coding agent
+//! a way to author a Debrief and read the author's Review notes back. No
+//! network, no Stage token, no GitHub credentials: it writes through
+//! `stage-core` into the app-data store the desktop app shares (ADR-0011).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -16,8 +16,20 @@ use stage_core::{
     DebriefInput, NoteStatus, PrRef, StageError, Store,
 };
 
+/// Stage — local-first pull request review.
+///
+/// `st open` launches the Stage desktop app: on the current repo, so you can
+/// review your own branch before sharing it, or on a pull request you have been
+/// asked to review.
+///
+/// `st self-review` is the side a coding agent uses. It attaches a Debrief — the
+/// agent's own chaptered walkthrough of the work it just did — to the current
+/// branch, and reads back the notes you leave on it in Stage.
+///
+/// Everything happens on your machine. Stage keeps no credentials of its own and
+/// reaches GitHub through your own `git` and `gh`.
 #[derive(Parser)]
-#[command(name = "st", about = "Stage — local agent self-review", version)]
+#[command(name = "st", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -25,61 +37,75 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Author or inspect the Debrief for the current repo + branch.
+    /// Write or inspect the Debrief for the current branch. Used by coding agents.
     #[command(subcommand)]
     SelfReview(SelfReviewCmd),
-    /// Open (or focus) the Stage desktop app, forwarding the target to a running
-    /// instance (ADR-0014). With no argument, opens the current repo in
-    /// Self-Review. With a GitHub **PR URL** (or `owner/repo#number`), opens that
-    /// PR in **read-only review mode** (ADR-0022 §6): the PR is resolved to a
-    /// local clone by `origin` match, its head is fetched, and the storyline +
-    /// diff render with no working-tree mutation. No matching local clone is a
-    /// loud, actionable error. Fails loud (nonzero) if the GUI binary can't be
-    /// located — set `STAGE_GUI_BIN` to override.
+    /// Open the Stage desktop app, or focus it if it is already running.
+    ///
+    /// With no argument, opens the current repo so you can walk your own branch.
+    ///
+    /// Given a pull request, opens it for review: Stage picks the local clone
+    /// whose remote matches, fetches the pull request's head, and shows its
+    /// walkthrough and diff. Your working tree is left exactly as it was, and
+    /// nothing is checked out. If you have no clone of that repo, `st` says so
+    /// instead of guessing.
+    ///
+    /// Run this from inside the repo you want to open. Set `STAGE_GUI_BIN` if
+    /// the Stage app lives somewhere `st` cannot find on its own.
     Open {
-        /// A GitHub PR URL (e.g. `https://github.com/owner/repo/pull/123`) or
-        /// `owner/repo#123`. Omit to open the current repo in Self-Review.
-        #[arg(value_name = "PR_URL")]
+        /// The pull request to review: a GitHub URL, e.g.
+        /// `https://github.com/owner/repo/pull/123`, or the short form
+        /// `owner/repo#123`. Omit to open the current repo instead.
+        #[arg(value_name = "PR")]
         target: Option<String>,
     },
 }
 
 #[derive(Subcommand)]
 enum SelfReviewCmd {
-    /// List the files in the current Base-scope diff (committed branch work +
-    /// uncommitted edits, against `--base` or the repo's default branch) as
-    /// JSON — the candidate files for a Debrief.
+    /// List this branch's changed files as JSON — the files a Debrief can cover.
+    ///
+    /// Covers committed work and uncommitted edits alike, compared against the
+    /// base branch. Each entry carries the path, whether it was added, modified
+    /// or deleted, and how many lines it gained and lost.
     Files {
-        /// Base branch to diff against. Defaults to the repo's default branch.
+        /// Branch to compare against. Defaults to the repo's default branch.
         #[arg(long)]
         base: Option<String>,
     },
-    /// Read a Debrief JSON document from stdin and store it. Every `file` must
-    /// be in the Base-scope diff against the payload's `base` (else rejected).
-    /// Echoes the stored Debrief (with resolved timestamps) on success.
+    /// Store a Debrief read as JSON from stdin, replacing any previous one.
+    ///
+    /// A Debrief is a list of chapters. Each chapter has a title, a markdown
+    /// intro saying what changed and why, and the files it walks through, in
+    /// reading order. Every file listed has to be one of this branch's changed
+    /// files (see `st self-review files`); otherwise nothing is stored and the
+    /// offending paths are named. Prints the stored Debrief on success.
     ///
     /// Stdin shape:
-    /// `{ "base": "main", "steps": [{ "file": "...", "intro": "md", "order": 0 }] }`
+    /// `{"base": "main", "chapters": [{"title": "...", "intro": "markdown", "files": ["src/a.rs"]}]}`
     Set,
-    /// Print the stored Debrief for the current repo + branch as JSON (or
-    /// `null` if none has been authored).
+    /// Print the stored Debrief for the current branch as JSON, or `null` if
+    /// none has been written.
     Show,
-    /// Delete the stored Debrief for the current repo + branch.
+    /// Delete the stored Debrief for the current branch.
     Clear,
-    /// List the author's Review notes for the current repo + branch as JSON,
-    /// each carrying its `replies` thread and a computed `outdated` flag (its
-    /// anchored file left the diff, or its anchored line range is gone). Filter
-    /// with `--status`; the agent reads `--status open` to find work.
+    /// List the author's review notes on the current branch as JSON.
+    ///
+    /// Each note carries its thread of replies and an `outdated` flag, set when
+    /// the code it was written against has changed since. Filter with
+    /// `--status`; `--status open` is the work still waiting on a reply.
     Notes {
+        /// Show only the notes in this state.
         #[arg(long, value_enum)]
         status: Option<StatusArg>,
     },
-    /// Append the agent's reply to a Review note's thread, marking it
-    /// `addressed`. Fails loud if the note id is unknown or already resolved.
+    /// Reply to a review note and mark it addressed.
+    ///
+    /// Fails if the note id is unknown, or the author has already resolved it.
     Address {
-        /// The note id (from `notes`).
+        /// Id of the note to reply to, as printed by `st self-review notes`.
         id: String,
-        /// The agent's reply describing how it addressed the note.
+        /// The reply — what was changed in response to the note.
         #[arg(long)]
         reply: String,
     },

@@ -260,6 +260,7 @@ pub fn run() {
             commands::branch_switch_execute,
             commands::branch_graph,
             commands::gh_identity,
+            commands::build_info,
             commands::publish_readiness,
             commands::publish_uncommitted,
             commands::review_publish,
