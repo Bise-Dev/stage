@@ -16,6 +16,7 @@ import type { BaseOptions } from './generated/BaseOptions';
 import type { BranchGraphView } from './generated/BranchGraphView';
 import type { BranchInfo } from './generated/BranchInfo';
 import type { BranchMeta } from './generated/BranchMeta';
+import type { BuildInfo } from './generated/BuildInfo';
 import type { ChangedFile } from './generated/ChangedFile';
 import type { Chapter } from './generated/Chapter';
 // New-engine DTOs (ADR-0022): identity (C), publish (D), verdict/review (E-RW),
@@ -159,6 +160,7 @@ export type {
   UncommittedFile,
   WorktreeInfo,
   WorktreeMeta,
+  BuildInfo,
   CheckResult,
   CheckStatus,
   DraftLineComment,
@@ -436,6 +438,11 @@ export const reviewCheckoutBranch = (pr: PrRef, branch: string) =>
  *  sign-in). Rejects with `gh`'s message verbatim if `gh` is absent or
  *  unauthenticated (the caller renders it and points at `gh auth login`). */
 export const ghIdentity = () => invoke<GitHubUser>('gh_identity');
+
+/** When this copy of Stage was built (`built_at` is Unix epoch seconds). Stage
+ *  ships no prebuilt releases, so the build time — not the version string —
+ *  is what tells the user how fresh their install is. */
+export const buildInfo = () => invoke<BuildInfo>('build_info');
 
 // --- Publish (PUB-1..7, ADR-0022 §3/§7, milestone D) ---
 // The one-action publish: serialize the local draft into `.stage/<branch>/`,
