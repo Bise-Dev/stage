@@ -118,8 +118,8 @@ The local git repository, identified by its git **common directory** — the uni
 _Avoid_: "active repo" (that names a path, not the entity); "clone".
 
 **Worktree**:
-A working directory git has attached to a Repo, each checked out on its own branch (git permits at most one worktree per branch). Surfaced as an annotation on the branch in the repo's branch list, never as a separate Repo. Stage only **observes** worktrees — it never creates, removes, prunes, or checks them out (the one exception is the user-confirmed reviewer checkout, ADR-0016/0022); their lifecycle stays with git and whatever tool the author uses.
-_Avoid_: "checkout"; "Workspace"; "workspace" (jj's word for this concept).
+A working directory git has attached to a Repo, each checked out on its own branch (git permits at most one worktree per branch). Surfaced as an annotation on the branch in the repo's branch list, never as a separate Repo. Stage only **observes** worktrees — it never creates, removes, prunes, or checks them out (the one exception is the user-confirmed reviewer checkout, ADR-0016/0022); their lifecycle stays with git and whatever tool the author uses. A worktree git reports **prunable** (its directory is gone) is not a Worktree for Stage's purposes: every view treats its branch as having none, because nothing there can be opened, reviewed, or switched to — the branch list still marks it `prunable` so the user can see why the worktree went away. Git still refuses a second checkout of that branch until the user prunes it themselves.
+_Avoid_: "checkout"; "Workspace"; "workspace" (jj's word for this concept); calling a prunable worktree a Worktree.
 
 **Root worktree** / **Linked worktree**:
 Git's original worktree (the one whose gitdir is the common-dir) vs. worktrees added later. The root cannot be removed; linked ones can. Either may hold the Default branch. Shown as a `root` / `⌥ worktree` badge in the branch list's worktree column.

@@ -127,9 +127,14 @@ pub fn branch_graph(repo_path: &Path) -> Result<BranchGraphView, StageError> {
     let repo = Repository::open(repo_path)?;
 
     // Local branch tips: name → tip sha. Worktree flags come from `git
-    // worktree list` (the porcelain owns that truth, ADR-0016).
+    // worktree list` (the porcelain owns that truth, ADR-0016). Prunable
+    // worktrees are skipped: a worktree whose directory is gone is not a
+    // Worktree for Stage's purposes (CONTEXT.md), so the rail must not group a
+    // branch under "Worktrees" that the branch menu then calls not-checked-out
+    // (ADR-0028).
     let worktree_branches: Vec<String> = list_worktrees(repo_path)?
         .into_iter()
+        .filter(|w| w.prunable.is_none())
         .filter_map(|w| w.branch)
         .collect();
     let head_branch = repo
@@ -344,6 +349,48 @@ mod tests {
         git(dir, &["init", "-q", "-b", "main"]);
         commit(dir, "a.txt", "one");
         commit(dir, "a.txt", "two");
+    }
+
+    #[test]
+    fn a_prunable_worktree_does_not_flag_its_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        init_repo(&repo);
+        git(&repo, &["branch", "feat"]);
+        let linked = tmp.path().join("repo-feat");
+        git(
+            &repo,
+            &["worktree", "add", "-q", linked.to_str().unwrap(), "feat"],
+        );
+
+        let live = branch_graph(&repo).unwrap();
+        assert!(
+            live.branches
+                .iter()
+                .any(|b| b.name == "feat" && b.on_worktree),
+            "a live worktree flags its branch"
+        );
+
+        // Delete the directory behind git's back: the worktree is prunable, so
+        // the branch must stop reading as checked out anywhere (ADR-0028) —
+        // otherwise the rail groups it under Worktrees while the branch menu
+        // calls it not-checked-out.
+        fs::remove_dir_all(&linked).unwrap();
+
+        let dead = branch_graph(&repo).unwrap();
+        assert!(
+            dead.branches
+                .iter()
+                .any(|b| b.name == "feat" && !b.on_worktree),
+            "a prunable worktree must not flag its branch"
+        );
+        assert!(
+            dead.rows
+                .iter()
+                .flat_map(|r| &r.labels)
+                .any(|l| l.branch == "feat" && !l.on_worktree),
+            "the branch-tip chip must agree with the rail"
+        );
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { useSuppressNativeContextMenu } from './lib/useSuppressNativeContextMenu';
 import { OpenRepository } from './screens/onboarding/OpenRepository';
 import { Overview } from './screens/overview/Overview';
 import { Settings } from './screens/settings/Settings';
@@ -29,6 +30,9 @@ import {
 type View = 'openRepo' | 'overview' | 'shell' | 'settings';
 
 export function App() {
+  // The webview's own right-click menu is suppressed app-wide; branch names
+  // put ours there instead (ADR-0028).
+  useSuppressNativeContextMenu();
   // `booting` covers draining this launch's `stage open` intent before we pick a
   // first screen, so a deep-link lands directly instead of flashing the picker.
   const [booting, setBooting] = useState(true);
