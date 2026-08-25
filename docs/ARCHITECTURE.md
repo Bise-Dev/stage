@@ -2,6 +2,8 @@
 
 Stage is a local-first tool for human-tailored pull-request review: authors craft a guided walkthrough (a **Storyline** of **Chapters**) over their own branch; reviewers follow it and comment. GitHub stays the system of record; Stage stores only what git and GitHub can't represent.
 
+> **What ships today is narrower than what this map describes.** The current version supports **local Self-Review with the agent's Debrief folded in, and nothing else**; the storyline / publish / reviewer half is built in `stage-core` but its UI is **commented out** in the webview and refused by the CLI. The layers, stores and decisions below are unaffected — it's a webview + CLI concern only, and the ADRs still describe how the review surface works, just not what a user of this version can reach.
+
 This page is a **map**, not a spec — it carries no detail of its own. Each concern points to where the canonical answer lives:
 
 - **Domain language** → [`CONTEXT.md`](../CONTEXT.md) (the glossary; the single source for what each term means).

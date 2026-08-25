@@ -10,16 +10,20 @@ import { Icon } from '../../components/Icon';
 import type { SelfReviewProgress } from '../../generated/SelfReviewProgress';
 
 type IconName = ComponentProps<typeof Icon>['name'];
-import type { OverviewRow, PrRef, ReviewStatus } from '../../tauri';
+import type { OverviewRow, ReviewStatus } from '../../tauri';
 import { relativeTimeFromEpoch } from '../../time';
 
 /**
  * The dense branch table — the v6-light home (design `V6L_Branches`). One row
  * per local branch (every `OverviewRow` carrying `branchMeta`), columns for
  * the local-git facts L2 put on the snapshot (uncommitted count, debrief
- * freshness, self-review progress) plus the GitHub PR chip. A pure renderer:
- * every cell shows a value Rust already derived; absent data renders as
- * absent ('—'), never faked.
+ * freshness, self-review progress). A pure renderer: every cell shows a value
+ * Rust already derived; absent data renders as absent ('—'), never faked.
+ *
+ * COMMENTED OUT here: the review surface. This version of Stage supports local
+ * Self-Review + the agent's Debrief only, so the draft/published Review chip,
+ * the GitHub PR column (it carries GitHub's *review decision*) and the
+ * Storyline / Discard-review row actions are commented out rather than deleted.
  */
 
 /** Status badge label + class per derived status (WS-5), shared by the GitHub
@@ -133,10 +137,11 @@ export type BranchTableActions = {
    *  Caller guards on a materialized worktree; the table disables the
    *  affordance otherwise. */
   onSelfReview: (r: OverviewRow) => void;
-  onOpenStoryline: (r: OverviewRow) => void;
-  onOpenReview: (pr: PrRef) => void;
   onSwitchTo: (branch: string) => void;
-  onDiscardDraft: (r: OverviewRow) => void;
+  // Commented out with the review surface (see the note at the top of the file):
+  // onOpenStoryline: (r: OverviewRow) => void;
+  // onOpenReview: (pr: PrRef) => void;
+  // onDiscardDraft: (r: OverviewRow) => void;
 };
 
 /**
@@ -152,10 +157,13 @@ function rowMenuActions(r: OverviewRow) {
   const meta = r.branchMeta;
   const wt = meta?.worktree ?? null;
   const materialized = wt !== null && !wt.prunable;
+  // `storyline` and `discard` acted on the Review artifact — commented out with
+  // the review surface, so the menu is Self-review + Switch only:
+  //
+  //   storyline: { shown: r.kind === 'draft' || r.kind === 'published', enabled: materialized },
+  //   discard: { shown: r.kind === 'draft', enabled: true },
   const entries = {
     review: { shown: !!meta && (!meta.isDefault || meta.hasDebrief), enabled: materialized },
-    storyline: { shown: r.kind === 'draft' || r.kind === 'published', enabled: materialized },
-    discard: { shown: r.kind === 'draft', enabled: true },
     switchTo: { shown: !!meta && !meta.isCurrent, enabled: true },
   };
   return { ...entries, any: Object.values(entries).some((e) => e.shown && e.enabled) };
@@ -187,14 +195,16 @@ function Head({ label, right }: { label: string; right?: boolean }) {
   );
 }
 
-/** Parse `{owner}/{name}#{number}` out of a PR's github.com URL — same rule as
- *  the board rows used; null on unknown shapes (the chip then stays inert). */
-function prRefFromUrl(url: string | null): PrRef | null {
-  if (!url) return null;
-  const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-  if (!m) return null;
-  return { owner: m[1], name: m[2], number: Number(m[3]) };
-}
+// Fed the commented-out PR cell; commented out with it:
+//
+// /** Parse `{owner}/{name}#{number}` out of a PR's github.com URL — same rule as
+//  *  the board rows used; null on unknown shapes (the chip then stays inert). */
+// function prRefFromUrl(url: string | null): PrRef | null {
+//   if (!url) return null;
+//   const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+//   if (!m) return null;
+//   return { owner: m[1], name: m[2], number: Number(m[3]) };
+// }
 
 export function BranchTable({
   rows,
@@ -251,8 +261,8 @@ export function BranchTable({
             <Head label="Branch" />
             <Head label="Base" right />
             <Head label="Diff" right />
-            <Head label="Local review" />
-            <Head label="GitHub" />
+            <Head label="Self-review" />
+            {/* <Head label="GitHub" /> — commented out with the PR column */}
             <Head label="Updated" right />
             <Head label="" right />
           </tr>
@@ -308,37 +318,41 @@ function BranchRow({
   const wt = meta.worktree;
   const materialized = wt !== null && !wt.prunable;
   const sr = meta.selfReview;
-  const st = statusBadge(r);
-  const pr = prRefFromUrl(r.url);
+  // Both only fed the commented-out Review chip + PR cell:
+  // const st = statusBadge(r);
+  // const pr = prRefFromUrl(r.url);
   // Base: a Review row carries its chosen base; a plain branch diffs against
   // the repo default (the DTO says so) — name it when we know it.
   const base = r.baseRef ?? (meta.isDefault ? null : defaultBase);
   const selfLabel = sr && sr.viewed > 0 ? 'Continue' : 'Self-review';
   const acts = rowMenuActions(r);
   const showSelfButton = !meta.isDefault;
-  const localChip =
-    r.kind === 'draft' || (r.kind === 'published' && r.prNumber === null) ? (
-      <button
-        type="button"
-        className={`badge ${st.cls}`}
-        onClick={() => materialized && actions.onOpenStoryline(r)}
-        disabled={!materialized}
-        title={
-          materialized
-            ? 'Open the storyline for this review'
-            : 'Check the branch out in a worktree to compose its storyline'
-        }
-        style={{
-          border: 'none',
-          cursor: 'default',
-          fontFamily: 'inherit',
-          flex: '0 0 auto',
-          opacity: materialized ? 1 : 0.6,
-        }}
-      >
-        {st.label}
-      </button>
-    ) : null;
+  // The draft/published Review chip, commented out with the review surface — the
+  // Self-review column now shows only local state (debrief + viewed progress):
+  //
+  // const localChip =
+  //   r.kind === 'draft' || (r.kind === 'published' && r.prNumber === null) ? (
+  //     <button
+  //       type="button"
+  //       className={`badge ${st.cls}`}
+  //       onClick={() => materialized && actions.onOpenStoryline(r)}
+  //       disabled={!materialized}
+  //       title={
+  //         materialized
+  //           ? 'Open the storyline for this review'
+  //           : 'Check the branch out in a worktree to compose its storyline'
+  //       }
+  //       style={{
+  //         border: 'none',
+  //         cursor: 'default',
+  //         fontFamily: 'inherit',
+  //         flex: '0 0 auto',
+  //         opacity: materialized ? 1 : 0.6,
+  //       }}
+  //     >
+  //       {st.label}
+  //     </button>
+  //   ) : null;
 
   return (
     <tr
@@ -426,12 +440,16 @@ function BranchRow({
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <DebriefPill r={r} />
           <SelfReviewPill sr={sr} />
-          {localChip}
-          {!meta.debriefFreshness && !localChip && (!sr || sr.viewed === 0) && (
+          {/* {localChip} — the Review chip, commented out above */}
+          {!meta.debriefFreshness && (!sr || sr.viewed === 0) && (
             <span style={{ fontSize: 11, color: 'var(--gray-300)' }}>—</span>
           )}
         </div>
       </td>
+      {/* The GitHub PR cell, commented out with the review surface — it renders
+          GitHub's review decision (In review / Changes requested / Approved)
+          and opens the PR in the reviewer:
+
       <td style={{ ...CELL }}>
         {r.prNumber !== null ? (
           <button
@@ -455,6 +473,7 @@ function BranchRow({
           <span style={{ fontSize: 11, color: 'var(--gray-300)' }}>—</span>
         )}
       </td>
+      */}
       <td style={{ ...CELL, textAlign: 'right', color: 'var(--gray-400)', fontSize: 11 }}>
         {relativeTimeFromEpoch(meta.updatedAt)}
       </td>
@@ -608,6 +627,9 @@ function BranchActionMenu({
           }
         />
       )}
+      {/* The Storyline and Discard-review entries, commented out with the
+          review surface:
+
       {acts.storyline.shown && (
         <MenuItem
           icon="doc-stack"
@@ -631,10 +653,11 @@ function BranchActionMenu({
           sub="Remove the draft; the branch returns to Self-Review."
         />
       )}
+      */}
       {acts.switchTo.shown && (
         <>
           {/* Separator only when there is something above it to separate. */}
-          {(acts.review.shown || acts.storyline.shown || acts.discard.shown) && (
+          {acts.review.shown && (
             <hr style={{ border: 0, borderTop: '1px solid var(--hairline)', margin: '5px 2px' }} />
           )}
           <MenuItem

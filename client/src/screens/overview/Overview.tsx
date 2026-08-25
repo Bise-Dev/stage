@@ -1,5 +1,4 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import { Avatar } from '../../components/Avatar';
 import { FetchButton } from '../../components/FetchButton';
 import { GitDialog } from '../../components/GitDialog';
 import { Icon } from '../../components/Icon';
@@ -8,37 +7,37 @@ import { TitleBar } from '../../components/TitleBar';
 import type { SwitchPlanOutcome } from '../../generated/SwitchPlanOutcome';
 import { RELOAD } from '../../lib/shortcuts';
 import { useShortcut } from '../../lib/useShortcut';
+// Imports used only by the commented-out review surface below:
+//   import { Avatar } from '../../components/Avatar';
+//   import { gitRemoteBranches, openUrl, reviewDraftCreate, reviewDraftDiscard } from '../../tauri';
+//   import { relativeTime } from '../../time';
+//   import { statusBadge } from './BranchTable';
+//   type PrRef
 import {
   type OverviewRow,
-  type PrRef,
   type SyncStatus,
   branchSwitchExecute,
   branchSwitchPlan,
   getActiveRepo,
   gitFetch,
-  gitRemoteBranches,
   onSyncUpdated,
-  openUrl,
   overview,
   repoSummary,
-  reviewDraftCreate,
-  reviewDraftDiscard,
   setFocusedWorktree,
   syncNow,
   syncStatus,
 } from '../../tauri';
-import { relativeTime, relativeTimeFromEpoch } from '../../time';
+import { relativeTimeFromEpoch } from '../../time';
 import { BranchGraph } from './BranchGraph';
-import { BranchTable, statusBadge } from './BranchTable';
+import { BranchTable } from './BranchTable';
 
 /**
  * The branch table — the app's home screen (v6-light L4, design
  * `V6L_Branches`). One dense row per local branch, joining what git + the
  * per-machine store know (worktrees, uncommitted counts, debrief freshness,
- * self-review progress — all derived by Rust, L2) with what GitHub knows
- * (the PR chip, via the sync engine). Replaces the bucketed two-column card
- * board; PRs with no local branch stay reachable in the compact "On GitHub"
- * section below the table (F5 — light is build order, not feature removal).
+ * self-review progress — all derived by Rust, L2). Replaces the bucketed
+ * two-column card board. The GitHub half — the PR chip and the "On GitHub · no
+ * local branch" section — is commented out with the review surface (below).
  *
  * A **pure renderer** (ADR-0022 §7): Rust assembles every row with its state
  * already derived (`overview`); this screen only filters/sorts for display.
@@ -50,41 +49,53 @@ function slugFromRemote(url: string | null): string | null {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
-/** Parse `{owner}/{name}#{number}` out of a PR's github.com URL. Null on any
- *  shape we don't recognise — the row then falls back to the external link. */
-function prRefFromUrl(url: string | null): PrRef | null {
-  if (!url) return null;
-  const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-  if (!m) return null;
-  return { owner: m[1], name: m[2], number: Number(m[3]) };
-}
+// Fed the commented-out "On GitHub" row; commented out with it:
+//
+// /** Parse `{owner}/{name}#{number}` out of a PR's github.com URL. Null on any
+//  *  shape we don't recognise — the row then falls back to the external link. */
+// function prRefFromUrl(url: string | null): PrRef | null {
+//   if (!url) return null;
+//   const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+//   if (!m) return null;
+//   return { owner: m[1], name: m[2], number: Number(m[3]) };
+// }
 
+// COMMENTED OUT throughout this file: the review surface. This version of Stage
+// supports local Self-Review + the agent's Debrief only — everything downstream
+// of "Ready to share" (the Review artifact, storyline composition, Publish,
+// reviewer entry, GitHub verdicts) works in stage-core but isn't good enough to
+// show yet. The `onOpenStoryline` / `onOpenReview` props, the "New review…"
+// button and its modal, the discard-draft dialog and the "On GitHub" section are
+// commented out rather than deleted, so bringing them back is uncommenting.
 export function Overview({
   onChangeRepo,
   onStartSelfReview,
-  onOpenStoryline,
-  onOpenReview,
+  // onOpenStoryline,
+  // onOpenReview,
   onOpenSettings,
 }: {
   onChangeRepo: () => void;
   onStartSelfReview: () => void;
-  onOpenStoryline: () => void;
-  onOpenReview: (pr: PrRef) => void;
+  // onOpenStoryline: () => void;
+  // onOpenReview: (pr: PrRef) => void;
   onOpenSettings: () => void;
 }) {
   const [repoSlug, setRepoSlug] = useState<string | null>(null);
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [rows, setRows] = useState<OverviewRow[]>([]);
-  const [githubIncluded, setGithubIncluded] = useState(true);
+  // Only read by the commented-out "On GitHub" section; still set so the load
+  // path stays intact.
+  const [, setGithubIncluded] = useState(true);
   // The sync engine's status: freshness timestamps + the loud, verbatim causes
   // of a degraded GitHub poll / failed local assembly / failed auto-fetch.
   const [sync, setSync] = useState<SyncStatus | null>(null);
   // Even the local assembly failed: nothing renders but this banner.
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  // Archived (closed/merged-PR) reviews are hidden by default (DB-5 #88); this
-  // toggle re-asks Rust with the filter flipped (never stored).
-  const [showArchived, setShowArchived] = useState(false);
+  // Archived (closed/merged-PR) reviews are hidden by default (DB-5 #88). The
+  // toggle that flipped this lived in the commented-out "On GitHub" section, so
+  // it stays false for now — the loads below still thread it through.
+  const [showArchived] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   // Table ⇄ Graph home choice (v6-light L6), persisted like other view prefs.
@@ -95,9 +106,11 @@ export function Overview({
     localStorage.setItem('home:view', v);
     setHomeView(v);
   };
-  // The composer's single entry point (L7 M4) — the toolbar's "New review".
-  const [newReviewOpen, setNewReviewOpen] = useState(false);
-  const [discardTarget, setDiscardTarget] = useState<OverviewRow | null>(null);
+  // The composer's single entry point (L7 M4) — the toolbar's "New review" —
+  // and the draft-discard confirmation. Both commented out with the review
+  // surface (see the note above `Overview`).
+  // const [newReviewOpen, setNewReviewOpen] = useState(false);
+  // const [discardTarget, setDiscardTarget] = useState<OverviewRow | null>(null);
   // The explicit "Switch to branch…" flow (v6-light L3, ADR-0027 as amended):
   // a planned outcome opens the command-listing confirmation; a
   // checked-out-elsewhere outcome opens the "focus that worktree" variant.
@@ -110,7 +123,7 @@ export function Overview({
   // opened — `GitDialog` tone `error`, the engine's message verbatim.
   const [gitError, setGitError] = useState<{ title: string; message: string } | null>(null);
 
-  const openNewReview = useCallback(() => setNewReviewOpen(true), []);
+  // const openNewReview = useCallback(() => setNewReviewOpen(true), []);
 
   // One load in flight at a time. Loads are snapshot reads (the sync engine
   // owns freshness — `gh` is never on this path), so this guard only drops
@@ -230,23 +243,25 @@ export function Overview({
   }, []);
 
   // Focus the row's worktree, then open the storyline composer (cwd-bound: the
-  // composer reads the focused worktree's branch).
-  const openStorylineAt = useCallback(
-    async (row: OverviewRow) => {
-      const wt = row.branchMeta?.worktree;
-      if (!wt) return;
-      try {
-        await setFocusedWorktree(wt.path);
-        onOpenStoryline();
-      } catch (e) {
-        // Fail loud (CLAUDE.md): the composer reads the *focused* worktree, so a
-        // failed focus would have opened it on the wrong branch. Say so instead.
-        console.warn('overview_focus_worktree_failed', e);
-        setGitError({ title: "Couldn't open that worktree", message: String(e) });
-      }
-    },
-    [onOpenStoryline],
-  );
+  // composer reads the focused worktree's branch). Commented out with the
+  // review surface:
+  //
+  // const openStorylineAt = useCallback(
+  //   async (row: OverviewRow) => {
+  //     const wt = row.branchMeta?.worktree;
+  //     if (!wt) return;
+  //     try {
+  //       await setFocusedWorktree(wt.path);
+  //       onOpenStoryline();
+  //     } catch (e) {
+  //       // Fail loud (CLAUDE.md): the composer reads the *focused* worktree, so a
+  //       // failed focus would have opened it on the wrong branch. Say so instead.
+  //       console.warn('overview_focus_worktree_failed', e);
+  //       setGitError({ title: "Couldn't open that worktree", message: String(e) });
+  //     }
+  //   },
+  //   [onOpenStoryline],
+  // );
 
   // --- Row split (display only — every row's state came derived) ------------
   // The table shows every row backed by a local branch (branch, draft,
@@ -271,7 +286,8 @@ export function Overview({
       if (am.isCurrent !== bm.isCurrent) return am.isCurrent ? -1 : 1;
       return bm.updatedAt - am.updatedAt;
     });
-  const ghRows = rows.filter((r) => r.branchMeta === null);
+  // Fed the commented-out "On GitHub" section:
+  // const ghRows = rows.filter((r) => r.branchMeta === null);
   const defaultBase = localRows.find((r) => r.branchMeta?.isDefault)?.branch ?? null;
 
   const debriefNew = localRows.filter((r) => r.branchMeta?.debriefFreshness === 'new').length;
@@ -281,10 +297,12 @@ export function Overview({
   }).length;
 
   const filteredLocal = localRows.filter(matchRow);
-  const filteredGh = ghRows.filter(matchRow);
-  const branchRowsForModal = localRows.filter(
-    (r) => r.kind === 'branch' && !r.branchMeta?.isDefault,
-  );
+  // Feed the commented-out "On GitHub" section and the "New review" modal:
+  //
+  // const filteredGh = ghRows.filter(matchRow);
+  // const branchRowsForModal = localRows.filter(
+  //   (r) => r.kind === 'branch' && !r.branchMeta?.isDefault,
+  // );
 
   return (
     <div className="stage">
@@ -346,11 +364,13 @@ export function Overview({
             </div>
             <SyncedAgo status={sync} />
             <FetchButton onFetch={runFetch} fetching={fetching} />
-            {/* Kept per F5 (build order, not feature removal) — plain style;
-                the light design drops the *primary* Create button. */}
+            {/* The composer's only entry (L7 M4), commented out with the review
+                surface — there is no Review to create in this version:
+
             <button type="button" className="btn btn-lg" onClick={() => openNewReview()}>
               <Icon name="plus" size={12} color="var(--gray-700)" /> New review…
             </button>
+            */}
           </div>
 
           {fetchError && <ErrorNote>Fetch failed: {fetchError}</ErrorNote>}
@@ -419,15 +439,20 @@ export function Overview({
                   // One surface (L7 M1): the debrief has no route of its own —
                   // it renders inside Self-Review as the chaptered file list.
                   onSelfReview: startSelfReviewAt,
-                  onOpenStoryline: openStorylineAt,
-                  onOpenReview,
                   onSwitchTo: openSwitchDialog,
-                  onDiscardDraft: setDiscardTarget,
+                  // Commented out with the review surface:
+                  // onOpenStoryline: openStorylineAt,
+                  // onOpenReview,
+                  // onDiscardDraft: setDiscardTarget,
                 }}
               />
 
               {/* PRs with no local branch — awaiting your review, or yours with
-                the branch gone locally. Compact, but the capability stays. */}
+                  the branch gone locally — plus the archived-Reviews toggle.
+                  Commented out with the review surface: every row here exists
+                  only to be opened as a Review, and there's no local branch to
+                  self-review instead.
+
               {(filteredGh.length > 0 || !githubIncluded) && (
                 <div style={{ marginTop: 16 }}>
                   <div
@@ -498,6 +523,7 @@ export function Overview({
                   )}
                 </div>
               )}
+              */}
             </div>
           )}
 
@@ -535,12 +561,13 @@ export function Overview({
                 <span style={{ color: 'var(--orange)', fontWeight: 600 }}>●3</span> uncommitted
                 files
               </span>
-              <span>
-                reviews live locally in <span className="mono">.stage/</span>
-              </span>
+              <span>everything stays on this machine</span>
             </div>
           </div>
         </div>
+
+        {/* The "New review" composer modal and the draft-discard confirmation,
+            commented out with the review surface:
 
         {newReviewOpen && (
           <NewReviewModal
@@ -568,6 +595,7 @@ export function Overview({
             onClose={() => setDiscardTarget(null)}
           />
         )}
+        */}
         {switchTarget && switchTarget.outcome.kind === 'plan' && (
           <GitDialog
             title={
@@ -674,312 +702,315 @@ function ErrorNote({ children }: { children: ReactNode }) {
     </div>
   );
 }
-
-/** A compact row for a PR with no local branch: reviewer rows carry the
- *  author's avatar and a Review entry; authored rows open the PR. */
-function GhRow({ r, onOpenReview }: { r: OverviewRow; onOpenReview: (pr: PrRef) => void }) {
-  const st = statusBadge(r);
-  const pr = prRefFromUrl(r.url);
-  const open = () => {
-    if (pr) onOpenReview(pr);
-    else if (r.url) openUrl(r.url).catch((e) => console.warn('open_url_failed', e));
-  };
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        background: '#fff',
-        border: '1px solid var(--hairline)',
-        borderRadius: 'var(--r-md)',
-        padding: '7px 10px',
-        boxShadow: 'var(--sh-1)',
-        minWidth: 0,
-      }}
-    >
-      {r.role === 'reviewer' ? (
-        <Avatar name={r.authorLogin ?? '?'} size="sm" />
-      ) : (
-        <Icon name="gh" size={13} color="var(--gray-600)" />
-      )}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span
-          title={r.title || r.branch}
-          style={{
-            fontSize: 12.5,
-            fontWeight: 600,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {r.title || r.branch}
-        </span>
-        {r.prNumber !== null && (
-          <span
-            className="badge"
-            style={{
-              background: 'rgba(0,0,0,0.06)',
-              flex: '0 0 auto',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 3,
-            }}
-          >
-            <Icon name="gh" size={9} color="var(--gray-700)" /> #{r.prNumber}
-          </span>
-        )}
-        <span className={`badge ${st.cls}`} style={{ flex: '0 0 auto' }}>
-          {st.label}
-        </span>
-        {r.role === 'reviewer' && r.authorLogin && (
-          <span style={{ fontSize: 11, color: 'var(--gray-500)', flex: '0 0 auto' }}>
-            by {r.authorLogin}
-          </span>
-        )}
-      </div>
-      <span style={{ fontSize: 10.5, color: 'var(--gray-500)', flex: '0 0 auto' }}>
-        {r.updatedAt ? relativeTime(r.updatedAt) : ''}
-      </span>
-      <button type="button" className="btn" onClick={open} title={r.url ?? undefined}>
-        <Icon name="eye" size={10} color="var(--gray-700)" />{' '}
-        {r.role === 'reviewer' ? 'Review' : 'Open'}
-      </button>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    // biome-ignore lint/a11y/noLabelWithoutControl: the control is passed in via {children} (select/input), which Biome can't statically associate.
-    <label style={{ display: 'block', marginBottom: 10 }}>
-      <div
-        style={{
-          fontSize: 11.5,
-          fontWeight: 600,
-          color: 'var(--gray-600)',
-          marginBottom: 4,
-        }}
-      >
-        {label}
-      </div>
-      {children}
-    </label>
-  );
-}
-
-/** "New review" (WS-2 #60; the composer's single entry per L7 M4): pick a
- *  branch (checked out in a worktree — the engine keys the draft off the
- *  focused worktree), a base, and an optional title; creates the per-machine
- *  draft and opens the storyline composer. */
-function NewReviewModal({
-  branchRows,
-  onClose,
-  onCreated,
-}: {
-  branchRows: OverviewRow[];
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const withWorktree = branchRows.filter(
-    (r) => r.branchMeta?.worktree && !r.branchMeta.worktree.prunable,
-  );
-  const without = branchRows.filter(
-    (r) => !r.branchMeta?.worktree || r.branchMeta.worktree.prunable,
-  );
-  const [headRef, setHeadRef] = useState(withWorktree[0]?.branch ?? '');
-  // Base is the PR merge target, stored remote-tracking (`origin/<name>`) so
-  // the diff prefers the remote copy; Publish strips the prefix for gh.
-  const [baseRef, setBaseRef] = useState('');
-  const [baseOptions, setBaseOptions] = useState<string[]>([]);
-  const [title, setTitle] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const remote = await gitRemoteBranches();
-        const names = remote.map((b) =>
-          b.name.startsWith('origin/') ? b.name : `origin/${b.name}`,
-        );
-        setBaseOptions(names);
-        setBaseRef((cur) => cur || names.find((n) => n === 'origin/main') || names[0] || 'main');
-      } catch (e) {
-        // Additive: without remote branches the field falls back to free text
-        // via the lone current value; creation still works (local-first).
-        console.warn('new_review_remote_branches_failed', e);
-        setBaseRef((cur) => cur || 'main');
-      }
-    })();
-  }, []);
-
-  const submit = async () => {
-    if (!headRef) {
-      setError('Pick a branch to share.');
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
-    try {
-      const row = branchRows.find((r) => r.branch === headRef);
-      const wt = row?.branchMeta?.worktree;
-      if (!wt || wt.prunable) {
-        throw new Error(
-          `Branch '${headRef}' isn't checked out in a worktree — check it out first, then mark it Ready to share.`,
-        );
-      }
-      // The draft is keyed off the focused worktree's branch (ADR-0022 §3):
-      // focus first, then create.
-      await setFocusedWorktree(wt.path);
-      await reviewDraftCreate(title.trim() || headRef, baseRef.trim() || 'main');
-      onClose();
-      onCreated();
-    } catch (e) {
-      // Fail loud (CLAUDE.md): surface the engine's message verbatim in the
-      // modal; never close on a swallowed error.
-      console.warn('review_draft_create_failed', e);
-      setError(String(e));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    // biome-ignore lint/a11y/useSemanticElements: overlay modal; a styled div with role="dialog" matches the existing RepoMenu pattern rather than a native <dialog>.
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="New review"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.28)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 50,
-      }}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        style={{
-          width: 420,
-          background: '#fff',
-          borderRadius: 'var(--r-lg)',
-          boxShadow: 'var(--sh-pop)',
-          padding: 18,
-        }}
-      >
-        <div
-          style={{
-            fontSize: 15,
-            fontWeight: 700,
-            color: 'var(--gray-900)',
-            marginBottom: 14,
-          }}
-        >
-          New review
-        </div>
-
-        <Field label="Branch">
-          <select
-            className="input"
-            value={headRef}
-            onChange={(e) => setHeadRef(e.target.value)}
-            style={{ width: '100%' }}
-          >
-            {withWorktree.length === 0 && (
-              <option value="">No worktree-backed branches without a review</option>
-            )}
-            {withWorktree.map((r) => (
-              <option key={r.branch} value={r.branch}>
-                {r.branch}
-              </option>
-            ))}
-            {without.map((r) => (
-              <option key={r.branch} value={r.branch} disabled>
-                {r.branch} — no worktree
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <Field label="Base">
-          <select
-            className="input"
-            value={baseRef}
-            onChange={(e) => setBaseRef(e.target.value)}
-            style={{ width: '100%' }}
-          >
-            {(() => {
-              const seen = new Set<string>();
-              const opts: string[] = [];
-              for (const n of [...baseOptions, baseRef]) {
-                if (!n || seen.has(n)) continue;
-                seen.add(n);
-                opts.push(n);
-              }
-              return opts.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ));
-            })()}
-          </select>
-        </Field>
-
-        <Field label="Title (optional)">
-          <input
-            className="input"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder={headRef || 'Review title'}
-            style={{ width: '100%' }}
-          />
-        </Field>
-
-        {error && (
-          <div
-            style={{
-              fontSize: 11.5,
-              color: 'var(--red-d)',
-              background: 'rgba(255,59,48,0.08)',
-              border: '1px solid rgba(255,59,48,0.20)',
-              borderRadius: 'var(--r-sm)',
-              padding: '6px 10px',
-              marginBottom: 8,
-            }}
-          >
-            Couldn't create the review: {error}
-          </div>
-        )}
-
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: 8,
-            marginTop: 14,
-          }}
-        >
-          <button type="button" className="btn" onClick={onClose} disabled={submitting}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={submit}
-            disabled={submitting || !headRef}
-            style={{ opacity: submitting ? 0.6 : 1 }}
-          >
-            {submitting ? 'Creating…' : 'Create'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+// COMMENTED OUT with the review surface: the "On GitHub" PR row, the field
+// wrapper it shares, and the "New review" composer modal. All three exist only
+// to create or open a Review, which this version doesn't support.
+//
+// /** A compact row for a PR with no local branch: reviewer rows carry the
+//  *  author's avatar and a Review entry; authored rows open the PR. */
+// function GhRow({ r, onOpenReview }: { r: OverviewRow; onOpenReview: (pr: PrRef) => void }) {
+//   const st = statusBadge(r);
+//   const pr = prRefFromUrl(r.url);
+//   const open = () => {
+//     if (pr) onOpenReview(pr);
+//     else if (r.url) openUrl(r.url).catch((e) => console.warn('open_url_failed', e));
+//   };
+//   return (
+//     <div
+//       style={{
+//         display: 'flex',
+//         alignItems: 'center',
+//         gap: 10,
+//         background: '#fff',
+//         border: '1px solid var(--hairline)',
+//         borderRadius: 'var(--r-md)',
+//         padding: '7px 10px',
+//         boxShadow: 'var(--sh-1)',
+//         minWidth: 0,
+//       }}
+//     >
+//       {r.role === 'reviewer' ? (
+//         <Avatar name={r.authorLogin ?? '?'} size="sm" />
+//       ) : (
+//         <Icon name="gh" size={13} color="var(--gray-600)" />
+//       )}
+//       <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+//         <span
+//           title={r.title || r.branch}
+//           style={{
+//             fontSize: 12.5,
+//             fontWeight: 600,
+//             overflow: 'hidden',
+//             textOverflow: 'ellipsis',
+//             whiteSpace: 'nowrap',
+//           }}
+//         >
+//           {r.title || r.branch}
+//         </span>
+//         {r.prNumber !== null && (
+//           <span
+//             className="badge"
+//             style={{
+//               background: 'rgba(0,0,0,0.06)',
+//               flex: '0 0 auto',
+//               display: 'inline-flex',
+//               alignItems: 'center',
+//               gap: 3,
+//             }}
+//           >
+//             <Icon name="gh" size={9} color="var(--gray-700)" /> #{r.prNumber}
+//           </span>
+//         )}
+//         <span className={`badge ${st.cls}`} style={{ flex: '0 0 auto' }}>
+//           {st.label}
+//         </span>
+//         {r.role === 'reviewer' && r.authorLogin && (
+//           <span style={{ fontSize: 11, color: 'var(--gray-500)', flex: '0 0 auto' }}>
+//             by {r.authorLogin}
+//           </span>
+//         )}
+//       </div>
+//       <span style={{ fontSize: 10.5, color: 'var(--gray-500)', flex: '0 0 auto' }}>
+//         {r.updatedAt ? relativeTime(r.updatedAt) : ''}
+//       </span>
+//       <button type="button" className="btn" onClick={open} title={r.url ?? undefined}>
+//         <Icon name="eye" size={10} color="var(--gray-700)" />{' '}
+//         {r.role === 'reviewer' ? 'Review' : 'Open'}
+//       </button>
+//     </div>
+//   );
+// }
+//
+// function Field({ label, children }: { label: string; children: ReactNode }) {
+//   return (
+//     // biome-ignore lint/a11y/noLabelWithoutControl: the control is passed in via {children} (select/input), which Biome can't statically associate.
+//     <label style={{ display: 'block', marginBottom: 10 }}>
+//       <div
+//         style={{
+//           fontSize: 11.5,
+//           fontWeight: 600,
+//           color: 'var(--gray-600)',
+//           marginBottom: 4,
+//         }}
+//       >
+//         {label}
+//       </div>
+//       {children}
+//     </label>
+//   );
+// }
+//
+// /** "New review" (WS-2 #60; the composer's single entry per L7 M4): pick a
+//  *  branch (checked out in a worktree — the engine keys the draft off the
+//  *  focused worktree), a base, and an optional title; creates the per-machine
+//  *  draft and opens the storyline composer. */
+// function NewReviewModal({
+//   branchRows,
+//   onClose,
+//   onCreated,
+// }: {
+//   branchRows: OverviewRow[];
+//   onClose: () => void;
+//   onCreated: () => void;
+// }) {
+//   const withWorktree = branchRows.filter(
+//     (r) => r.branchMeta?.worktree && !r.branchMeta.worktree.prunable,
+//   );
+//   const without = branchRows.filter(
+//     (r) => !r.branchMeta?.worktree || r.branchMeta.worktree.prunable,
+//   );
+//   const [headRef, setHeadRef] = useState(withWorktree[0]?.branch ?? '');
+//   // Base is the PR merge target, stored remote-tracking (`origin/<name>`) so
+//   // the diff prefers the remote copy; Publish strips the prefix for gh.
+//   const [baseRef, setBaseRef] = useState('');
+//   const [baseOptions, setBaseOptions] = useState<string[]>([]);
+//   const [title, setTitle] = useState('');
+//   const [submitting, setSubmitting] = useState(false);
+//   const [error, setError] = useState<string | null>(null);
+//
+//   useEffect(() => {
+//     (async () => {
+//       try {
+//         const remote = await gitRemoteBranches();
+//         const names = remote.map((b) =>
+//           b.name.startsWith('origin/') ? b.name : `origin/${b.name}`,
+//         );
+//         setBaseOptions(names);
+//         setBaseRef((cur) => cur || names.find((n) => n === 'origin/main') || names[0] || 'main');
+//       } catch (e) {
+//         // Additive: without remote branches the field falls back to free text
+//         // via the lone current value; creation still works (local-first).
+//         console.warn('new_review_remote_branches_failed', e);
+//         setBaseRef((cur) => cur || 'main');
+//       }
+//     })();
+//   }, []);
+//
+//   const submit = async () => {
+//     if (!headRef) {
+//       setError('Pick a branch to share.');
+//       return;
+//     }
+//     setSubmitting(true);
+//     setError(null);
+//     try {
+//       const row = branchRows.find((r) => r.branch === headRef);
+//       const wt = row?.branchMeta?.worktree;
+//       if (!wt || wt.prunable) {
+//         throw new Error(
+//           `Branch '${headRef}' isn't checked out in a worktree — check it out first, then mark it Ready to share.`,
+//         );
+//       }
+//       // The draft is keyed off the focused worktree's branch (ADR-0022 §3):
+//       // focus first, then create.
+//       await setFocusedWorktree(wt.path);
+//       await reviewDraftCreate(title.trim() || headRef, baseRef.trim() || 'main');
+//       onClose();
+//       onCreated();
+//     } catch (e) {
+//       // Fail loud (CLAUDE.md): surface the engine's message verbatim in the
+//       // modal; never close on a swallowed error.
+//       console.warn('review_draft_create_failed', e);
+//       setError(String(e));
+//     } finally {
+//       setSubmitting(false);
+//     }
+//   };
+//
+//   return (
+//     // biome-ignore lint/a11y/useSemanticElements: overlay modal; a styled div with role="dialog" matches the existing RepoMenu pattern rather than a native <dialog>.
+//     <div
+//       role="dialog"
+//       aria-modal="true"
+//       aria-label="New review"
+//       style={{
+//         position: 'fixed',
+//         inset: 0,
+//         background: 'rgba(0,0,0,0.28)',
+//         display: 'flex',
+//         alignItems: 'center',
+//         justifyContent: 'center',
+//         zIndex: 50,
+//       }}
+//       onMouseDown={(e) => {
+//         if (e.target === e.currentTarget) onClose();
+//       }}
+//     >
+//       <div
+//         style={{
+//           width: 420,
+//           background: '#fff',
+//           borderRadius: 'var(--r-lg)',
+//           boxShadow: 'var(--sh-pop)',
+//           padding: 18,
+//         }}
+//       >
+//         <div
+//           style={{
+//             fontSize: 15,
+//             fontWeight: 700,
+//             color: 'var(--gray-900)',
+//             marginBottom: 14,
+//           }}
+//         >
+//           New review
+//         </div>
+//
+//         <Field label="Branch">
+//           <select
+//             className="input"
+//             value={headRef}
+//             onChange={(e) => setHeadRef(e.target.value)}
+//             style={{ width: '100%' }}
+//           >
+//             {withWorktree.length === 0 && (
+//               <option value="">No worktree-backed branches without a review</option>
+//             )}
+//             {withWorktree.map((r) => (
+//               <option key={r.branch} value={r.branch}>
+//                 {r.branch}
+//               </option>
+//             ))}
+//             {without.map((r) => (
+//               <option key={r.branch} value={r.branch} disabled>
+//                 {r.branch} — no worktree
+//               </option>
+//             ))}
+//           </select>
+//         </Field>
+//
+//         <Field label="Base">
+//           <select
+//             className="input"
+//             value={baseRef}
+//             onChange={(e) => setBaseRef(e.target.value)}
+//             style={{ width: '100%' }}
+//           >
+//             {(() => {
+//               const seen = new Set<string>();
+//               const opts: string[] = [];
+//               for (const n of [...baseOptions, baseRef]) {
+//                 if (!n || seen.has(n)) continue;
+//                 seen.add(n);
+//                 opts.push(n);
+//               }
+//               return opts.map((n) => (
+//                 <option key={n} value={n}>
+//                   {n}
+//                 </option>
+//               ));
+//             })()}
+//           </select>
+//         </Field>
+//
+//         <Field label="Title (optional)">
+//           <input
+//             className="input"
+//             value={title}
+//             onChange={(e) => setTitle(e.target.value)}
+//             placeholder={headRef || 'Review title'}
+//             style={{ width: '100%' }}
+//           />
+//         </Field>
+//
+//         {error && (
+//           <div
+//             style={{
+//               fontSize: 11.5,
+//               color: 'var(--red-d)',
+//               background: 'rgba(255,59,48,0.08)',
+//               border: '1px solid rgba(255,59,48,0.20)',
+//               borderRadius: 'var(--r-sm)',
+//               padding: '6px 10px',
+//               marginBottom: 8,
+//             }}
+//           >
+//             Couldn't create the review: {error}
+//           </div>
+//         )}
+//
+//         <div
+//           style={{
+//             display: 'flex',
+//             justifyContent: 'flex-end',
+//             gap: 8,
+//             marginTop: 14,
+//           }}
+//         >
+//           <button type="button" className="btn" onClick={onClose} disabled={submitting}>
+//             Cancel
+//           </button>
+//           <button
+//             type="button"
+//             className="btn btn-primary"
+//             onClick={submit}
+//             disabled={submitting || !headRef}
+//             style={{ opacity: submitting ? 0.6 : 1 }}
+//           >
+//             {submitting ? 'Creating…' : 'Create'}
+//           </button>
+//         </div>
+//       </div>
+//     </div>
+//   );
+// }

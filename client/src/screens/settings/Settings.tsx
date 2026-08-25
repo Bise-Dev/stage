@@ -142,7 +142,7 @@ function AccountSection() {
   return (
     <Card
       label="Account"
-      hint="Stage uses your local `gh` credentials to open PRs, post reviews, and read PR state. It holds no token of its own."
+      hint="Stage reads your GitHub identity from your local `gh` credentials. It holds no token of its own, and self-review never calls GitHub."
     >
       <div
         style={{
@@ -257,7 +257,8 @@ function AboutSection() {
             )}
           </div>
           <div style={{ fontSize: 12.5, color: 'var(--gray-600)', marginTop: 6, lineHeight: 1.5 }}>
-            A local-first tool for human-tailored pull request review.
+            A local-first tool for walking your own branch — with your coding agent's debrief
+            alongside it.
           </div>
         </div>
       </div>
