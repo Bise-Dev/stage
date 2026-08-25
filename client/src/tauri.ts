@@ -355,6 +355,10 @@ export const openInFinder = (path: string) => invoke<void>('open_in_finder', { p
 
 export const openUrl = (url: string) => invoke<void>('open_url', { url });
 
+/** Open a path (a worktree directory) in Visual Studio Code. Rejects loudly if
+ *  the editor isn't there — the caller renders the message. */
+export const openInVscode = (path: string) => invoke<void>('open_in_vscode', { path });
+
 // --- Local storyline (no auth/sign-in; ADR-0022 §1/§3, milestone B) ---
 // The author's pre-publish storyline lives in the local store, keyed by the
 // active repo + branch. No `gh`/network here — Publish (milestone D) is what

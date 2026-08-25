@@ -15,7 +15,7 @@ import {
 } from '../../components/ContextMenu';
 import { Icon, type IconName } from '../../components/Icon';
 import { isMaterialized, materializedWorktree } from '../../lib/worktree';
-import { type OverviewRow, openInFinder, openUrl } from '../../tauri';
+import { type OverviewRow, openInFinder, openInVscode, openUrl } from '../../tauri';
 import { DebriefPill } from './pills';
 
 /**
@@ -353,6 +353,15 @@ function BranchMenuCard({
           label="Reveal worktree in Finder"
           onClick={runAsync("Couldn't reveal the worktree", () => openInFinder(worktree.path))}
           sub={worktree.path}
+        />
+      )}
+      {worktree && (
+        <MenuItem
+          icon="code"
+          color="var(--gray-600)"
+          label="Open in VS Code"
+          onClick={runAsync("Couldn't open VS Code", () => openInVscode(worktree.path))}
+          sub="Open this branch's worktree as a folder in Visual Studio Code."
         />
       )}
       {r.url && (

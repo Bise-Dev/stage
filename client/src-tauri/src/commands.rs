@@ -585,6 +585,61 @@ pub fn open_in_finder(path: PathBuf) -> Result<(), AppError> {
         .map_err(|e| AppError::Backend(format!("open_in_finder_failed: {e}")))
 }
 
+/// Open a path — in practice a worktree directory — in Visual Studio Code.
+///
+/// macOS goes through `open -a` rather than the `code` CLI: a GUI-launched app
+/// inherits a minimal PATH, and `code` only lands on PATH for login shells that
+/// ran VS Code's "Install 'code' command". Elsewhere `code` is the route there
+/// is. Either way the exit status is checked and a failure is raised, so a
+/// missing editor reaches the author's banner instead of looking like a dead
+/// menu entry (CLAUDE.md fail-loud).
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn open_in_vscode(path: PathBuf) -> Result<(), AppError> {
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg("-a").arg("Visual Studio Code").arg(&path);
+        c
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("code");
+        c.arg(&path);
+        c
+    };
+
+    let output = cmd.output().map_err(|e| {
+        tracing::error!(err = %e, path = %path.display(), "open_in_vscode_spawn_failed");
+        AppError::Backend(format!(
+            "Couldn't open {} in VS Code — {e}. Is Visual Studio Code installed?",
+            path.display()
+        ))
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        tracing::error!(
+            path = %path.display(),
+            status = %output.status,
+            stderr = %stderr,
+            "open_in_vscode_failed"
+        );
+        return Err(AppError::Backend(format!(
+            "Couldn't open {} in VS Code — {}",
+            path.display(),
+            if stderr.is_empty() {
+                "the editor exited with an error. Is Visual Studio Code installed?".to_string()
+            } else {
+                stderr
+            }
+        )));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 // `pill = "cmd"` tags this span so the dev Activity-log layer records one row
 // per invocation with its duration (debug builds only). `skip_all` keeps the

@@ -230,6 +230,7 @@ pub fn run() {
             commands::git_push,
             commands::open_in_finder,
             commands::open_url,
+            commands::open_in_vscode,
             commands::self_review_debrief_get,
             commands::self_review_debrief_mark_seen,
             commands::repo_debrief_branches,
