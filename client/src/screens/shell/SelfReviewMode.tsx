@@ -24,7 +24,9 @@ import { useSectionedDiff } from './useSectionedDiff';
  * Debrief renders as the chapter-grouped file list on the left plus a
  * collapsed chapter banner above each chapter's first file diff — the right
  * rail is gone; general and orphaned notes live in the top-bar notes popover.
- * Opening this surface on a branch that has a Debrief marks it seen (M3).
+ * Opening this surface on a branch that has a Debrief marks it seen (M3); a
+ * Debrief whose recorded head the branch has moved past is called out in a
+ * warning banner, since its chapters narrate a diff that no longer holds.
  *
  * Scope model (flag F4): the committed diff (`merge_base(base, HEAD) → HEAD`)
  * is the reviewable unit; "+ Uncommitted" folds the working tree in as a
@@ -343,6 +345,25 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
         }
       />
 
+      {/* The agent's account was written against a commit the branch has
+          since moved past — say so, and say why it matters, before the author
+          reads chapters that may narrate code that no longer exists. */}
+      {debrief?.freshness === 'outdated' && (
+        <div style={warnBanner}>
+          This debrief is outdated — the agent wrote it for commit{' '}
+          <code style={shaStyle}>{shortSha(debrief.headSha)}</code>
+          {headSha ? (
+            <>
+              , and the branch has moved on to <code style={shaStyle}>{shortSha(headSha)}</code>
+            </>
+          ) : (
+            ', and the branch has moved on'
+          )}
+          . Its chapters and intros describe the older diff, so they may narrate code that has since
+          changed or disappeared. Ask the agent to rewrite the debrief for the current head.
+        </div>
+      )}
+
       {/* Committed-only scope + a dirty tree: say what the review does NOT
           cover (flag F4's warning banner). */}
       {!includeUncommitted && (uncommittedCount ?? 0) > 0 && (
@@ -468,6 +489,16 @@ const errorBanner: React.CSSProperties = {
   borderRadius: 'var(--r-sm)',
   padding: '6px 10px',
   margin: '8px 16px 0',
+};
+
+/** First 7 chars — the short form git itself prints. */
+function shortSha(sha: string): string {
+  return sha.slice(0, 7);
+}
+
+const shaStyle: React.CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: 11,
 };
 
 const warnBanner: React.CSSProperties = {
