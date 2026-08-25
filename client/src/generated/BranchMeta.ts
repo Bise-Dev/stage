@@ -36,8 +36,9 @@ uncommittedCount: number | null,
  */
 changedFileCount: number | null, 
 /**
- * Viewed/total Self-Review progress; `None` when there is no
- * comparable base to diff against (then there is no honest `total`).
+ * Viewed/total Self-Review progress plus the note count; `None` when
+ * there is no comparable base to diff against (then there is no honest
+ * `total`).
  */
 selfReview: SelfReviewProgress | null, 
 /**

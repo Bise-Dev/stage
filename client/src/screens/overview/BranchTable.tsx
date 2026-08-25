@@ -81,25 +81,54 @@ function DebriefPill({ r }: { r: OverviewRow }) {
   );
 }
 
-/** Blue progress pill while a self-review is underway (viewed/total from the
- *  content-anchored marks; the done state was removed in L7 — F3 rescinded). */
+/**
+ * Has the author started reviewing this branch locally? Either local signal
+ * counts: a file marked viewed, **or** a note written. Notes matter on their
+ * own — commenting without marking anything viewed is a real way to work, and
+ * a viewed-only test reads that branch as untouched.
+ */
+export function selfReviewStarted(sr: SelfReviewProgress | null | undefined): boolean {
+  return !!sr && (sr.viewed > 0 || sr.notes > 0);
+}
+
+/** Shared shell for the blue self-review pill (progress and started alike). */
+const SR_PILL: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  padding: '2px 7px 2px 6px',
+  borderRadius: 20,
+  background: 'var(--blue-tint)',
+  border: '1px solid rgba(0,122,255,0.28)',
+  flex: '0 0 auto',
+};
+
+const SR_TEXT: CSSProperties = { fontSize: 10.5, fontWeight: 700, color: 'var(--blue-press)' };
+
+/** `n note(s)`, or '' when there are none — the notes half of the tooltip. */
+function noteSuffix(notes: number): string {
+  return notes > 0 ? ` · ${notes} note${notes === 1 ? '' : 's'}` : '';
+}
+
+/** Blue pill while a self-review is underway (the done state was removed in L7
+ *  — F3 rescinded). Two shapes off the same signals: viewed/total progress from
+ *  the content-anchored marks, or — when notes are the only thing there — a
+ *  plain "started", since a 0/N bar would read as untouched. */
 function SelfReviewPill({ sr }: { sr: SelfReviewProgress | null }) {
-  if (!sr) return null;
-  if (sr.viewed === 0) return null;
+  if (!sr || !selfReviewStarted(sr)) return null;
+  if (sr.viewed === 0) {
+    return (
+      <span title={`Self-review started${noteSuffix(sr.notes)}`} style={SR_PILL}>
+        <Icon name="comment-fill" size={9} color="var(--blue)" />
+        <span style={SR_TEXT}>self-review · started</span>
+      </span>
+    );
+  }
   const pct = sr.total > 0 ? Math.min(100, Math.round((sr.viewed / sr.total) * 100)) : 0;
   return (
     <span
-      title={`Self-review in progress · ${sr.viewed}/${sr.total} files viewed`}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 5,
-        padding: '2px 7px 2px 6px',
-        borderRadius: 20,
-        background: 'var(--blue-tint)',
-        border: '1px solid rgba(0,122,255,0.28)',
-        flex: '0 0 auto',
-      }}
+      title={`Self-review in progress · ${sr.viewed}/${sr.total} files viewed${noteSuffix(sr.notes)}`}
+      style={SR_PILL}
     >
       <span
         style={{
@@ -123,9 +152,15 @@ function SelfReviewPill({ sr }: { sr: SelfReviewProgress | null }) {
           }}
         />
       </span>
-      <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--blue-press)' }}>
+      <span style={SR_TEXT}>
         {sr.viewed}/{sr.total}
       </span>
+      {sr.notes > 0 && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, ...SR_TEXT }}>
+          <Icon name="comment-fill" size={9} color="var(--blue)" />
+          {sr.notes}
+        </span>
+      )}
     </span>
   );
 }
@@ -324,7 +359,7 @@ function BranchRow({
   // Base: a Review row carries its chosen base; a plain branch diffs against
   // the repo default (the DTO says so) — name it when we know it.
   const base = r.baseRef ?? (meta.isDefault ? null : defaultBase);
-  const selfLabel = sr && sr.viewed > 0 ? 'Continue' : 'Self-review';
+  const selfLabel = selfReviewStarted(sr) ? 'Continue' : 'Self-review';
   const acts = rowMenuActions(r);
   const showSelfButton = !meta.isDefault;
   // The draft/published Review chip, commented out with the review surface — the
@@ -441,7 +476,7 @@ function BranchRow({
           <DebriefPill r={r} />
           <SelfReviewPill sr={sr} />
           {/* {localChip} — the Review chip, commented out above */}
-          {!meta.debriefFreshness && (!sr || sr.viewed === 0) && (
+          {!meta.debriefFreshness && !selfReviewStarted(sr) && (
             <span style={{ fontSize: 11, color: 'var(--gray-300)' }}>—</span>
           )}
         </div>
@@ -558,8 +593,11 @@ function BranchActionMenu({
   const sr = meta.selfReview;
   const hasDebrief = meta.hasDebrief;
   const acts = rowMenuActions(r);
-  const selfLabel =
-    sr && sr.viewed > 0 ? `Continue self-review · ${sr.viewed}/${sr.total}` : 'Self-review';
+  const selfLabel = !selfReviewStarted(sr)
+    ? 'Self-review'
+    : sr && sr.viewed > 0
+      ? `Continue self-review · ${sr.viewed}/${sr.total}`
+      : 'Continue self-review';
 
   const run = (fn: () => void) => () => {
     closeMenu();
@@ -621,7 +659,7 @@ function BranchActionMenu({
           }
           right={
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              {sr && sr.viewed > 0 && <span className="badge badge-blue">ongoing</span>}
+              {selfReviewStarted(sr) && <span className="badge badge-blue">ongoing</span>}
               <DebriefPill r={r} />
             </span>
           }

@@ -29,7 +29,7 @@ import {
 } from '../../tauri';
 import { relativeTimeFromEpoch } from '../../time';
 import { BranchGraph } from './BranchGraph';
-import { BranchTable } from './BranchTable';
+import { BranchTable, selfReviewStarted } from './BranchTable';
 
 /**
  * The branch table — the app's home screen (v6-light L4, design
@@ -291,10 +291,9 @@ export function Overview({
   const defaultBase = localRows.find((r) => r.branchMeta?.isDefault)?.branch ?? null;
 
   const debriefNew = localRows.filter((r) => r.branchMeta?.debriefFreshness === 'new').length;
-  const selfInProgress = localRows.filter((r) => {
-    const sr = r.branchMeta?.selfReview;
-    return sr !== null && sr !== undefined && sr.viewed > 0;
-  }).length;
+  const selfInProgress = localRows.filter((r) =>
+    selfReviewStarted(r.branchMeta?.selfReview),
+  ).length;
 
   const filteredLocal = localRows.filter(matchRow);
   // Feed the commented-out "On GitHub" section and the "New review" modal:

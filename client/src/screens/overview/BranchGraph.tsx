@@ -6,6 +6,7 @@ import { Icon } from '../../components/Icon';
 import type { BranchGraphView, GraphRow, OverviewRow } from '../../tauri';
 import { branchGraph } from '../../tauri';
 import { relativeTimeFromEpoch } from '../../time';
+import { selfReviewStarted } from './BranchTable';
 
 /**
  * The branch graph view — v6-light L6 (design `V6_BranchGraph`). A pure
@@ -322,12 +323,29 @@ export function BranchGraph({
                           }}
                         />
                       )}
-                      {sr && sr.viewed > 0 && (
+                      {selfReviewStarted(sr) && sr && (
+                        /* Notes with nothing viewed still count as started —
+                           the rail shows a comment glyph rather than "0/N". */
                         <span
-                          title={`Self-review in progress · ${sr.viewed}/${sr.total}`}
-                          style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--blue-press)' }}
+                          title={
+                            sr.viewed > 0
+                              ? `Self-review in progress · ${sr.viewed}/${sr.total}`
+                              : `Self-review started · ${sr.notes} note${sr.notes === 1 ? '' : 's'}`
+                          }
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 2,
+                            fontSize: 9.5,
+                            fontWeight: 700,
+                            color: 'var(--blue-press)',
+                          }}
                         >
-                          {sr.viewed}/{sr.total}
+                          {sr.viewed > 0 ? (
+                            `${sr.viewed}/${sr.total}`
+                          ) : (
+                            <Icon name="comment-fill" size={9} color="var(--blue)" />
+                          )}
                         </span>
                       )}
                       {b.onWorktree && (

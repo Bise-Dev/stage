@@ -80,12 +80,19 @@ pub struct WorktreeMeta {
 /// the file's current post-image counts as unviewed). `total` is the
 /// branch-vs-base changed file count — the same diff as `changed_file_count`.
 /// (The explicit "Mark reviewed" done state was removed in L7 — F3 rescinded.)
+///
+/// `notes` is the branch's stored Self-Review note count, every status
+/// included. It is the *other* half of "the author has started": a note
+/// written without any file marked viewed leaves `viewed` at 0, and the row
+/// would otherwise read as untouched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct SelfReviewProgress {
     pub viewed: u32,
     pub total: u32,
+    /// Notes the author has written on this branch, any status.
+    pub notes: u32,
 }
 
 /// Local-git annotations for a row whose branch exists in this clone.
@@ -109,8 +116,9 @@ pub struct BranchMeta {
     /// Files changed vs. the repo's default base (the same tree-to-tree diff
     /// as the ± signal). `None` when there is no comparable base.
     pub changed_file_count: Option<u32>,
-    /// Viewed/total Self-Review progress; `None` when there is no
-    /// comparable base to diff against (then there is no honest `total`).
+    /// Viewed/total Self-Review progress plus the note count; `None` when
+    /// there is no comparable base to diff against (then there is no honest
+    /// `total`).
     pub self_review: Option<SelfReviewProgress>,
     /// Last-commit time, epoch seconds (UTC). Formatted on the client.
     #[ts(type = "number")]
@@ -372,6 +380,7 @@ pub fn assemble_overview_with(
         store.list_debrief_freshness_inputs(&repo_key.repo_owner, &repo_key.repo_name)?;
     let viewed_by_branch =
         store.list_viewed_by_branch(&repo_key.repo_owner, &repo_key.repo_name)?;
+    let notes_by_branch = store.count_notes_by_branch(&repo_key.repo_owner, &repo_key.repo_name)?;
     let default_branch = default_branch_name(&repo);
     // The comparison base for plain-branch signals: prefer the remote-tracking
     // default over a possibly-stale local one (ADR-0016/0018).
@@ -443,6 +452,7 @@ pub fn assemble_overview_with(
                 Some(SelfReviewProgress {
                     viewed,
                     total: d.files.len() as u32,
+                    notes: notes_by_branch.get(&b.name).copied().unwrap_or(0),
                 })
             }
         };
@@ -1229,6 +1239,7 @@ mod tests {
             Some(SelfReviewProgress {
                 viewed: 1,
                 total: 1,
+                notes: 0,
             })
         );
 
@@ -1265,8 +1276,29 @@ mod tests {
             Some(SelfReviewProgress {
                 viewed: 0,
                 total: 1,
+                notes: 0,
             }),
             "edited content invalidates the mark"
+        );
+
+        // A note is the other "started" signal: no file is viewed any more,
+        // but the branch has been worked on and the row must say so.
+        store
+            .create_note(&feat_key, "n1", None, "needs a second look")
+            .unwrap();
+        let view = assemble_overview_with(&store, &root, &key(), None, false, &mut cache).unwrap();
+        assert_eq!(
+            by_branch(&view, "feat/enrich")
+                .branch_meta
+                .as_ref()
+                .unwrap()
+                .self_review,
+            Some(SelfReviewProgress {
+                viewed: 0,
+                total: 1,
+                notes: 1,
+            }),
+            "a note counts as started even with nothing viewed"
         );
     }
 }
