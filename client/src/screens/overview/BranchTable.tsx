@@ -1,10 +1,10 @@
 import type { CSSProperties } from 'react';
 import { Icon } from '../../components/Icon';
 import { isMaterialized } from '../../lib/worktree';
-import type { OverviewRow, ReviewStatus } from '../../tauri';
+import type { AgentSession, OverviewRow, ReviewStatus } from '../../tauri';
 import { relativeTimeFromEpoch } from '../../time';
 import { type BranchActions, useBranchMenu } from './BranchMenu';
-import { DebriefPill, SelfReviewPill, selfReviewStarted } from './pills';
+import { AgentSessionPill, DebriefPill, SelfReviewPill, selfReviewStarted } from './pills';
 
 /**
  * The dense branch table — the v6-light home (design `V6L_Branches`). One row
@@ -87,10 +87,14 @@ export function BranchTable({
   rows,
   defaultBase,
   actions,
+  agentSessions,
 }: {
   rows: OverviewRow[];
   defaultBase: string | null;
   actions: BranchActions;
+  /** Live Claude Code sessions keyed by branch (opt-in; absent = feature off
+   *  or nothing running). Probed by Rust — the table only looks its row up. */
+  agentSessions?: ReadonlyMap<string, AgentSession>;
 }) {
   // The menu itself lives in the BranchMenuProvider (ADR-0028): one instance
   // for the whole overview, fixed-positioned, so the card no longer has to open
@@ -127,7 +131,13 @@ export function BranchTable({
         </thead>
         <tbody>
           {rows.map((r) => (
-            <BranchRow key={r.branch} r={r} defaultBase={defaultBase} actions={actions} />
+            <BranchRow
+              key={r.branch}
+              r={r}
+              defaultBase={defaultBase}
+              actions={actions}
+              agentSession={agentSessions?.get(r.branch) ?? null}
+            />
           ))}
           {rows.length === 0 && (
             <tr>
@@ -149,10 +159,12 @@ function BranchRow({
   r,
   defaultBase,
   actions,
+  agentSession,
 }: {
   r: OverviewRow;
   defaultBase: string | null;
   actions: BranchActions;
+  agentSession: AgentSession | null;
 }) {
   const { openAt, triggerProps, openBranch } = useBranchMenu();
   const meta = r.branchMeta;
@@ -283,10 +295,11 @@ function BranchRow({
       </td>
       <td style={{ ...CELL }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <AgentSessionPill s={agentSession} />
           <DebriefPill r={r} />
           <SelfReviewPill sr={sr} />
           {/* {localChip} — the Review chip, commented out above */}
-          {!meta.debriefFreshness && !selfReviewStarted(sr) && (
+          {!agentSession && !meta.debriefFreshness && !selfReviewStarted(sr) && (
             <span style={{ fontSize: 11, color: 'var(--gray-300)' }}>—</span>
           )}
         </div>

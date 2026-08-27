@@ -4,6 +4,7 @@ import { Avatar } from '../../components/Avatar';
 import { Icon } from '../../components/Icon';
 import { StageLogo } from '../../components/StageLogo';
 import { TitleBar } from '../../components/TitleBar';
+import { agentSessionsEnabled, setAgentSessionsEnabled } from '../../lib/agentSessionsPref';
 import { type GitHubUser, buildInfo, ghIdentity } from '../../tauri';
 
 /**
@@ -63,6 +64,10 @@ export function Settings({
             </div>
 
             <AccountSection />
+
+            <div style={{ borderTop: '1px solid var(--hairline)', margin: '24px 0 20px' }} />
+
+            <AgentSessionsSection />
 
             <div style={{ borderTop: '1px solid var(--hairline)', margin: '24px 0 20px' }} />
 
@@ -170,6 +175,65 @@ function AccountSection() {
           </span>
         )}
       </div>
+    </Card>
+  );
+}
+
+/**
+ * Opt-in: show live Claude Code sessions on the branch table. Off by default —
+ * the pill reads `~/.claude/sessions` (another tool's files), so Stage only
+ * looks once asked to. Best-effort by design: when anything about the probe
+ * fails, the pill is simply absent and the rest of the app is untouched.
+ */
+function AgentSessionsSection() {
+  const [enabled, setEnabled] = useState(agentSessionsEnabled);
+
+  const toggle = (on: boolean) => {
+    setAgentSessionsEnabled(on);
+    setEnabled(on);
+  };
+
+  return (
+    <Card label="Claude Code sessions">
+      <label
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 12,
+          padding: '12px 14px',
+          background: '#fff',
+          border: '1px solid var(--hairline)',
+          borderRadius: 'var(--r-md)',
+          cursor: 'default',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => toggle(e.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <span style={{ minWidth: 0 }}>
+          <span
+            style={{ display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--gray-900)' }}
+          >
+            Show live sessions on the branch list
+          </span>
+          <span
+            style={{
+              display: 'block',
+              fontSize: 12,
+              color: 'var(--gray-500)',
+              marginTop: 2,
+              lineHeight: 1.5,
+            }}
+          >
+            A pill on each branch a Claude Code session is working in, with the session's name and
+            status. Read locally from <span className="mono">~/.claude</span> — nothing leaves this
+            machine, and if the probe fails the pill just stays absent.
+          </span>
+        </span>
+      </label>
     </Card>
   );
 }

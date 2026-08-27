@@ -15,7 +15,13 @@ import {
 } from '../../components/ContextMenu';
 import { Icon, type IconName } from '../../components/Icon';
 import { isMaterialized, materializedWorktree } from '../../lib/worktree';
-import { type OverviewRow, openInFinder, openInVscode, openUrl } from '../../tauri';
+import {
+  type AgentSession,
+  type OverviewRow,
+  openInFinder,
+  openInVscode,
+  openUrl,
+} from '../../tauri';
 import { DebriefPill } from './pills';
 
 /**
@@ -105,12 +111,16 @@ export function useBranchMenu(): BranchMenuApi {
 export function BranchMenuProvider({
   rows,
   actions,
+  agentSessions,
   children,
 }: {
   /** Every local-branch row, unfiltered by the archived view filter — the
    *  lookup has to cover every branch git can show (ADR-0028). */
   rows: OverviewRow[];
   actions: BranchActions;
+  /** Live Claude Code sessions keyed by branch (opt-in; absent = feature off
+   *  or nothing running) — feeds the menu's "Copy resume command" entry. */
+  agentSessions?: ReadonlyMap<string, AgentSession>;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState<OpenState | null>(null);
@@ -189,7 +199,12 @@ export function BranchMenuProvider({
       {children}
       {open && row && (
         <ContextMenu at={open.at} onClose={close} ariaLabel={`Actions on ${row.branch}`}>
-          <BranchMenuCard r={row} actions={actions} closeMenu={close} />
+          <BranchMenuCard
+            r={row}
+            actions={actions}
+            agentSession={agentSessions?.get(row.branch) ?? null}
+            closeMenu={close}
+          />
         </ContextMenu>
       )}
     </BranchMenuContext.Provider>
@@ -204,10 +219,12 @@ export function BranchMenuProvider({
 function BranchMenuCard({
   r,
   actions,
+  agentSession,
   closeMenu,
 }: {
   r: OverviewRow;
   actions: BranchActions;
+  agentSession: AgentSession | null;
   closeMenu: () => void;
 }) {
   const meta = r.branchMeta;
@@ -352,6 +369,17 @@ function BranchMenuCard({
           navigator.clipboard.writeText(r.branch),
         )}
       />
+      {agentSession && (
+        <MenuItem
+          icon="claude"
+          color="var(--claude)"
+          label="Copy resume command"
+          onClick={runAsync("Couldn't copy the resume command", () =>
+            navigator.clipboard.writeText(`claude --resume ${agentSession.sessionId}`),
+          )}
+          sub={`Continue the Claude Code session "${agentSession.name}" in your terminal.`}
+        />
+      )}
       {worktree && (
         <MenuItem
           icon="folder"

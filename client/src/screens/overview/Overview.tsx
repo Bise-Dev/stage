@@ -5,6 +5,7 @@ import { Icon } from '../../components/Icon';
 import { RepoMenu } from '../../components/RepoMenu';
 import { TitleBar } from '../../components/TitleBar';
 import type { SwitchPlanOutcome } from '../../generated/SwitchPlanOutcome';
+import { agentSessionsEnabled } from '../../lib/agentSessionsPref';
 import { RELOAD } from '../../lib/shortcuts';
 import { useShortcut } from '../../lib/useShortcut';
 import { materializedWorktree } from '../../lib/worktree';
@@ -15,8 +16,11 @@ import { materializedWorktree } from '../../lib/worktree';
 //   import { statusBadge } from './BranchTable';
 //   type PrRef
 import {
+  type AgentSession,
+  type AgentSessionsView,
   type OverviewRow,
   type SyncStatus,
+  agentSessions,
   branchSwitchExecute,
   branchSwitchPlan,
   getActiveRepo,
@@ -32,7 +36,7 @@ import { relativeTimeFromEpoch } from '../../time';
 import { BranchGraph } from './BranchGraph';
 import { type BranchActions, BranchMenuProvider } from './BranchMenu';
 import { BranchTable } from './BranchTable';
-import { selfReviewStarted } from './pills';
+import { AgentSessionPill, selfReviewStarted } from './pills';
 
 /**
  * The branch table — the app's home screen (v6-light L4, design
@@ -45,6 +49,10 @@ import { selfReviewStarted } from './pills';
  * A **pure renderer** (ADR-0022 §7): Rust assembles every row with its state
  * already derived (`overview`); this screen only filters/sorts for display.
  */
+
+// One stable "nothing running" value so the disabled/failed poll paths can
+// keep state identity and skip re-renders.
+const NO_AGENTS: AgentSessionsView = { attached: [], unattached: [] };
 
 function slugFromRemote(url: string | null): string | null {
   if (!url) return null;
@@ -126,6 +134,16 @@ export function Overview({
   // be focused). It answers a click, so it answers in the same dialog the click
   // opened — `GitDialog` tone `error`, the engine's message verbatim.
   const [gitError, setGitError] = useState<{ title: string; message: string } | null>(null);
+  // Live Claude Code sessions (opt-in via Settings) — polled; `attached` keys
+  // the row pills by branch below, `unattached` feeds the "no worktree yet"
+  // tail. Empty when the feature is off, nothing runs, or the probe failed.
+  const [liveAgents, setLiveAgents] = useState<AgentSessionsView>(NO_AGENTS);
+  // The soft guardrail: self-review was asked for on a branch whose agent is
+  // still busy — confirm before entering ("review anyway"), never block.
+  const [reviewDespiteAgent, setReviewDespiteAgent] = useState<{
+    row: OverviewRow;
+    session: AgentSession;
+  } | null>(null);
 
   // const openNewReview = useCallback(() => setNewReviewOpen(true), []);
 
@@ -193,6 +211,44 @@ export function Overview({
       void off.then((f) => f());
     };
   }, [load]);
+
+  // Live Claude Code sessions: a light poll (a handful of tiny local file
+  // reads in Rust), only while the Settings opt-in is on. The flag is re-read
+  // every tick so flipping it in Settings takes effect without a remount.
+  //
+  // Best-effort by explicit product decision (the sanctioned exception to
+  // fail-loud, documented in `agent_sessions.rs`): a failed probe logs and
+  // renders as absence — it must never disturb the overview.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (!agentSessionsEnabled()) {
+        if (!cancelled)
+          setLiveAgents((cur) =>
+            cur.attached.length === 0 && cur.unattached.length === 0 ? cur : NO_AGENTS,
+          );
+        return;
+      }
+      try {
+        const view = await agentSessions();
+        if (!cancelled) setLiveAgents(view);
+      } catch (e) {
+        console.warn('agent_sessions_failed', e);
+        if (!cancelled) setLiveAgents(NO_AGENTS);
+      }
+    };
+    void tick();
+    const id = setInterval(tick, 7_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  const agentByBranch = useMemo(
+    () => new Map(liveAgents.attached.map((s) => [s.branch, s])),
+    [liveAgents],
+  );
 
   const runFetch = async () => {
     // Guard re-entry: the Fetch button is disabled while fetching, but ⌘R can
@@ -272,13 +328,29 @@ export function Overview({
   //   [onOpenStoryline],
   // );
 
+  // Soft guardrail in front of `startSelfReviewAt`: when a live Claude Code
+  // session is still busy on the branch, confirm first — the worktree's files
+  // can change mid-review. Confirming proceeds; nothing is blocked.
+  const requestSelfReviewAt = useCallback(
+    (r: OverviewRow) => {
+      const session = agentByBranch.get(r.branch);
+      if (session && session.status === 'busy') {
+        setReviewDespiteAgent({ row: r, session });
+        return;
+      }
+      void startSelfReviewAt(r);
+    },
+    [agentByBranch, startSelfReviewAt],
+  );
+
   // What every branch surface can do — one bundle, shared by the menu provider
   // and the table's own row buttons (ADR-0028).
   const branchActions = useMemo<BranchActions>(
     () => ({
       // One surface (L7 M1): the debrief has no route of its own — it renders
-      // inside Self-Review as the chaptered file list.
-      onSelfReview: startSelfReviewAt,
+      // inside Self-Review as the chaptered file list. Routed through the soft
+      // agent guardrail above.
+      onSelfReview: requestSelfReviewAt,
       onSwitchTo: openSwitchDialog,
       onError: (title, message) => setGitError({ title, message }),
       // Commented out with the review surface:
@@ -286,7 +358,7 @@ export function Overview({
       // onOpenReview,
       // onDiscardDraft: setDiscardTarget,
     }),
-    [startSelfReviewAt, openSwitchDialog],
+    [requestSelfReviewAt, openSwitchDialog],
   );
 
   // --- Row split (display only — every row's state came derived) ------------
@@ -334,7 +406,7 @@ export function Overview({
   // );
 
   return (
-    <BranchMenuProvider rows={allLocalRows} actions={branchActions}>
+    <BranchMenuProvider rows={allLocalRows} actions={branchActions} agentSessions={agentByBranch}>
       <div className="stage">
         <div className="win">
           <TitleBar title="Stage" />
@@ -468,7 +540,64 @@ export function Overview({
                   rows={filteredLocal}
                   defaultBase={defaultBase}
                   actions={branchActions}
+                  agentSessions={agentByBranch}
                 />
+
+                {/* Live sessions with no dedicated worktree yet — an agent that
+                    hasn't created one, or a directory git no longer lists. The
+                    shape mirrors the "On GitHub · no local branch" tail: work
+                    that exists but has no branch row to ride. */}
+                {liveAgents.unattached.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <div
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '0 2px 6px' }}
+                    >
+                      <Icon name="claude" size={11} color="var(--claude)" />
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          letterSpacing: 0.5,
+                          textTransform: 'uppercase',
+                          color: 'var(--gray-400)',
+                        }}
+                      >
+                        Claude Code · no worktree yet
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {liveAgents.unattached.map((u) => (
+                        <div
+                          key={u.sessionId}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            padding: '6px 10px',
+                            background: '#fff',
+                            border: '1px solid var(--hairline)',
+                            borderRadius: 'var(--r-md)',
+                          }}
+                        >
+                          <AgentSessionPill s={u} />
+                          <span
+                            className="mono"
+                            title={u.dir === '' ? 'the repo root checkout' : u.dir}
+                            style={{
+                              fontSize: 11,
+                              color: 'var(--gray-500)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {u.dir === '' ? 'repo root' : u.dir}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* PRs with no local branch — awaiting your review, or yours with
                   the branch gone locally — plus the archived-Reviews toggle.
@@ -669,6 +798,16 @@ export function Overview({
                       working tree can't switch to{' '}
                       <span className="mono">{switchTarget.branch}</span>. It's already checked out
                       here:
+                      {agentByBranch.get(switchTarget.branch)?.status === 'busy' && (
+                        <>
+                          {' '}
+                          <span style={{ color: 'var(--orange)', fontWeight: 600 }}>
+                            A Claude Code session ("
+                            {agentByBranch.get(switchTarget.branch)?.name}") is still working in
+                            that worktree.
+                          </span>
+                        </>
+                      )}
                     </>
                   }
                   details={[{ label: 'Worktree', value: worktreePath }]}
@@ -682,6 +821,31 @@ export function Overview({
               title={gitError.title}
               body={gitError.message}
               onClose={() => setGitError(null)}
+            />
+          )}
+          {/* Soft guardrail (never a block): the branch's Claude Code session
+              is still busy, so the worktree can change mid-review — say so,
+              then let "Review anyway" proceed. */}
+          {reviewDespiteAgent && (
+            <GitDialog
+              tone="blocked"
+              title={
+                <>
+                  Claude Code is still working on{' '}
+                  <span className="mono">{reviewDespiteAgent.row.branch}</span>
+                </>
+              }
+              body={
+                <>
+                  The session "{reviewDespiteAgent.session.name}" is busy in this branch's worktree,
+                  so files may change while you review. You can wait for it to finish, or review
+                  anyway.
+                </>
+              }
+              confirmLabel="Review anyway"
+              onConfirm={() => startSelfReviewAt(reviewDespiteAgent.row)}
+              cancelLabel="Not now"
+              onClose={() => setReviewDespiteAgent(null)}
             />
           )}
         </div>

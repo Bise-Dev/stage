@@ -1,7 +1,7 @@
-import type { CSSProperties } from 'react';
+import { type CSSProperties, useEffect, useState } from 'react';
 import { Icon } from '../../components/Icon';
 import type { SelfReviewProgress } from '../../generated/SelfReviewProgress';
-import type { OverviewRow } from '../../tauri';
+import type { AgentSession, OverviewRow } from '../../tauri';
 
 /**
  * The branch pills shared by the table row and the branch menu (ADR-0028 —
@@ -33,6 +33,86 @@ export function DebriefPill({ r }: { r: OverviewRow }) {
   }
   return (
     <span style={{ fontSize: 10.5, color: 'var(--gray-500)', flex: '0 0 auto' }}>debrief</span>
+  );
+}
+
+/** Ellipsis in the *middle* so a long session name keeps both its start and
+ *  its distinguishing tail readable (task names often share a prefix). CSS
+ *  `text-overflow` can only cut the end, so this is done in text. */
+function middleTruncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = max - 1 - head;
+  return `${s.slice(0, head)}…${s.slice(s.length - tail)}`;
+}
+
+/** The live Claude Code session pill (opt-in via Settings): the session's
+ *  name and status, exactly as Claude Code reports them. Right-click copies
+ *  the `claude --resume` command for the session — and stops there, so the
+ *  row's own context menu (ADR-0028) doesn't open on top of it. Claude
+ *  terracotta while the session is busy — the working sibling of the
+ *  DebriefPill it later hands off to. Shared by the branch rows and the
+ *  "no worktree yet" tail. */
+export function AgentSessionPill({
+  s,
+}: {
+  s: Pick<AgentSession, 'name' | 'status' | 'sessionId'> | null;
+}) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+  if (!s) return null;
+  const busy = s.status === 'busy';
+  const copyResume = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(`claude --resume ${s.sessionId}`);
+      setCopied(true);
+    } catch (err) {
+      // Clipboard denial is the only failure here; the pill itself is fine.
+      console.warn('agent_session_copy_failed', err);
+    }
+  };
+  return (
+    <span
+      className={`badge ${busy ? 'badge-claude' : ''}`}
+      onContextMenu={copyResume}
+      title={`Claude Code session "${s.name}" — ${s.status}. Right-click to copy the resume command.`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        flex: '0 0 auto',
+        maxWidth: 220,
+        // A touch more end padding than `.badge`'s 6px: the rounded corner
+        // eats into the last glyph otherwise ("working" grazed the edge).
+        paddingRight: 9,
+      }}
+    >
+      <span style={{ flex: '0 0 auto', display: 'inline-flex' }}>
+        <Icon name="claude" size={9} color={busy ? 'var(--claude)' : 'var(--gray-400)'} />
+      </span>
+      {copied ? (
+        'resume command copied'
+      ) : (
+        <span
+          style={{
+            whiteSpace: 'nowrap',
+            // If the truncated name still pushes past maxWidth, clip inside
+            // the pill instead of painting over its rounded edge.
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {middleTruncate(s.name, 26)} · {busy ? 'working' : s.status}
+        </span>
+      )}
+    </span>
   );
 }
 

@@ -17,6 +17,7 @@ export type IconName =
   | 'eye'
   | 'grip'
   | 'sparkle'
+  | 'claude'
   | 'comment-fill'
   | 'alert';
 
@@ -197,6 +198,21 @@ export function Icon({ name, size = 14, color = 'currentColor', className }: Ico
           aria-hidden="true"
         >
           <path d="M7 1.5v3M7 9.5v3M1.5 7h3M9.5 7h3M3.2 3.2l2 2M8.8 8.8l2 2M10.8 3.2l-2 2M5.2 8.8l-2 2" />
+        </svg>
+      );
+    case 'claude':
+      // The Claude spark — twelve rays from a hollow center, a stroke
+      // approximation of the Claude mark for "a Claude Code session".
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 16 16"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <path d="M10.2 8H15M9.91 9.1l4.15 2.4M9.1 9.91l2.4 4.15M8 10.2V15M6.9 9.91l-2.4 4.15M6.09 9.1l-4.15 2.4M5.8 8H1M6.09 6.9L1.94 4.5M6.9 6.09L4.5 1.94M8 5.8V1M9.1 6.09l2.4-4.15M9.91 6.9l4.15-2.4" />
         </svg>
       );
     case 'eye':
