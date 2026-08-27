@@ -406,7 +406,7 @@ export function Overview({
   // );
 
   return (
-    <BranchMenuProvider rows={allLocalRows} actions={branchActions}>
+    <BranchMenuProvider rows={allLocalRows} actions={branchActions} agentSessions={agentByBranch}>
       <div className="stage">
         <div className="win">
           <TitleBar title="Stage" />
@@ -552,7 +552,7 @@ export function Overview({
                     <div
                       style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '0 2px 6px' }}
                     >
-                      <Icon name="sparkle" size={11} color="var(--gray-500)" />
+                      <Icon name="claude" size={11} color="var(--claude)" />
                       <span
                         style={{
                           fontSize: 10,

@@ -29,6 +29,8 @@
   --orange: #ff9500;
   --purple: #af52de;
   --teal: #5ac8fa;
+  /* Claude's terracotta — reserved for the Claude Code session surfaces. */
+  --claude: #d97757;
 
   --hairline: rgba(0, 0, 0, 0.08);
   --hairline-2: rgba(0, 0, 0, 0.05);
@@ -216,6 +218,10 @@ body {
 .badge-purple {
   background: rgba(175, 82, 222, 0.14);
   color: #7b2cab;
+}
+.badge-claude {
+  background: rgba(217, 119, 87, 0.14);
+  color: #b0532f;
 }
 
 /* Self-Review: visual "+" affordance on line-number hover.
