@@ -26,6 +26,7 @@ pub mod status;
 pub mod store;
 pub mod storyline;
 pub mod switch;
+pub mod tool_path;
 pub mod viewed;
 pub mod worktree;
 
@@ -81,5 +82,6 @@ pub use switch::{
     switch_execute, switch_plan, SwitchOutcome, SwitchPlan, SwitchPlanOutcome, SwitchStep,
     SwitchStepKind,
 };
+pub use tool_path::{resolve_tool, GH_BIN_ENV, GIT_BIN_ENV};
 pub use viewed::{current_post_image_oid, import_legacy_viewed, ViewedMark, ABSENT_POST_IMAGE};
 pub use worktree::{list_worktrees, repo_common_dir, WorktreeInfo};

@@ -51,6 +51,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::StageError;
+use crate::tool_path::{resolve_tool, GH_BIN_ENV, GIT_BIN_ENV};
 
 /// The GitHub identity reported by `gh api user` — the `gh` token owner.
 ///
@@ -166,9 +167,15 @@ impl Default for GitHub {
 }
 
 impl GitHub {
-    /// The production adapter: the `gh` and `git` on the user's `PATH`.
+    /// The production adapter: the user's `gh` and `git`, each resolved to an
+    /// absolute path by [`crate::tool_path`] rather than left to the inherited
+    /// `PATH` — which, for a Dock/Finder-launched macOS bundle, is launchd's
+    /// minimal one and contains no Homebrew.
     pub fn new() -> Self {
-        Self::with_bins("gh", "git")
+        Self::with_bins(
+            resolve_tool("gh", GH_BIN_ENV),
+            resolve_tool("git", GIT_BIN_ENV),
+        )
     }
 
     /// Construct with explicit binaries. Production uses [`GitHub::new`]; tests
@@ -205,7 +212,9 @@ impl GitHub {
             tracing::error!(err = %e, bin = ?self.gh_bin, "gh_not_found");
             format!(
                 "GitHub CLI (`gh`) was not found. Stage uses your local `gh` for every \
-                 GitHub action and stores no credentials of its own. {GH_INSTALL_HINT}"
+                 GitHub action and stores no credentials of its own. {GH_INSTALL_HINT} \
+                 If it is already installed, Stage couldn't see it: set {GH_BIN_ENV} to \
+                 its full path (`which gh` in a terminal)."
             )
         } else {
             tracing::error!(err = %e, bin = ?self.gh_bin, "gh_spawn_failed");
