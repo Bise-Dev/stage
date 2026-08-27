@@ -215,6 +215,12 @@ function BranchMenuCard({
   const hasDebrief = meta?.hasDebrief ?? false;
   const acts = branchMenuEntries(r);
   const worktree = materializedWorktree(meta);
+  // Git's original checkout is a Worktree too (CONTEXT.md, *Root worktree*),
+  // but "this branch's worktree" reads wrong for the directory the repo was
+  // cloned into — most authors have no linked worktrees at all. Name it what
+  // the branch list's badge calls it, so the two entries below stay true
+  // whichever kind of working directory the branch sits on.
+  const treeNoun = worktree?.isRoot ? 'root worktree' : 'worktree';
   const selfLabel =
     sr && sr.viewed > 0 ? `Continue self-review · ${sr.viewed}/${sr.total}` : 'Self-review';
 
@@ -350,8 +356,8 @@ function BranchMenuCard({
         <MenuItem
           icon="folder"
           color="var(--gray-600)"
-          label="Reveal worktree in Finder"
-          onClick={runAsync("Couldn't reveal the worktree", () => openInFinder(worktree.path))}
+          label={`Reveal ${treeNoun} in Finder`}
+          onClick={runAsync("Couldn't reveal the folder", () => openInFinder(worktree.path))}
           sub={worktree.path}
         />
       )}
@@ -361,7 +367,7 @@ function BranchMenuCard({
           color="var(--gray-600)"
           label="Open in VS Code"
           onClick={runAsync("Couldn't open VS Code", () => openInVscode(worktree.path))}
-          sub="Open this branch's worktree as a folder in Visual Studio Code."
+          sub={`Open the ${treeNoun} as a folder in Visual Studio Code.`}
         />
       )}
       {r.url && (
