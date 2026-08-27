@@ -215,7 +215,11 @@ export function BranchMenuProvider({
  *  composer's single entry is the toolbar's "New review"): the one local-review
  *  entry (Self-Review, debrief included), the draft/published entries, the
  *  explicit switch, and the universal group. No auto-switch notice — switching
- *  is its own confirmed action (ADR-0027). */
+ *  is its own confirmed action (ADR-0027).
+ *
+ *  Options only: each entry is a single line of label plus badge. The
+ *  descriptions this card used to carry under every label made a menu you had
+ *  to read instead of scan; what the label can't say goes in `title`. */
 function BranchMenuCard({
   r,
   actions,
@@ -229,7 +233,6 @@ function BranchMenuCard({
 }) {
   const meta = r.branchMeta;
   const sr = meta?.selfReview ?? null;
-  const hasDebrief = meta?.hasDebrief ?? false;
   const acts = branchMenuEntries(r);
   const worktree = materializedWorktree(meta);
   // Git's original checkout is a Worktree too (CONTEXT.md, *Root worktree*),
@@ -261,13 +264,14 @@ function BranchMenuCard({
   return (
     <div
       style={{
-        width: 300,
+        minWidth: 220,
+        maxWidth: 300,
         background: '#fff',
         borderRadius: 'var(--r-lg)',
         boxShadow: 'var(--sh-pop)',
         padding: 5,
-        // The table's cells are `nowrap`; without this the item subtitles run
-        // straight out of the card's right edge.
+        // The table's cells are `nowrap`; without this a label that carries a
+        // badge alongside it runs straight out of the card's right edge.
         whiteSpace: 'normal',
       }}
     >
@@ -302,14 +306,10 @@ function BranchMenuCard({
           primary={acts.review.enabled}
           dim={!acts.review.enabled}
           onClick={acts.review.enabled ? run(() => actions.onSelfReview(r)) : undefined}
-          sub={
+          title={
             acts.review.enabled
-              ? hasDebrief
-                ? "Browse your changes by file, with your agent's debrief alongside them."
-                : 'Browse your changes by file, entirely on this machine.'
-              : hasDebrief
-                ? 'Not checked out — switch to this branch (below) to read the debrief alongside its diff.'
-                : 'Not checked out — switch to this branch (below) to self-review it here.'
+              ? undefined
+              : 'Not checked out — switch to this branch to self-review it here.'
           }
           right={
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -329,9 +329,9 @@ function BranchMenuCard({
           label="Storyline"
           dim={!acts.storyline.enabled}
           onClick={acts.storyline.enabled ? run(() => actions.onOpenStoryline(r)) : undefined}
-          sub={
+          title={
             acts.storyline.enabled
-              ? 'Open the storyline composer for this review.'
+              ? undefined
               : 'Check the branch out in a worktree to compose its storyline.'
           }
         />
@@ -342,7 +342,6 @@ function BranchMenuCard({
           color="var(--gray-600)"
           label="Discard review…"
           onClick={run(() => actions.onDiscardDraft(r))}
-          sub="Remove the draft; the branch returns to Self-Review."
         />
       )}
       */}
@@ -354,7 +353,6 @@ function BranchMenuCard({
             color="var(--gray-700)"
             label="Switch to branch…"
             onClick={run(() => actions.onSwitchTo(r.branch))}
-            sub="Stage lists the exact git commands and runs them only after you confirm."
           />
         </>
       )}
@@ -386,7 +384,7 @@ function BranchMenuCard({
           color="var(--gray-600)"
           label={`Reveal ${treeNoun} in Finder`}
           onClick={runAsync("Couldn't reveal the folder", () => openInFinder(worktree.path))}
-          sub={worktree.path}
+          title={worktree.path}
         />
       )}
       {worktree && (
@@ -395,7 +393,7 @@ function BranchMenuCard({
           color="var(--gray-600)"
           label="Open in VS Code"
           onClick={runAsync("Couldn't open VS Code", () => openInVscode(worktree.path))}
-          sub={`Open the ${treeNoun} as a folder in Visual Studio Code.`}
+          title={worktree.path}
         />
       )}
       {r.url && (
@@ -414,11 +412,14 @@ function Separator() {
   return <hr style={{ border: 0, borderTop: '1px solid var(--hairline)', margin: '5px 2px' }} />;
 }
 
+/** One line: icon, label, and whatever badge rides along. No description —
+ *  the menu is a list of options, and anything a label can't carry belongs in
+ *  the `title` tooltip rather than a second line of prose. */
 function MenuItem({
   icon,
   color,
   label,
-  sub,
+  title,
   dim,
   right,
   primary,
@@ -427,7 +428,7 @@ function MenuItem({
   icon: IconName;
   color: string;
   label: string;
-  sub?: string;
+  title?: string;
   dim?: boolean;
   right?: ReactNode;
   primary?: boolean;
@@ -439,13 +440,14 @@ function MenuItem({
       role="menuitem"
       onClick={onClick}
       disabled={!onClick}
+      title={title}
       style={{
         display: 'flex',
-        alignItems: 'flex-start',
+        alignItems: 'center',
         gap: 10,
         width: '100%',
         textAlign: 'left',
-        padding: '9px 10px',
+        padding: '7px 10px',
         borderRadius: 7,
         opacity: dim ? 0.6 : 1,
         background: primary ? 'var(--blue-tint)' : 'transparent',
@@ -454,39 +456,25 @@ function MenuItem({
         fontFamily: 'inherit',
       }}
     >
-      <span style={{ flex: '0 0 16px', marginTop: 1, display: 'flex' }}>
+      <span style={{ flex: '0 0 16px', display: 'flex' }}>
         <Icon name={icon} size={13} color={color} />
       </span>
-      <span style={{ flex: 1, minWidth: 0 }}>
-        <span
-          style={{
-            fontSize: 12.5,
-            fontWeight: 600,
-            color: 'var(--gray-900)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            // Badges drop to a second line rather than pushing past the card.
-            flexWrap: 'wrap',
-          }}
-        >
-          {label}
-          {right}
-        </span>
-        {sub && (
-          <span
-            style={{
-              display: 'block',
-              fontSize: 11,
-              color: 'var(--gray-500)',
-              marginTop: 1,
-              lineHeight: 1.4,
-              overflowWrap: 'anywhere',
-            }}
-          >
-            {sub}
-          </span>
-        )}
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: 12.5,
+          fontWeight: 600,
+          color: 'var(--gray-900)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          // Badges drop to a second line rather than pushing past the card.
+          flexWrap: 'wrap',
+        }}
+      >
+        {label}
+        {right}
       </span>
     </button>
   );
