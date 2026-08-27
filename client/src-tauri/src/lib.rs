@@ -1,5 +1,6 @@
 #[cfg(debug_assertions)]
 pub mod activity_log;
+mod agent_sessions;
 mod commands;
 mod errors;
 mod git;
@@ -213,6 +214,7 @@ pub fn run() {
             commands::git_local_branches,
             commands::git_remote_branches,
             commands::repo_worktrees,
+            commands::agent_sessions,
             commands::set_focused_worktree,
             commands::git_diff_stats,
             commands::git_diff_files,

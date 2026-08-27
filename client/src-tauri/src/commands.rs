@@ -254,6 +254,23 @@ pub fn repo_worktrees(
     Ok(stage_core::list_worktrees(&path)?)
 }
 
+/// Live Claude Code sessions working in this repo's worktrees — the opt-in
+/// branch-table pill (see `agent_sessions.rs`). The probe itself is
+/// best-effort by design and never errors; only "no active repo" or a failed
+/// worktree enumeration can fail this call.
+#[tauri::command]
+// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
+// per invocation with its duration (debug builds only). `skip_all` keeps the
+// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub fn agent_sessions(
+    state: State<'_, AppState>,
+) -> Result<crate::agent_sessions::AgentSessionsView, AppError> {
+    let path = active_repo_path(&state)?;
+    let worktrees = stage_core::list_worktrees(&path)?;
+    Ok(crate::agent_sessions::probe(&worktrees))
+}
+
 /// Focus a different worktree of the active Repo. Observe-only: this does NOT
 /// check out — it re-points which worktree's working tree Self-Review/diff read
 /// (ADR-0016). Fails loud if `path` is not one of the repo's worktrees.

@@ -12,6 +12,8 @@ import { type UnlistenFn, listen } from '@tauri-apps/api/event';
 import type { ActivityLogEntry } from './generated/ActivityLogEntry';
 import type { ActivityLogLevel } from './generated/ActivityLogLevel';
 import type { ActivityLogPill } from './generated/ActivityLogPill';
+import type { AgentSession } from './generated/AgentSession';
+import type { AgentSessionsView } from './generated/AgentSessionsView';
 import type { BaseOptions } from './generated/BaseOptions';
 import type { BranchGraphView } from './generated/BranchGraphView';
 import type { BranchInfo } from './generated/BranchInfo';
@@ -92,6 +94,7 @@ import type { SyncScope } from './generated/SyncScope';
 import type { SyncStatus } from './generated/SyncStatus';
 import type { SyncUpdate } from './generated/SyncUpdate';
 import type { ThreadComment } from './generated/ThreadComment';
+import type { UnattachedAgentSession } from './generated/UnattachedAgentSession';
 import type { UncommittedDisposition } from './generated/UncommittedDisposition';
 import type { UncommittedFile } from './generated/UncommittedFile';
 import type { Verdict } from './generated/Verdict';
@@ -102,6 +105,9 @@ export type {
   ActivityLogEntry,
   ActivityLogLevel,
   ActivityLogPill,
+  AgentSession,
+  AgentSessionsView,
+  UnattachedAgentSession,
   BaseOptions,
   BranchInfo,
   BranchMeta,
@@ -211,6 +217,14 @@ export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> =>
 /** The worktrees git reports for the active Repo, root first. Re-enumerated
  *  from git on every call (Stage holds no registry). */
 export const repoWorktrees = () => invoke<WorktreeInfo[]>('repo_worktrees');
+
+/** Live Claude Code sessions inside this repo — `attached` one-per-branch for
+ *  dedicated worktrees (busy outranks idle; the row pill), `unattached` for
+ *  sessions with no dedicated worktree yet (the tail list). The Rust probe is
+ *  best-effort by design: it reads `~/.claude/sessions` (another tool's files)
+ *  and renders anything unreadable as absence, so only "no active repo" or a
+ *  failed worktree enumeration rejects here. */
+export const agentSessions = () => invoke<AgentSessionsView>('agent_sessions');
 
 /** Focus a different worktree for Self-Review. Observe-only: re-points which
  *  worktree's working tree the diff reads; never checks out. Returns the new
