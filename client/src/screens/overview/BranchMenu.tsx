@@ -408,6 +408,84 @@ function BranchMenuCard({
   );
 }
 
+/**
+ * The context menu for a live session in the "Claude Code · no worktree yet"
+ * tail. No branch, worktree, or PR exists yet, so the card is the session
+ * header plus the one action a bare session offers — the same "Copy resume
+ * command" entry the branch menu carries once the session has a row to ride.
+ * Rendered here so no right-click in the overview is inert (ADR-0028) and the
+ * two cards can't drift apart.
+ */
+export function AgentSessionMenu({
+  session,
+  at,
+  onClose,
+  onError,
+}: {
+  session: Pick<AgentSession, 'name' | 'sessionId'>;
+  at: MenuPoint;
+  onClose: () => void;
+  /** Same fail-loud contract as `BranchActions.onError`. */
+  onError: (title: string, message: string) => void;
+}) {
+  const copyResume = () => {
+    onClose();
+    navigator.clipboard.writeText(`claude --resume ${session.sessionId}`).catch((e) => {
+      console.error('agent_session_menu_copy_failed', {
+        sessionId: session.sessionId,
+        err: String(e),
+      });
+      onError("Couldn't copy the resume command", String(e));
+    });
+  };
+  return (
+    <ContextMenu
+      at={at}
+      onClose={onClose}
+      ariaLabel={`Actions on Claude Code session ${session.name}`}
+    >
+      <div
+        style={{
+          minWidth: 220,
+          maxWidth: 300,
+          background: '#fff',
+          borderRadius: 'var(--r-lg)',
+          boxShadow: 'var(--sh-pop)',
+          padding: 5,
+        }}
+      >
+        <div
+          className="section-label"
+          style={{ padding: '6px 10px 4px', display: 'flex', alignItems: 'center', gap: 5 }}
+        >
+          <Icon name="claude" size={10} color="var(--claude)" />{' '}
+          <span
+            style={{
+              textTransform: 'none',
+              letterSpacing: 0,
+              // Long session names truncate rather than widening the card.
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={session.name}
+          >
+            {session.name}
+          </span>
+        </div>
+        <MenuItem
+          icon="claude"
+          color="var(--claude)"
+          label="Copy resume command"
+          onClick={copyResume}
+          title={`Continue the Claude Code session "${session.name}" in your terminal.`}
+        />
+      </div>
+    </ContextMenu>
+  );
+}
+
 function Separator() {
   return <hr style={{ border: 0, borderTop: '1px solid var(--hairline)', margin: '5px 2px' }} />;
 }
