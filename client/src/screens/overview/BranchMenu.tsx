@@ -375,7 +375,7 @@ function BranchMenuCard({
           onClick={runAsync("Couldn't copy the resume command", () =>
             navigator.clipboard.writeText(`claude --resume ${agentSession.sessionId}`),
           )}
-          sub={`Continue the Claude Code session "${agentSession.name}" in your terminal.`}
+          title={`Continue the Claude Code session "${agentSession.name}" in your terminal.`}
         />
       )}
       {worktree && (
