@@ -88,6 +88,9 @@ export function AgentSessionPill({
         gap: 4,
         flex: '0 0 auto',
         maxWidth: 220,
+        // A touch more end padding than `.badge`'s 6px: the rounded corner
+        // eats into the last glyph otherwise ("working" grazed the edge).
+        paddingRight: 9,
       }}
     >
       <span style={{ flex: '0 0 auto', display: 'inline-flex' }}>
@@ -96,7 +99,16 @@ export function AgentSessionPill({
       {copied ? (
         'resume command copied'
       ) : (
-        <span style={{ whiteSpace: 'nowrap' }}>
+        <span
+          style={{
+            whiteSpace: 'nowrap',
+            // If the truncated name still pushes past maxWidth, clip inside
+            // the pill instead of painting over its rounded edge.
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
           {middleTruncate(s.name, 26)} · {busy ? 'working' : s.status}
         </span>
       )}
