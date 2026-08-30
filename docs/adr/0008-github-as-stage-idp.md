@@ -11,7 +11,7 @@ Stage backend has two distinct authorization concerns:
 1. **Identity** — every authenticated backend endpoint needs to know who the user is. Stage-native data (`Workspace`, `Storyline`, `IntroComment`) carries FK ownership and edit permissions keyed by `User`. Without an identity, none of the data plane works.
 2. **Credential** — the github_proxy endpoints (and the workspace endpoints that embed storylines in GitHub commits) need to make GitHub API calls on the user's behalf, attributed to that user's GitHub account.
 
-ADR-0007 chose the GitHub App user-to-server token model for concern #2. This ADR addresses concern #1: where does Stage get its identity from?
+ADR-0007 chose the GitHub App user-to-server token model for concern 2. This ADR addresses concern 1: where does Stage get its identity from?
 
 The choice is whether Stage maintains a separate identity surface (password, email-link, social-login, magic-link, etc.) or treats GitHub as the sole identity provider.
 

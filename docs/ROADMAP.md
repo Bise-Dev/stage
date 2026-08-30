@@ -4,7 +4,7 @@ Forward-looking goals that we are deliberately *not* building yet, but are aimin
 
 ## The near-term direction: turning the review surface back on
 
-What shipped: the v6-light baseline (2026-07-26 decisions; durable parts in ADR-0025/0026/0027 + CONTEXT.md) — a branch-table home replacing the Overview, one shared shell whose Self-review mode renders the agent's Debrief inline, and confirmed git actions.
+What shipped: the current baseline (durable parts in ADR-0025/0026/0027 + CONTEXT.md) — a branch-table home replacing the Overview, one shared shell whose Self-review mode renders the agent's Debrief inline, and confirmed git actions.
 
 What the current version **supports** is narrower still: **local Self-Review + Debrief only**. The storyline / publish / reviewer half is implemented, but its UI is commented out.
 
@@ -16,7 +16,7 @@ So the near-term goal is not new capability, it's **making that half good enough
 
 **Goal:** optionally expose the same operations as an MCP server so MCP clients get typed tools + discoverability without shelling out.
 
-**Why not now:** the CLI covers the loop end-to-end and adding a second protocol surface before the v6 domain model settles would freeze the wrong API. **Implication:** keep every agent-facing operation a thin wrapper over one stage-core function, so a future MCP server is a second frontend, not a second implementation.
+**Why not now:** the CLI covers the loop end-to-end and adding a second protocol surface before the domain model settles would freeze the wrong API. **Implication:** keep every agent-facing operation a thin wrapper over one stage-core function, so a future MCP server is a second frontend, not a second implementation.
 
 ## Attachments in PR descriptions
 
@@ -44,6 +44,6 @@ So the near-term goal is not new capability, it's **making that half good enough
 
 ## Background sync
 
-**Today:** landing separately (snapshot-serving overview + adaptive `gh` polling; see `docs/plans/background-sync-research.md`): the branch table renders from a snapshot and refreshes without user-initiated fetches.
+**Today:** landing separately (snapshot-serving overview + adaptive `gh` polling): the branch table renders from a snapshot and refreshes without user-initiated fetches.
 
 **Goal (beyond it):** push-style freshness (webhooks or notifications API) so remote review activity appears without polling pressure. **Implication:** UI reads snapshots; nothing in the webview assumes it triggered the fetch that produced the data it renders.

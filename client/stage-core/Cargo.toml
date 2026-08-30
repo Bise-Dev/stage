@@ -3,6 +3,7 @@ name = "stage-core"
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.77"
+license = "MIT"
 
 [dependencies]
 # `bundled` compiles SQLite from source — no system libsqlite3 dependency, and

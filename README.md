@@ -79,3 +79,7 @@ Commented out rather than deleted because the code works and is meant to come ba
 - [`CLAUDE.md`](./CLAUDE.md) — conventions for working in this repo.
 
 Developing Stage itself? `just bootstrap` once, then `just run` for the dev stack, and `just pre-commit` / `just verify` before pushing (see [`justfile`](./justfile)).
+
+## License
+
+[MIT](./LICENSE). Third-party dependency attributions are listed in [`THIRD-PARTY-NOTICES.md`](./THIRD-PARTY-NOTICES.md).

@@ -3,6 +3,7 @@ name = "stage-client"
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.77"
+license = "MIT"
 # Unbundled (i.e. `tauri dev`), macOS labels the Dock tile and the app menu with
 # the running binary's name, so the binary is named after the product rather than
 # the crate — otherwise the dev app shows up as "stage-client". `tauri build`

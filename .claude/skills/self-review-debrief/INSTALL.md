@@ -13,8 +13,8 @@ directory — not just when you're inside the Stage repo. This guide is the cand
 
 | Requirement | Why | Check |
 |---|---|---|
-| A local clone of the **Stage repo** | The `stage` CLI that the skill calls is built here. This is a **hard prerequisite** — the skill cannot work without it. | You're reading this file, so you have it. |
-| **Rust** via `rustup` | To build the `stage` CLI (`client/target/debug/stage`). | `rustup --version` |
+| A local clone of the **Stage repo** | The `st` CLI that the skill calls is built here. This is a **hard prerequisite** — the skill cannot work without it. | You're reading this file, so you have it. |
+| **Rust** via `rustup` | To build the `st` CLI (`client/target/debug/st`). | `rustup --version` |
 | **Claude Code** | The skill runs inside it. | `claude --version` |
 
 > The skill is **local and auth-free** — no network, no tokens. Everything happens on your machine.
@@ -23,12 +23,12 @@ directory — not just when you're inside the Stage repo. This guide is the cand
 
 ## How the skill finds Stage
 
-The skill needs to locate one thing: the **`stage` binary**, built at `<stage-repo>/client/target/debug/stage`.
+The skill needs to locate one thing: the **`st` binary**, built at `<stage-repo>/client/target/debug/st`.
 It resolves it in this order:
 
 1. **`$STAGE_REPO`** — an environment variable pointing at your Stage repo root. (This is what a global install uses.)
 2. **In-repo relative** — if your current directory already *is* the Stage repo, it just uses `./client/...`.
-3. **`$PATH`** — if you put a `stage` binary on your `PATH`.
+3. **`$PATH`** — if you put an `st` binary on your `PATH`.
 
 For a global install you set option 1 once. That's the whole trick.
 
@@ -40,7 +40,7 @@ From inside your Stage clone, print the absolute path and keep it handy:
 
 ```sh
 cd /path/to/your/stage      # wherever you cloned it
-pwd                         # e.g. /Users/you/perso/stage  ← copy this
+pwd                         # e.g. /Users/you/code/stage  ← copy this
 ```
 
 Use the **absolute** path everywhere below (no `~`, no `$HOME`).
@@ -66,7 +66,7 @@ and ask it to set the env var `STAGE_REPO` to your path.
 ```json
 {
   "env": {
-    "STAGE_REPO": "/Users/you/perso/stage"
+    "STAGE_REPO": "/Users/you/code/stage"
   }
 }
 ```
@@ -120,7 +120,7 @@ In a **new** session, confirm the env is visible and the binary resolves:
 
 ```sh
 echo "$STAGE_REPO"                          # should print your path, not blank
-ls "$STAGE_REPO/client/target/debug/stage"  # should exist after Step 4
+ls "$STAGE_REPO/client/target/debug/st"     # should exist after Step 4
 ```
 
 Then, from **any** repo you're working in, ask your agent to *"write a self-review debrief"*. It should locate the
@@ -134,7 +134,7 @@ which code to review.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `stage CLI not found: set STAGE_REPO…` | Env not set or not loaded | Re-check Step 2; start a **new** session after editing settings. |
+| `st CLI not found: set STAGE_REPO…` | Env not set or not loaded | Re-check Step 2; start a **new** session after editing settings. |
 | `echo "$STAGE_REPO"` prints blank | Settings change not picked up | Confirm it's in `~/.claude/settings.json` `env`, valid JSON; restart Claude Code. |
 | Build fails on `libsqlite3-sys` | Built from repo root | `cd "$STAGE_REPO/client"` first, then build. |
 | Reviews the wrong repo | Wrong working directory | The CLI reviews *your current directory's* repo. `cd` into the repo you mean. |

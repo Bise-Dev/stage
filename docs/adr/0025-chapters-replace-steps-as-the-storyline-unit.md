@@ -10,5 +10,5 @@ A Storyline was an ordered list of per-file **steps**, each carrying its own int
 
 ## Considered options
 
-- **Chapters + optional per-step intros** — rejected: two levels of narration to author and render, and the v6 design explicitly states files get no step name.
+- **Chapters + optional per-step intros** — rejected: two levels of narration to author and render, and the chapter design explicitly states files get no step name.
 - **Legacy read shim (step → one-file chapter)** — rejected as unnecessary permanent surface for a single disposable artifact.
