@@ -29,6 +29,7 @@ pub enum GitStepKind {
     Checkout,
     Pop,
     Push,
+    Delete,
 }
 
 /// One git command a plan will run, with the human note rendered above it.

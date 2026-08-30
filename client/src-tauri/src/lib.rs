@@ -262,6 +262,8 @@ pub fn run() {
             commands::branch_switch_execute,
             commands::branch_push_plan,
             commands::branch_push_execute,
+            commands::branch_delete_plan,
+            commands::branch_delete_execute,
             commands::branch_graph,
             commands::gh_identity,
             commands::build_info,

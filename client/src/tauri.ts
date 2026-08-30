@@ -30,6 +30,8 @@ import type { CommittedDiff } from './generated/CommittedDiff';
 import type { Debrief } from './generated/Debrief';
 import type { DebriefFreshness } from './generated/DebriefFreshness';
 import type { DebriefView } from './generated/DebriefView';
+import type { DeleteOutcome } from './generated/DeleteOutcome';
+import type { DeletePlanOutcome } from './generated/DeletePlanOutcome';
 import type { DiffStats } from './generated/DiffStats';
 import type { DraftLineComment } from './generated/DraftLineComment';
 import type { FetchOutcome } from './generated/FetchOutcome';
@@ -120,6 +122,8 @@ export type {
   Debrief,
   DebriefFreshness,
   DebriefView,
+  DeleteOutcome,
+  DeletePlanOutcome,
   DiffStats,
   FetchOutcome,
   FileStatus,
@@ -261,6 +265,20 @@ export const branchPushPlan = (branch: string) =>
  *  non-fast-forward). Render it verbatim. */
 export const branchPushExecute = (branch: string) =>
   invoke<PushOutcome>('branch_push_execute', { branch });
+
+/** Plan an explicit delete of the local branch `branch` — the exact command,
+ *  the commits it discards, and the tip SHA that recovers it (ADR-0029).
+ *  Mutates nothing. Local ref only: the remote branch is never touched. A
+ *  branch any worktree holds comes back as the structured `checkedOut`
+ *  outcome. */
+export const branchDeletePlan = (branch: string) =>
+  invoke<DeletePlanOutcome>('branch_delete_plan', { branch });
+
+/** Execute the confirmed delete. Rejects with the engine's complete message —
+ *  render it verbatim. The resolved outcome carries the deleted tip's SHA, the
+ *  one thing that puts the branch back (`git branch <name> <sha>`). */
+export const branchDeleteExecute = (branch: string) =>
+  invoke<DeleteOutcome>('branch_delete_execute', { branch });
 
 /** Assemble the branch graph (v6-light L6): bounded commit topology with lane
  *  geometry, computed fresh per call. Read-only. Rejects with the engine's

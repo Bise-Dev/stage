@@ -16,6 +16,8 @@ const DOT_COLOR: Record<GitStepKind, string> = {
   // A push leaves the working tree alone but is the one step that reaches the
   // network and changes what other people can see — green, like the prompt.
   push: 'var(--green-d)',
+  // The one step that destroys something. Red, and the only kind that gets it.
+  delete: 'var(--red-d)',
 };
 
 /** The numbered list of git commands a confirmed action will run — the

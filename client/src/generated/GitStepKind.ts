@@ -6,4 +6,4 @@
  * happens to use them: a `Push` step is a push whether it publishes a branch
  * or updates one.
  */
-export type GitStepKind = "stash" | "checkout" | "pop" | "push";
+export type GitStepKind = "stash" | "checkout" | "pop" | "push" | "delete";

@@ -1,4 +1,4 @@
-# ADR-0029 · The branch push is a standalone confirmed action, and every git shell-out goes through one module
+# ADR-0029 · Branch push and delete are standalone confirmed actions, and every git shell-out goes through one module
 
 **Status:** accepted
 **Date:** 2026-08-30
@@ -28,7 +28,11 @@ That last cluster was not unique to push. Five modules each hand-rolled the same
 
 **4 · Stage never force-pushes.** A branch that has diverged from its upstream is a reported state with no button (`PushPlanOutcome::Diverged`, both counts named). Rebase, merge, or `--force-with-lease` are the author's call, made in their terminal. "Nothing to push" is likewise a report, not an empty push.
 
-**5 · Every `git` shell-out in `stage-core` goes through `git_cli`.** One spawn (with `tool_path`'s resolved binary), one classifier (git's stderr verbatim), one place to fix the next thing that turns out to be wrong with all of them. `GitStep`/`GitStepKind` move out of `switch` into `git_step` for the same reason — the confirmation list is every git action's, not the switch's.
+**5 · Deleting a branch is the same shape, and deletes only the local ref.** `stage-core::delete` plans and confirms like the other two. It never touches the remote branch: a local delete is recoverable from the reflog, while deleting the shared remote branch is visible to everyone and can break an open PR, so that stays something the author does deliberately in their terminal. It never removes a worktree (ADR-0016), and never deletes the branch's Debrief or Self-Review notes — a branch can be recreated at the same name, and silently dropping the author's own notes as a side effect of a ref delete would be the more surprising behaviour.
+
+**6 · An unmerged delete is offered, with the recovery SHA, and no backup ref.** Deleting a dead experiment is a normal thing to want, so an unmerged branch is planned rather than refused — but it is the case where the author most needs to see what they are losing, so the plan carries the unmerged count, the ref it was measured against, the tip's commit summary, and the tip SHA. The confirmation shows `git branch <name> <sha>` for *every* delete, not just the risky ones: that SHA is the whole recovery story, and the moment after the delete is exactly when it stops being easy to find. Stage writes no backup tag or branch first — an unasked-for ref left behind is clutter the author then has to clean up, and the reflog already is the safety net. The default branch is refused outright; a branch any worktree holds (including a `prunable` one, which still blocks git's delete) is reported with the path, not deleted.
+
+**7 · Every `git` shell-out in `stage-core` goes through `git_cli`.** One spawn (with `tool_path`'s resolved binary), one classifier (git's stderr verbatim), one place to fix the next thing that turns out to be wrong with all of them. `GitStep`/`GitStepKind` move out of `switch` into `git_step` for the same reason — the confirmation list is every git action's, not the switch's.
 
 ## Considered alternatives
 
@@ -37,10 +41,14 @@ That last cluster was not unique to push. Five modules each hand-rolled the same
 - **Offer `--force-with-lease` behind a scarier confirmation.** Rejected for now. A lost commit is the one failure a local review tool must never cause, and a diverged branch is nearly always resolved by understanding *why* it diverged — which happens in a terminal, not a modal.
 - **Dim the entry when the snapshot says there's nothing to push.** Rejected: the overview snapshot is as fresh as the last fetch, so the menu would guess. The plan is cheap, local, and authoritative — let it answer.
 - **Have push use `gh`.** Rejected: transport is the user's own git credentials (ADR-0022 §5). The push works with `gh` absent or unauthenticated, like every other git op.
+- **Refuse to delete an unmerged branch.** Rejected: abandoning an experiment is ordinary, and a tool that only deletes branches git would have deleted anyway is not worth a menu entry. Showing the count and the recovery SHA is the honest version.
+- **Write a backup tag/branch before deleting.** Rejected — and this is a standing preference, not a one-off: the reflog already holds the commits, and a safety ref nobody asked for becomes litter the author has to notice and clean up. Report the SHA instead.
+- **Delete the branch's Debrief and notes alongside the ref.** Rejected: they are the author's own work, not git state, and the branch may be recreated. If orphaned local state becomes a real problem it deserves its own deliberate cleanup affordance.
+- **Offer "delete local + remote" as one action.** Rejected for now: the two have very different blast radii, and folding them into one confirmation makes the dangerous half easy to trigger while aiming at the safe one.
 
 ## Consequences
 
-- The branch menu carries **Push branch…** for every branch (ADR-0028's one shared menu), checked out or not.
+- The branch menu carries **Push branch…** for every branch (ADR-0028's one shared menu), checked out or not, and **Delete branch…** for every branch but the default.
 - `push_plan` is honest about staleness: the ahead/behind counts come from refs on disk. A plan is as fresh as the last fetch, and `push_execute` re-derives it, so a stale plan fails loud rather than pushing something unexpected.
 - `git::push`, `PushOutcome` (the old shape) and the `git_push` command are deleted; `git::fetch` now spawns through `git_cli`, so it inherits the resolved-binary fix it never had.
 - `SwitchStep`/`SwitchStepKind` are renamed to `GitStep`/`GitStepKind` — a breaking change to the generated TS bindings, absorbed in the same commit.

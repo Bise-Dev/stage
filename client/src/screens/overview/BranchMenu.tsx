@@ -49,6 +49,10 @@ export type BranchActions = {
    *  ref, so it needs no working tree — and when the branch *does* have one,
    *  the push runs in that worktree rather than the focused one. */
   onPush: (branch: string) => void;
+  /** Plan a delete of the local branch and raise its confirmation (ADR-0029).
+   *  Hidden on the default branch — the one branch Stage refuses outright, so
+   *  offering it would be an entry that can only fail. */
+  onDelete: (branch: string) => void;
   /** Surface a failure to the author (CLAUDE.md fail-loud): the overview
    *  renders it in the same dialog the git actions use. */
   onError: (title: string, message: string) => void;
@@ -372,6 +376,19 @@ function BranchMenuCard({
         onClick={run(() => actions.onPush(r.branch))}
         title={`Push ${r.branch} to its remote with your own git credentials. Stage shows the exact command first.`}
       />
+      {/* Not offered on the default branch: the engine refuses it outright, so
+          the entry could only ever raise an error dialog. Every other branch
+          gets it — including one checked out somewhere, where the plan reports
+          *which* worktree holds it, which is more useful than a dimmed row. */}
+      {!meta?.isDefault && (
+        <MenuItem
+          icon="trash"
+          color="var(--red-d)"
+          label="Delete branch…"
+          onClick={run(() => actions.onDelete(r.branch))}
+          title={`Delete the local branch ${r.branch}. The remote branch is untouched, and the confirmation shows how to undo it.`}
+        />
+      )}
       {/* The universal group. Always live, so no branch ever raises an empty
           menu and no right-click is inert (ADR-0028). The git group above it
           always has at least the push entry, so this separator always earns

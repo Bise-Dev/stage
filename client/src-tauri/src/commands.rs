@@ -1287,6 +1287,46 @@ pub async fn branch_push_execute(
     .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
+// --- Explicit branch delete (ADR-0029) ----------------------------------------
+//
+// Same two-phase shape as the switch and push pairs above. Local ref only —
+// the remote branch is never touched.
+
+/// Plan the delete of `branch`: the exact command, how many commits it
+/// discards, and the tip SHA that recovers it. Mutates nothing. A branch held
+/// by any worktree comes back as the structured "checked out" outcome.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn branch_delete_plan(
+    state: State<'_, AppState>,
+    branch: String,
+) -> Result<stage_core::DeletePlanOutcome, AppError> {
+    let path = active_repo_path(&state)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
+        Ok(stage_core::delete_plan(&path, &branch)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("branch_delete_plan_join_error: {e}")))?
+}
+
+/// Execute a confirmed delete. Fails loud with git's verbatim stderr. The
+/// branch set changed, so nudge the sync engine — every snapshot input that
+/// mentions this branch is now stale.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn branch_delete_execute(
+    state: State<'_, AppState>,
+    branch: String,
+) -> Result<stage_core::DeleteOutcome, AppError> {
+    let path = active_repo_path(&state)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
+        Ok(stage_core::delete_execute(&path, &branch)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("branch_delete_execute_join_error: {e}")))?
+    .inspect(|_| nudge_sync(&state, SyncMsg::LocalChanged))
+}
+
 // --- Branch graph (v6-light L6) ------------------------------------------------
 
 /// Assemble the branch graph: bounded commit topology with lane geometry,

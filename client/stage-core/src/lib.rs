@@ -9,6 +9,7 @@
 
 pub mod base;
 pub mod chapter;
+pub mod delete;
 pub mod diff;
 pub mod discussion;
 pub mod domain;
@@ -35,6 +36,7 @@ pub mod worktree;
 
 pub use base::{base_options, branch_head_sha, BaseOptions, LocalDefault};
 pub use chapter::Chapter;
+pub use delete::{delete_execute, delete_plan, DeleteOutcome, DeletePlan, DeletePlanOutcome};
 pub use diff::DiffLineIndex;
 pub use discussion::{
     group_threads_by_step, PrDiscussion, ReviewThread, StepThreads, ThreadComment,

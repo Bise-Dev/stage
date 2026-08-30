@@ -7,6 +7,7 @@ export type IconName =
   | 'check'
   | 'arrow-right'
   | 'push'
+  | 'trash'
   | 'plus'
   | 'branch'
   | 'worktree'
@@ -144,6 +145,19 @@ export function Icon({ name, size = 14, color = 'currentColor', className }: Ico
           aria-hidden="true"
         >
           <path d="M7 11.5v-8M4 6.5L7 3.5l3 3M2.5 1.5h9" />
+        </svg>
+      );
+    case 'trash':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <path d="M2.5 3.5h9M5.5 3.5V2.5h3v1M3.5 3.5l.6 8h5.8l.6-8M6 6v3.5M8 6v3.5" />
         </svg>
       );
     case 'plus':
