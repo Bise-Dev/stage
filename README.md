@@ -1,16 +1,16 @@
 # Stage
 
-A local-first desktop tool for reading your own branch before anyone else does — and for reading what your coding agent says it did.
+A local-first desktop tool for verifying your agents work before sharing it with your colleagues.
 
-Stage shows your branch's diff as a walkthrough you can annotate, entirely on your own machine. When a coding agent works on the branch, it attaches a **Debrief** — its own chaptered account of what it changed — which you read alongside the diff and answer inline. Your notes flow back to the agent.
+Stage shows your branch's diff as a Github PR-like walkthrough. When a coding agent works on the branch, it can attach a **Debrief**, its own chaptered account of what it changed. The following further functionality is supported:
+- View all local graphs, with their attached Github PR and/or Claude Code session
+- Review Diffs with comments in a Github-style local review
 
-> **Scope of this version.** Stage today supports **one flow: local self-review, with the agent debrief folded into it.** Nothing leaves your machine and no GitHub account is needed.
+> The goal of this project was for me to create a tool that directly supports my personal local development flow and furthermore to test how far you can go with a heavily Claude Code assisted programming approach. Throughout various iterations I had the pleasure and pain to see what works well and where the limits of such an approach are.
 >
-> The wider goal — authors publishing a curated **storyline** over a branch and reviewers following it on the PR — is built, but its UI is **commented out** (see [Not in this version](#not-in-this-version)).
+> For most of the implementation I've used a variety of skills from the great [repo](https://github.com/mattpocock/skills) of Matt Pocock. You can find the results of that under for example the [CONTEXT.md](CONTEXT.md) file or the [docs/adr](docs/adr) path.
 
-## Install
-
-There are no prebuilt releases yet — you build the app once from this repo.
+## Local Dev Install
 
 ### Prerequisites
 
@@ -18,7 +18,7 @@ There are no prebuilt releases yet — you build the app once from this repo.
 - [`bun`](https://bun.sh) — JS runtime & package manager.
 - [Rust](https://rustup.rs) via `rustup` — the pinned toolchain (`client/rust-toolchain.toml`) is picked up automatically.
 - macOS: Xcode Command Line Tools (`xcode-select --install`).
-- [`gh`](https://cli.github.com) is **optional** in this version — self-review never calls GitHub. Install and authenticate it (`gh auth login`) only if you want the branch table's remote-freshness fetch.
+- [`gh`](https://cli.github.com) is **optional**, self-review never calls GitHub. Install and authenticate it (`gh auth login`) only if you want the branch table's remote-freshness fetch.
 
 ### Build & install the CLI
 
@@ -40,9 +40,9 @@ st open              # open the current repo's branch in Stage
 just client::install-app
 ```
 
-That builds the release bundle and copies it to `/Applications/Stage.app`, replacing any copy already there. `st open` launches the build tree's app when there is one and falls back to `/Applications` (then `~/Applications`), so it keeps working either way — set `STAGE_GUI_BIN` to point it at a specific app.
+That builds the release bundle and copies it to `/Applications/Stage.app`, replacing any copy already there. `st open` launches the build tree's app when there is one and falls back to `/Applications` (then `~/Applications`), set `STAGE_GUI_BIN` to point it at a specific app.
 
-Because Stage has no prebuilt releases yet, an installed copy can quietly fall behind the repo. **Settings → About** shows the version and the date and time this copy was built — check it there, and re-run `just client::install-app` after pulling.
+> **Settings → About** shows the version and the date and time each copy was built.
 
 ## How to use
 
@@ -56,29 +56,6 @@ Because Stage has no prebuilt releases yet, an installed copy can quietly fall b
 If you work with a coding agent (e.g. Claude Code), it can attach a **Debrief** to your branch — its own chaptered walkthrough of what it did — and read your notes back, so the two of you iterate without leaving the machine. This is driven by the [`self-review-debrief` skill](./.claude/skills/self-review-debrief/): it works out of the box when the agent runs inside this repo. To use it in your own repos, copy (or symlink) the skill folder into `~/.claude/skills/` and set `STAGE_REPO` to your Stage clone's root.
 
 The agent talks to Stage only through the `st` CLI against the shared local store — no server, no token, no network.
-
-## Not in this version
-
-These are implemented in the engine, but their UI is commented out, so you will not find them in the app:
-
-| Not available yet | What it will be |
-| --- | --- |
-| **Ready to share** / **New review…** | Turning a branch into a shareable **Review** artifact. |
-| **Storyline** composition | Grouping changed files into titled **chapters** with intros written for reviewers. |
-| **Publish** | Committing the storyline to `.stage/<branch>/`, pushing, and linking the GitHub PR. |
-| **Reviewer entry** (`st open <pr-url>`) | Opening someone's PR read-only and following their storyline. Currently refused with a loud error. |
-| PR status columns, **verdicts**, PR discussion | GitHub review activity posted through your own `gh`. |
-
-Commented out rather than deleted because the code works and is meant to come back on. Each site carries a comment saying why; search the client for `COMMENTED OUT with the review surface`.
-
-## Learn more
-
-- [`CONTEXT.md`](./CONTEXT.md) — the glossary: what every term means, and which terms are live in this version.
-- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — the map: topology and where each decision lives.
-- [`docs/adr/`](./docs/adr/) — the decisions and their rationale.
-- [`CLAUDE.md`](./CLAUDE.md) — conventions for working in this repo.
-
-Developing Stage itself? `just bootstrap` once, then `just run` for the dev stack, and `just pre-commit` / `just verify` before pushing (see [`justfile`](./justfile)).
 
 ## License
 
