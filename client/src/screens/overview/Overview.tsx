@@ -1,4 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type MenuPoint, pointFromEvent } from '../../components/ContextMenu';
 import { FetchButton } from '../../components/FetchButton';
 import { GitDialog } from '../../components/GitDialog';
 import { Icon } from '../../components/Icon';
@@ -20,6 +21,7 @@ import {
   type AgentSessionsView,
   type OverviewRow,
   type SyncStatus,
+  type UnattachedAgentSession,
   agentSessions,
   branchSwitchExecute,
   branchSwitchPlan,
@@ -34,7 +36,7 @@ import {
 } from '../../tauri';
 import { relativeTimeFromEpoch } from '../../time';
 import { BranchGraph } from './BranchGraph';
-import { type BranchActions, BranchMenuProvider } from './BranchMenu';
+import { AgentSessionMenu, type BranchActions, BranchMenuProvider } from './BranchMenu';
 import { BranchTable } from './BranchTable';
 import { AgentSessionPill, selfReviewStarted } from './pills';
 
@@ -138,6 +140,14 @@ export function Overview({
   // the row pills by branch below, `unattached` feeds the "no worktree yet"
   // tail. Empty when the feature is off, nothing runs, or the probe failed.
   const [liveAgents, setLiveAgents] = useState<AgentSessionsView>(NO_AGENTS);
+  // The context menu for a row in the "no worktree yet" tail — the branch menu
+  // can't serve those (no branch to key on), so they raise this one instead.
+  // The session is captured whole at open, so a poll tick that drops it can't
+  // blank the menu mid-gesture; the resume command stays copyable regardless.
+  const [sessionMenu, setSessionMenu] = useState<{
+    session: UnattachedAgentSession;
+    at: MenuPoint;
+  } | null>(null);
   // The soft guardrail: self-review was asked for on a branch whose agent is
   // still busy — confirm before entering ("review anyway"), never block.
   const [reviewDespiteAgent, setReviewDespiteAgent] = useState<{
@@ -569,6 +579,15 @@ export function Overview({
                       {liveAgents.unattached.map((u) => (
                         <div
                           key={u.sessionId}
+                          onContextMenu={(e) => {
+                            // preventDefault marks the gesture handled for the
+                            // app-wide native-menu suppressor. The pill inside
+                            // handles its own right-click (direct copy) and
+                            // stops propagation before reaching here.
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setSessionMenu({ session: u, at: pointFromEvent(e) });
+                          }}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -821,6 +840,17 @@ export function Overview({
               title={gitError.title}
               body={gitError.message}
               onClose={() => setGitError(null)}
+            />
+          )}
+          {/* The "no worktree yet" rows' menu — the one entry a bare session
+              offers. Failures land in the same error dialog as everything
+              else (fail-loud, CLAUDE.md). */}
+          {sessionMenu && (
+            <AgentSessionMenu
+              session={sessionMenu.session}
+              at={sessionMenu.at}
+              onClose={() => setSessionMenu(null)}
+              onError={(title, message) => setGitError({ title, message })}
             />
           )}
           {/* Soft guardrail (never a block): the branch's Claude Code session
