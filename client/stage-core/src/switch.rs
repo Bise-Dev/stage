@@ -15,37 +15,16 @@
 //! CLAUDE.md).
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 
 use git2::Repository;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::StageError;
+use crate::git_cli::{check_git, git_stdout, run_git};
+use crate::git_step::{plural_noun, GitStep, GitStepKind};
 use crate::overview::uncommitted_count;
 use crate::worktree::list_worktrees;
-
-/// What a planned git step does — drives the UI's step-dot color.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export)]
-pub enum SwitchStepKind {
-    Stash,
-    Checkout,
-    Pop,
-}
-
-/// One git command the switch will run, as the confirmation dialog shows it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct SwitchStep {
-    pub kind: SwitchStepKind,
-    /// The command line, verbatim (display only — execution builds its own argv).
-    pub command: String,
-    /// Human note rendered above the command ("set aside 3 uncommitted files").
-    pub note: String,
-}
 
 /// A confirmed-switch plan: the exact steps [`switch_execute`] will run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -57,7 +36,7 @@ pub struct SwitchPlan {
     pub target_branch: String,
     /// Working-tree entries that would be stashed (0 ⇒ no stash steps).
     pub uncommitted_count: u32,
-    pub steps: Vec<SwitchStep>,
+    pub steps: Vec<GitStep>,
 }
 
 /// [`switch_plan`]'s outcome. "Checked out elsewhere" is an expected state the
@@ -84,7 +63,7 @@ pub enum SwitchPlanOutcome {
 pub struct SwitchOutcome {
     pub switched_to: String,
     /// The steps that ran, in order (mirrors the confirmed plan).
-    pub executed: Vec<SwitchStep>,
+    pub executed: Vec<GitStep>,
 }
 
 /// The stash message tag for a switch out of `branch` — unique enough to find
@@ -150,26 +129,26 @@ pub fn switch_plan(repo_path: &Path, target_branch: &str) -> Result<SwitchPlanOu
     let mut steps = Vec::new();
     if dirty > 0 {
         let tag = stash_tag(target_branch);
-        steps.push(SwitchStep {
-            kind: SwitchStepKind::Stash,
-            command: format!("git stash push -u -m \"{tag}\""),
-            note: format!(
-                "set aside {dirty} uncommitted {}",
-                if dirty == 1 { "file" } else { "files" }
+        steps.push(GitStep::new(
+            GitStepKind::Stash,
+            format!("git stash push -u -m \"{tag}\""),
+            format!(
+                "set aside {dirty} {}",
+                plural_noun(dirty, "uncommitted file", "uncommitted files")
             ),
-        });
+        ));
     }
-    steps.push(SwitchStep {
-        kind: SwitchStepKind::Checkout,
-        command: format!("git checkout {target_branch}"),
-        note: "switch to the branch you picked".to_string(),
-    });
+    steps.push(GitStep::new(
+        GitStepKind::Checkout,
+        format!("git checkout {target_branch}"),
+        "switch to the branch you picked",
+    ));
     if dirty > 0 {
-        steps.push(SwitchStep {
-            kind: SwitchStepKind::Pop,
-            command: "git stash pop".to_string(),
-            note: "restore your uncommitted files".to_string(),
-        });
+        steps.push(GitStep::new(
+            GitStepKind::Pop,
+            "git stash pop",
+            "restore your uncommitted files",
+        ));
     }
 
     Ok(SwitchPlanOutcome::Plan {
@@ -212,9 +191,11 @@ fn execute_steps(repo_path: &Path, plan: &SwitchPlan) -> Result<SwitchOutcome, S
         let tag = stash_tag(target);
         let out = run_git(repo_path, &["stash", "push", "-u", "-m", &tag])?;
         check_git(&out, "git stash push")?;
-        let out = run_git(repo_path, &["rev-parse", "--verify", "refs/stash"])?;
-        check_git(&out, "git rev-parse refs/stash")?;
-        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        Some(git_stdout(
+            repo_path,
+            &["rev-parse", "--verify", "refs/stash"],
+            "git rev-parse refs/stash",
+        )?)
     } else {
         None
     };
@@ -267,9 +248,11 @@ fn execute_steps(repo_path: &Path, plan: &SwitchPlan) -> Result<SwitchOutcome, S
 /// Pop the stash entry whose commit id is `sha`, resolving its current
 /// `stash@{n}` position first (the stack is shared; the index may have moved).
 fn pop_stash_by_id(repo_path: &Path, sha: &str) -> Result<(), StageError> {
-    let out = run_git(repo_path, &["stash", "list", "--format=%H %gd"])?;
-    check_git(&out, "git stash list")?;
-    let listing = String::from_utf8_lossy(&out.stdout);
+    let listing = git_stdout(
+        repo_path,
+        &["stash", "list", "--format=%H %gd"],
+        "git stash list",
+    )?;
     let stash_ref = listing
         .lines()
         .find_map(|l| l.strip_prefix(&format!("{sha} ")))
@@ -330,33 +313,6 @@ fn current_branch(repo: &Repository) -> Option<String> {
     repo.head().ok()?.shorthand().map(str::to_string)
 }
 
-/// Spawn `git -C <repo>` and capture output; a spawn failure is loud.
-fn run_git(repo_path: &Path, args: &[&str]) -> Result<Output, StageError> {
-    Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(args)
-        .output()
-        .map_err(|e| {
-            tracing::error!(err = %e, "git_spawn_failed");
-            StageError::GitCli(format!("Couldn't run `git`: {e}"))
-        })
-}
-
-/// Non-zero exit → git's stderr verbatim (fail loud), like `github::check_git`.
-fn check_git(out: &Output, what: &str) -> Result<(), StageError> {
-    if out.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let msg = stderr.trim();
-    Err(StageError::GitCli(if msg.is_empty() {
-        format!("{what} failed")
-    } else {
-        format!("{what}: {msg}")
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,7 +371,7 @@ mod tests {
         assert_eq!(plan.uncommitted_count, 0);
         assert_eq!(plan.current_branch.as_deref(), Some("main"));
         let kinds: Vec<_> = plan.steps.iter().map(|s| s.kind).collect();
-        assert_eq!(kinds, vec![SwitchStepKind::Checkout]);
+        assert_eq!(kinds, vec![GitStepKind::Checkout]);
     }
 
     #[test]
@@ -431,11 +387,7 @@ mod tests {
         let kinds: Vec<_> = plan.steps.iter().map(|s| s.kind).collect();
         assert_eq!(
             kinds,
-            vec![
-                SwitchStepKind::Stash,
-                SwitchStepKind::Checkout,
-                SwitchStepKind::Pop
-            ]
+            vec![GitStepKind::Stash, GitStepKind::Checkout, GitStepKind::Pop]
         );
         assert!(plan.steps[0].command.contains("stash push -u"));
         assert!(plan.steps[0].note.contains("2 uncommitted files"));

@@ -44,6 +44,11 @@ export type BranchActions = {
    *  otherwise. */
   onSelfReview: (r: OverviewRow) => void;
   onSwitchTo: (branch: string) => void;
+  /** Plan a push of the branch and raise the command-listing confirmation
+   *  (ADR-0029). Offered for every branch, checked out or not: pushing moves a
+   *  ref, so it needs no working tree — and when the branch *does* have one,
+   *  the push runs in that worktree rather than the focused one. */
+  onPush: (branch: string) => void;
   /** Surface a failure to the author (CLAUDE.md fail-loud): the overview
    *  renders it in the same dialog the git actions use. */
   onError: (title: string, message: string) => void;
@@ -345,20 +350,33 @@ function BranchMenuCard({
         />
       )}
       */}
+      {/* The git-action group: the mutations, each behind its own
+          command-listing confirmation (ADR-0027). */}
+      {hasReviewGroup && <Separator />}
       {acts.switchTo.shown && (
-        <>
-          {hasReviewGroup && <Separator />}
-          <MenuItem
-            icon="branch"
-            color="var(--gray-700)"
-            label="Switch to branch…"
-            onClick={run(() => actions.onSwitchTo(r.branch))}
-          />
-        </>
+        <MenuItem
+          icon="branch"
+          color="var(--gray-700)"
+          label="Switch to branch…"
+          onClick={run(() => actions.onSwitchTo(r.branch))}
+        />
       )}
+      {/* Always shown: a push moves a ref, so a branch needs no worktree to be
+          pushable, and the plan is what reports the states that forbid one
+          (nothing to push, diverged, no remote) — dimming here would only
+          guess at them from a snapshot that may be stale. */}
+      <MenuItem
+        icon="push"
+        color="var(--green-d)"
+        label="Push branch…"
+        onClick={run(() => actions.onPush(r.branch))}
+        title={`Push ${r.branch} to its remote with your own git credentials. Stage shows the exact command first.`}
+      />
       {/* The universal group. Always live, so no branch ever raises an empty
-          menu and no right-click is inert (ADR-0028). */}
-      {(hasReviewGroup || acts.switchTo.shown) && <Separator />}
+          menu and no right-click is inert (ADR-0028). The git group above it
+          always has at least the push entry, so this separator always earns
+          its place. */}
+      <Separator />
       <MenuItem
         icon="copy"
         color="var(--gray-600)"

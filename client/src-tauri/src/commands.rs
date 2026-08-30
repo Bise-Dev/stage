@@ -570,28 +570,6 @@ pub async fn git_fetch(state: State<'_, AppState>) -> Result<git::FetchOutcome, 
         .map_err(|e| AppError::Backend(format!("fetch_join_error: {e}")))?
 }
 
-/// Push a branch to the primary remote with the user's own git credentials
-/// (ADR-0016). A reusable primitive; `workspace_publish` below pushes inline,
-/// but this exposes a standalone push for other call sites.
-#[tauri::command]
-// `pill = "cmd"` tags this span so the dev Activity-log layer records one row
-// per invocation with its duration (debug builds only). `skip_all` keeps the
-// non-Debug args (State/AppHandle) out of the span. See `activity_log.rs`.
-#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
-pub async fn git_push(
-    state: State<'_, AppState>,
-    branch: String,
-) -> Result<git::PushOutcome, AppError> {
-    let repo = active_repo_path(&state)?;
-    // The push goes over the network with the user's git credentials — keep it
-    // off the UI thread (ADR-0023), mirroring `git_fetch`.
-    tauri::async_runtime::spawn_blocking(move || git::push(&repo, &branch))
-        .await
-        .map_err(|e| AppError::Backend(format!("git_push_join_error: {e}")))?
-        // A successful GitHub write: re-poll so the overview reflects it promptly.
-        .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
-}
-
 #[tauri::command]
 // `pill = "cmd"` tags this span so the dev Activity-log layer records one row
 // per invocation with its duration (debug builds only). `skip_all` keeps the
@@ -1262,6 +1240,51 @@ pub async fn branch_switch_execute(
     // happened, and the snapshot must reflect the tree as it now is.
     nudge_sync(&state, SyncMsg::LocalChanged);
     result
+}
+
+// --- Explicit branch push (ADR-0029) ------------------------------------------
+//
+// The standalone counterpart to the switch pair above, and the same two-phase
+// shape: `plan` inspects and lists the exact git command for the confirmation,
+// `execute` re-derives it and runs it. Both in `spawn_blocking` (ADR-0023) —
+// planning reads refs off disk, and the push itself is network I/O over the
+// user's own git credentials.
+
+/// Plan the push of `branch`: the exact command that would run, or the
+/// structured "nothing to push" / "diverged" state the UI reports instead of
+/// offering a confirm. Mutates nothing and touches no network — the counts come
+/// from refs on disk, so they are as fresh as the last fetch.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn branch_push_plan(
+    state: State<'_, AppState>,
+    branch: String,
+) -> Result<stage_core::PushPlanOutcome, AppError> {
+    let path = active_repo_path(&state)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
+        Ok(stage_core::push_plan(&path, &branch)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("branch_push_plan_join_error: {e}")))?
+}
+
+/// Execute a confirmed push. Fails loud with git's verbatim stderr (a rejected
+/// non-fast-forward, a protected branch, a missing credential). On success the
+/// remote moved, so re-poll GitHub — a PR's head, checks and mergeability all
+/// just changed.
+#[tauri::command]
+#[cfg_attr(debug_assertions, tracing::instrument(skip_all, fields(pill = "cmd")))]
+pub async fn branch_push_execute(
+    state: State<'_, AppState>,
+    branch: String,
+) -> Result<stage_core::PushOutcome, AppError> {
+    let path = active_repo_path(&state)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
+        Ok(stage_core::push_execute(&path, &branch)?)
+    })
+    .await
+    .map_err(|e| AppError::Backend(format!("branch_push_execute_join_error: {e}")))?
+    .inspect(|_| nudge_sync(&state, SyncMsg::PollGithubNow))
 }
 
 // --- Branch graph (v6-light L6) ------------------------------------------------

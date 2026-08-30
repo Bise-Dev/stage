@@ -6,6 +6,7 @@ export type IconName =
   | 'chevron-down'
   | 'check'
   | 'arrow-right'
+  | 'push'
   | 'plus'
   | 'branch'
   | 'worktree'
@@ -127,6 +128,22 @@ export function Icon({ name, size = 14, color = 'currentColor', className }: Ico
           aria-hidden="true"
         >
           <path d="M2.5 7h9M8 3.5L11.5 7 8 10.5" />
+        </svg>
+      );
+    // An arrow leaving the local side over a line — commits going out to the
+    // remote. Deliberately not a cloud: the push is plain git transport over
+    // the user's own credentials, not a service Stage talks to.
+    case 'push':
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 14 14"
+          {...stroke}
+          className={className}
+          aria-hidden="true"
+        >
+          <path d="M7 11.5v-8M4 6.5L7 3.5l3 3M2.5 1.5h9" />
         </svg>
       );
     case 'plus':

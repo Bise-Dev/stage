@@ -28,11 +28,11 @@
 //! is milestone C/D.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::StageError;
+use crate::git_cli::git_stdout;
 
 /// The Review folder root, relative to the repo working tree.
 const STAGE_DIR: &str = ".stage";
@@ -608,31 +608,20 @@ pub fn stage_folder_has_changes(repo_root: &Path, branch: &str) -> Result<bool, 
     Ok(!out.trim().is_empty())
 }
 
-/// Run `git -C <repo_root> <args>`; fail loud (log + surface git's stderr) on a
-/// non-zero exit. Returns stdout.
+/// Run `git` in `repo_root`; fail loud (log + surface git's stderr) on a
+/// non-zero exit. Returns trimmed stdout.
+///
+/// A thin alias over [`crate::git_cli::git_stdout`] so this module's call sites
+/// keep reading as `run_git(root, &[...])` while the spawn — and the binary
+/// resolution a Dock-launched bundle needs — lives in one place.
 fn run_git(repo_root: &Path, args: &[&str]) -> Result<String, StageError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(args)
-        .output()
-        .map_err(StageError::Io)?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let msg = stderr.trim();
-        tracing::error!(args = ?args, stderr = %msg, "git_cli_failed");
-        return Err(StageError::GitCli(if msg.is_empty() {
-            format!("git {args:?} failed")
-        } else {
-            msg.to_string()
-        }));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    git_stdout(repo_root, args, &format!("git {}", args.join(" ")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     fn git(dir: &Path, args: &[&str]) {
         let status = Command::new("git")
