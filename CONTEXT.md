@@ -8,7 +8,7 @@ That paragraph describes the **domain**, which this document defines in full. It
 
 Everything downstream of **Ready to share** — the **Review** artifact, **Storyline** composition, **Publish**, **Reviewer entry**, **Verdict**, and post-publish **Step discussion** — is implemented in `stage-core`, but its UI is **commented out** in the webview and refused by the CLI. The terms below stay authoritative because the engine, the store and the `.stage` format still use them; they are marked **[gated]** where a reader might otherwise expect to find them in the app.
 
-Live in the shipping app: **Self-Review**, **Debrief**, **Chapter** (as the Debrief's unit), **Self-Review note**, **Base branch**, **Repo**, **Worktree**, **Branch**.
+Live in the shipping app: **Self-Review**, **Debrief**, **Chapter** (as the Debrief's unit), **Self-Review note**, **Base branch**, **Repo**, **Worktree**, **Branch**, **Push branch**, **Delete branch**.
 
 ## Design criteria
 
@@ -84,6 +84,14 @@ _Avoid_: storing it; using "Ready to share" as a status (that's the creation ges
 **Publish** (verb): **[gated]**
 The action that gets a Review's branch + PR onto GitHub. **There is no GitHub precondition before this** — the author works fully locally (Self-Review → Ready-to-share → storyline composition) without pushing. Publish serializes the draft storyline into `.stage/<branch>/`, makes a scoped commit, `git push`es the branch with the user's own credentials, and runs `gh pr create` (or edit/reopen) — auto-posting exactly one "Open in Stage" PR comment on first create. A branch that can't be pushed/opened surfaces `gh`/`git`'s error here, fail-loud. Re-publishing (push an update against the same PR) is the normal lifecycle.
 _Avoid_: "submit" (that's the verdict), "send".
+
+**Push branch** (verb, ADR-0029):
+Getting a branch's commits onto its remote, and nothing else — no PR, no `.stage` commit, no `gh`. The standalone counterpart to the gated **Publish**, which does this *and* opens a PR as one gesture. Offered on every branch in the branch menu, checked out or not: a push moves a ref, so it needs no working tree. It is planned before it runs, like a **Switch**: Stage shows the exact `git push` command, the commit count, and the directory it runs in, and nothing happens until the author confirms. That directory is the branch's **own** worktree when it has one, not the focused one. Uncommitted work never rides along — the confirmation says how much stays local. A branch that has **diverged** from its upstream is reported, never pushed: Stage never force-pushes, so rebasing or merging is the author's own call.
+_Avoid_: "publish" for a bare push (Publish opens a PR); "sync" (that's the background snapshot engine); "upload".
+
+**Delete branch** (verb, ADR-0029):
+Deleting one **local** branch ref, and only that. The remote branch is never touched (that's visible to everyone and can break an open PR — the author does it themselves), no worktree is removed (ADR-0016), and the branch's **Debrief** and **Self-Review notes** are kept, since a branch can be recreated at the same name. Planned and confirmed like a **Push branch**: the confirmation names the branch's last commit, says how many commits are not in the comparison ref (its upstream, else the **Default branch**), and shows the tip SHA that restores it — `git branch <name> <sha>` — for every delete, not only risky ones. An **unmerged** branch is offered, not refused; the **Default branch** is refused; a branch any worktree holds is reported with that worktree's path. Stage writes **no** backup tag or branch first — the reflog is the safety net, and an unasked-for ref is just litter.
+_Avoid_: "remove" (that's worktrees, which Stage never does); implying the remote branch goes too.
 
 **Uncommitted work at Publish**: **[gated]**
 Publish refuses to run silently over a dirty working tree — *uncommitted work* is any staged, unstaged-tracked, or untracked (non-ignored) change, excluding Stage's own `.stage/<branch>/` writes. The author sees the affected paths and chooses a **disposition**: **commit everything** into the branch first (the one place Stage authors a commit of the author's code, with an author-editable message), **publish without it** (the committed branch is the whole change; the listed paths stay local), or cancel. The choice is per-publish, never remembered; the gate is enforced in Rust, so no entry path (app or CLI) can publish a dirty tree without an explicit disposition. Guards the failure where the change exists only in the working tree and Publish would ship a storyline with none of the code.

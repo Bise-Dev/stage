@@ -1,26 +1,33 @@
 import { type ReactNode, useState } from 'react';
-import type { SwitchStep } from '../generated/SwitchStep';
-import type { SwitchStepKind } from '../generated/SwitchStepKind';
+import type { GitStep } from '../generated/GitStep';
+import type { GitStepKind } from '../generated/GitStepKind';
 import { DISMISS } from '../lib/shortcuts';
 import { useShortcut } from '../lib/useShortcut';
 import { ErrorBanner } from './ErrorBanner';
 import { Icon, type IconName } from './Icon';
 
-/** Step-dot accent per git-step kind (mirrors the v6 design's V6_GitStepList). */
-const DOT_COLOR: Record<SwitchStepKind, string> = {
+/** Step-dot accent per git-step kind (mirrors the v6 design's V6_GitStepList).
+ *  Keyed by the Rust `GitStepKind`, so a new kind is a type error here rather
+ *  than an undefined colour at runtime. */
+const DOT_COLOR: Record<GitStepKind, string> = {
   stash: 'var(--orange)',
   checkout: 'var(--blue)',
   pop: 'var(--orange)',
+  // A push leaves the working tree alone but is the one step that reaches the
+  // network and changes what other people can see — green, like the prompt.
+  push: 'var(--green-d)',
+  // The one step that destroys something. Red, and the only kind that gets it.
+  delete: 'var(--red-d)',
 };
 
 /** The numbered list of git commands a confirmed action will run — the
  *  ADR-0027 "confirmation that lists the exact git commands". Presentational
- *  and reusable (the full-v6 push steps will render through it too).
+ *  and shared by every git action (switch, push).
  *
  *  Commands **wrap** rather than ellipsize: the command line is the thing the
  *  user is being asked to approve, so hiding its tail defeats the point of
  *  showing it. */
-export function GitStepList({ steps }: { steps: SwitchStep[] }) {
+export function GitStepList({ steps }: { steps: GitStep[] }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       {steps.map((s, i) => (
@@ -153,7 +160,7 @@ export function GitDialog({
   /** Verbatim paths/refs, each on its own wrapping, selectable mono line. */
   details?: GitDialogDetail[];
   /** The git commands a confirm will run — renders the "Stage will run" list. */
-  steps?: SwitchStep[];
+  steps?: GitStep[];
   /** Primary button label. With no `onConfirm` it just dismisses (default "Close"). */
   confirmLabel?: string;
   /** Omit for a dismiss-only dialog (a report with no action to take). */

@@ -30,11 +30,15 @@ import type { CommittedDiff } from './generated/CommittedDiff';
 import type { Debrief } from './generated/Debrief';
 import type { DebriefFreshness } from './generated/DebriefFreshness';
 import type { DebriefView } from './generated/DebriefView';
+import type { DeleteOutcome } from './generated/DeleteOutcome';
+import type { DeletePlanOutcome } from './generated/DeletePlanOutcome';
 import type { DiffStats } from './generated/DiffStats';
 import type { DraftLineComment } from './generated/DraftLineComment';
 import type { FetchOutcome } from './generated/FetchOutcome';
 import type { FileStatus } from './generated/FileStatus';
 import type { GitHubUser } from './generated/GitHubUser';
+import type { GitStep } from './generated/GitStep';
+import type { GitStepKind } from './generated/GitStepKind';
 import type { GithubSyncState } from './generated/GithubSyncState';
 import type { GraphBranch } from './generated/GraphBranch';
 import type { GraphLabel } from './generated/GraphLabel';
@@ -59,6 +63,8 @@ import type { PublishOutcome } from './generated/PublishOutcome';
 import type { PublishReadiness } from './generated/PublishReadiness';
 import type { PublishRequest } from './generated/PublishRequest';
 import type { PushOutcome } from './generated/PushOutcome';
+import type { PushPlan } from './generated/PushPlan';
+import type { PushPlanOutcome } from './generated/PushPlanOutcome';
 import type { RecentRepo } from './generated/RecentRepo';
 import type { ReplyAuthor } from './generated/ReplyAuthor';
 import type { RepoInfo } from './generated/RepoInfo';
@@ -89,7 +95,6 @@ import type { SubmittedVerdict } from './generated/SubmittedVerdict';
 import type { SwitchOutcome } from './generated/SwitchOutcome';
 import type { SwitchPlan } from './generated/SwitchPlan';
 import type { SwitchPlanOutcome } from './generated/SwitchPlanOutcome';
-import type { SwitchStep } from './generated/SwitchStep';
 import type { SyncScope } from './generated/SyncScope';
 import type { SyncStatus } from './generated/SyncStatus';
 import type { SyncUpdate } from './generated/SyncUpdate';
@@ -117,6 +122,8 @@ export type {
   Debrief,
   DebriefFreshness,
   DebriefView,
+  DeleteOutcome,
+  DeletePlanOutcome,
   DiffStats,
   FetchOutcome,
   FileStatus,
@@ -131,6 +138,8 @@ export type {
   OverviewView,
   PrRef,
   PushOutcome,
+  PushPlan,
+  PushPlanOutcome,
   RecentRepo,
   ReplyAuthor,
   RepoInfo,
@@ -155,13 +164,14 @@ export type {
   StorylineStep,
   StorylineStepView,
   BranchGraphView,
+  GitStep,
+  GitStepKind,
   GraphBranch,
   GraphLabel,
   GraphRow,
   SwitchOutcome,
   SwitchPlan,
   SwitchPlanOutcome,
-  SwitchStep,
   UncommittedDisposition,
   UncommittedFile,
   WorktreeInfo,
@@ -243,6 +253,33 @@ export const branchSwitchPlan = (branch: string) =>
 export const branchSwitchExecute = (branch: string) =>
   invoke<SwitchOutcome>('branch_switch_execute', { branch });
 
+/** Plan an explicit push of `branch` — the exact git command a confirmation
+ *  must show (ADR-0027/ADR-0029). Mutates nothing and touches no network; the
+ *  ahead/behind counts come from refs on disk, so they are as fresh as the last
+ *  fetch. "Nothing to push" and "diverged" come back as structured outcomes. */
+export const branchPushPlan = (branch: string) =>
+  invoke<PushPlanOutcome>('branch_push_plan', { branch });
+
+/** Execute the confirmed push. Rejects with the engine's complete message on
+ *  any failure — git's own stderr (no write access, protected branch, rejected
+ *  non-fast-forward). Render it verbatim. */
+export const branchPushExecute = (branch: string) =>
+  invoke<PushOutcome>('branch_push_execute', { branch });
+
+/** Plan an explicit delete of the local branch `branch` — the exact command,
+ *  the commits it discards, and the tip SHA that recovers it (ADR-0029).
+ *  Mutates nothing. Local ref only: the remote branch is never touched. A
+ *  branch any worktree holds comes back as the structured `checkedOut`
+ *  outcome. */
+export const branchDeletePlan = (branch: string) =>
+  invoke<DeletePlanOutcome>('branch_delete_plan', { branch });
+
+/** Execute the confirmed delete. Rejects with the engine's complete message —
+ *  render it verbatim. The resolved outcome carries the deleted tip's SHA, the
+ *  one thing that puts the branch back (`git branch <name> <sha>`). */
+export const branchDeleteExecute = (branch: string) =>
+  invoke<DeleteOutcome>('branch_delete_execute', { branch });
+
 /** Assemble the branch graph (v6-light L6): bounded commit topology with lane
  *  geometry, computed fresh per call. Read-only. Rejects with the engine's
  *  complete message — render it verbatim. */
@@ -299,11 +336,6 @@ export const storylineDiff = (baseRef: string, headRef: string) =>
   invoke<CommittedDiff>('storyline_diff', { baseRef, headRef });
 
 export const gitFetch = () => invoke<FetchOutcome>('git_fetch');
-
-/** Push `branch` to the primary remote with the user's own git credentials
- *  (ADR-0016), setting upstream. Surfaces git's stderr verbatim on failure
- *  (no write access, protected branch, …). */
-export const gitPush = (branch: string) => invoke<PushOutcome>('git_push', { branch });
 
 export const selfReviewBaseOptions = () => invoke<BaseOptions>('self_review_base_options');
 

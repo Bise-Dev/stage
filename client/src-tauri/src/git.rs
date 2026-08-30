@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::process::Command;
 
 use git2::{BranchType, Repository};
 use serde::Serialize;
@@ -259,84 +258,21 @@ pub struct FetchOutcome {
 /// git transparently uses the user's own credentials (ssh-agent, credential
 /// helpers, proxies). Stage holds no GitHub credentials of its own — this is a
 /// plain local git-transport op. We still use libgit2 to resolve the remote name.
+///
+/// The spawn goes through [`stage_core::git_cli`], so the binary is resolved the
+/// way a Dock-launched bundle needs (launchd's `PATH` has no Homebrew) and a
+/// failure carries git's own stderr rather than this module's paraphrase.
 pub fn fetch(repo_path: &Path) -> Result<FetchOutcome, AppError> {
     let remote_name = {
         let repo = Repository::open(repo_path)?;
         primary_remote(&repo)?
     };
 
-    let output = Command::new("git")
-        .current_dir(repo_path)
-        .args(["fetch", "--prune", &remote_name])
-        .output()
-        .map_err(|e| AppError::Backend(format!("git_spawn_failed: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let msg = stderr.trim();
-        return Err(AppError::Backend(if msg.is_empty() {
-            "git fetch failed".to_string()
-        } else {
-            msg.to_string()
-        }));
-    }
+    stage_core::git_cli::git_run(repo_path, &["fetch", "--prune", &remote_name], "git fetch")?;
 
     tracing::info!(repo = %repo_path.display(), remote = %remote_name, "git_fetch");
     Ok(FetchOutcome {
         remote: remote_name,
-    })
-}
-
-#[derive(Serialize, TS)]
-#[ts(export)]
-pub struct PushOutcome {
-    pub remote: String,
-    pub branch: String,
-}
-
-/// `git push --set-upstream <remote> <branch>` against the primary remote.
-///
-/// Like [`fetch`], shells out to the system `git` rather than libgit2: the
-/// system git transparently uses the developer's *own* credentials (ssh-agent,
-/// credential helpers) and Stage holds no git credentials of its own — the
-/// branch push is the one GitHub touchpoint that goes over the user's creds, not
-/// the Stage GitHub token (ADR-0016). libgit2 only resolves the remote name.
-///
-/// A no-op push (the remote already has these commits) still exits 0, so repeat
-/// publishes / "Push update" are idempotent. On a non-zero exit the captured
-/// stderr is surfaced verbatim (fail loud, CLAUDE.md): auth failures, protected
-/// branches, missing write access, etc. reach the user's banner unchanged.
-pub fn push(repo_path: &Path, branch: &str) -> Result<PushOutcome, AppError> {
-    let remote_name = {
-        let repo = Repository::open(repo_path)?;
-        primary_remote(&repo)?
-    };
-
-    let output = Command::new("git")
-        .current_dir(repo_path)
-        .args(["push", "--set-upstream", &remote_name, branch])
-        .output()
-        .map_err(|e| AppError::Backend(format!("git_spawn_failed: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let msg = stderr.trim();
-        return Err(AppError::Backend(if msg.is_empty() {
-            "git push failed".to_string()
-        } else {
-            msg.to_string()
-        }));
-    }
-
-    tracing::info!(
-        repo = %repo_path.display(),
-        remote = %remote_name,
-        branch = %branch,
-        "git_push"
-    );
-    Ok(PushOutcome {
-        remote: remote_name,
-        branch: branch.to_string(),
     })
 }
 

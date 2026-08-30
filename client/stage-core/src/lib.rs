@@ -9,15 +9,19 @@
 
 pub mod base;
 pub mod chapter;
+pub mod delete;
 pub mod diff;
 pub mod discussion;
 pub mod domain;
 pub mod error;
+pub mod git_cli;
+pub mod git_step;
 pub mod github;
 pub mod graph;
 pub mod overview;
 pub mod pr;
 pub mod publish;
+pub mod push;
 pub mod repo_key;
 pub mod review_folder;
 pub mod reviewer;
@@ -32,6 +36,7 @@ pub mod worktree;
 
 pub use base::{base_options, branch_head_sha, BaseOptions, LocalDefault};
 pub use chapter::Chapter;
+pub use delete::{delete_execute, delete_plan, DeleteOutcome, DeletePlan, DeletePlanOutcome};
 pub use diff::DiffLineIndex;
 pub use discussion::{
     group_threads_by_step, PrDiscussion, ReviewThread, StepThreads, ThreadComment,
@@ -41,6 +46,7 @@ pub use domain::{
     ReplyAuthor, Review, SelfReviewNote, SelfReviewNoteView, Side,
 };
 pub use error::StageError;
+pub use git_step::{GitStep, GitStepKind};
 pub use github::{GhAuthor, GhPullRequest, GitHub, GitHubUser, PrFilter};
 pub use graph::{
     branch_graph, BranchGraphView, GraphBranch, GraphHeadStatus, GraphLabel, GraphRow,
@@ -61,6 +67,7 @@ pub use publish::{
 pub use publish::{
     assess_uncommitted_work, UncommittedDisposition, UncommittedFile, UncommittedState,
 };
+pub use push::{push_execute, push_plan, PushOutcome, PushPlan, PushPlanOutcome};
 pub use repo_key::{origin_slug, repo_key_from_cwd, repo_root_from_cwd, slug_from_remote, RepoKey};
 pub use review_folder::{
     find_review, read_review_at, read_review_from_tree, resync_folder, review_committed_for_branch,
@@ -78,10 +85,7 @@ pub use storyline::{
     add_step, assemble_preview, committed_diff_file_set, preview, StorylinePreview, StorylineStep,
     StorylineStepView,
 };
-pub use switch::{
-    switch_execute, switch_plan, SwitchOutcome, SwitchPlan, SwitchPlanOutcome, SwitchStep,
-    SwitchStepKind,
-};
+pub use switch::{switch_execute, switch_plan, SwitchOutcome, SwitchPlan, SwitchPlanOutcome};
 pub use tool_path::{resolve_tool, GH_BIN_ENV, GIT_BIN_ENV};
 pub use viewed::{current_post_image_oid, import_legacy_viewed, ViewedMark, ABSENT_POST_IMAGE};
 pub use worktree::{list_worktrees, repo_common_dir, WorktreeInfo};

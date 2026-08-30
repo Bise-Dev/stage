@@ -5,6 +5,8 @@ import { GitDialog } from '../../components/GitDialog';
 import { Icon } from '../../components/Icon';
 import { RepoMenu } from '../../components/RepoMenu';
 import { TitleBar } from '../../components/TitleBar';
+import type { DeletePlanOutcome } from '../../generated/DeletePlanOutcome';
+import type { PushPlanOutcome } from '../../generated/PushPlanOutcome';
 import type { SwitchPlanOutcome } from '../../generated/SwitchPlanOutcome';
 import { agentSessionsEnabled } from '../../lib/agentSessionsPref';
 import { RELOAD } from '../../lib/shortcuts';
@@ -23,6 +25,10 @@ import {
   type SyncStatus,
   type UnattachedAgentSession,
   agentSessions,
+  branchDeleteExecute,
+  branchDeletePlan,
+  branchPushExecute,
+  branchPushPlan,
   branchSwitchExecute,
   branchSwitchPlan,
   getActiveRepo,
@@ -38,6 +44,8 @@ import { relativeTimeFromEpoch } from '../../time';
 import { BranchGraph } from './BranchGraph';
 import { AgentSessionMenu, type BranchActions, BranchMenuProvider } from './BranchMenu';
 import { BranchTable } from './BranchTable';
+import { DeleteDialog } from './DeleteDialog';
+import { PushDialog } from './PushDialog';
 import { AgentSessionPill, selfReviewStarted } from './pills';
 
 /**
@@ -131,6 +139,19 @@ export function Overview({
   const [switchTarget, setSwitchTarget] = useState<{
     branch: string;
     outcome: SwitchPlanOutcome;
+  } | null>(null);
+  // The explicit "Push branch…" flow (ADR-0029), the same two-phase shape as
+  // the switch above: a planned outcome opens the command-listing
+  // confirmation; "nothing to push" and "diverged" open report-only variants.
+  const [pushTarget, setPushTarget] = useState<{
+    branch: string;
+    outcome: PushPlanOutcome;
+  } | null>(null);
+  // The explicit "Delete branch…" flow (ADR-0029). Same two-phase shape; the
+  // one destructive action here, so its confirmation carries the recovery SHA.
+  const [deleteTarget, setDeleteTarget] = useState<{
+    branch: string;
+    outcome: DeletePlanOutcome;
   } | null>(null);
   // A git action that failed outright (a refused plan, a worktree that couldn't
   // be focused). It answers a click, so it answers in the same dialog the click
@@ -317,6 +338,33 @@ export function Overview({
     }
   }, []);
 
+  // Plan an explicit push of `branch` and open the command-listing
+  // confirmation (ADR-0027/ADR-0029). Planning never mutates and never reaches
+  // the network — the refusals it can raise (no remote, no such branch) are
+  // local facts, so they land in the error dialog straight away.
+  const openPushDialog = useCallback(async (branch: string) => {
+    try {
+      const outcome = await branchPushPlan(branch);
+      setPushTarget({ branch, outcome });
+    } catch (e) {
+      console.warn('branch_push_plan_failed', e);
+      setGitError({ title: `Can't push ${branch}`, message: String(e) });
+    }
+  }, []);
+
+  // Plan an explicit delete of `branch` and open its confirmation. Planning
+  // never mutates; the refusals it raises (default branch, no such branch) are
+  // local facts, so they land in the error dialog straight away.
+  const openDeleteDialog = useCallback(async (branch: string) => {
+    try {
+      const outcome = await branchDeletePlan(branch);
+      setDeleteTarget({ branch, outcome });
+    } catch (e) {
+      console.warn('branch_delete_plan_failed', e);
+      setGitError({ title: `Can't delete ${branch}`, message: String(e) });
+    }
+  }, []);
+
   // Focus the row's worktree, then open the storyline composer (cwd-bound: the
   // composer reads the focused worktree's branch). Commented out with the
   // review surface:
@@ -362,13 +410,15 @@ export function Overview({
       // agent guardrail above.
       onSelfReview: requestSelfReviewAt,
       onSwitchTo: openSwitchDialog,
+      onPush: openPushDialog,
+      onDelete: openDeleteDialog,
       onError: (title, message) => setGitError({ title, message }),
       // Commented out with the review surface:
       // onOpenStoryline: openStorylineAt,
       // onOpenReview,
       // onDiscardDraft: setDiscardTarget,
     }),
-    [requestSelfReviewAt, openSwitchDialog],
+    [requestSelfReviewAt, openSwitchDialog, openPushDialog, openDeleteDialog],
   );
 
   // --- Row split (display only — every row's state came derived) ------------
@@ -834,6 +884,28 @@ export function Overview({
                 />
               );
             })()}
+          {pushTarget && (
+            <PushDialog
+              outcome={pushTarget.outcome}
+              branch={pushTarget.branch}
+              onConfirm={async () => {
+                await branchPushExecute(pushTarget.branch);
+                await load();
+              }}
+              onClose={() => setPushTarget(null)}
+            />
+          )}
+          {deleteTarget && (
+            <DeleteDialog
+              outcome={deleteTarget.outcome}
+              branch={deleteTarget.branch}
+              onConfirm={async () => {
+                await branchDeleteExecute(deleteTarget.branch);
+                await load();
+              }}
+              onClose={() => setDeleteTarget(null)}
+            />
+          )}
           {gitError && (
             <GitDialog
               tone="error"

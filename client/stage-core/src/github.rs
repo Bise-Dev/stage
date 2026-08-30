@@ -51,6 +51,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::StageError;
+use crate::git_cli::check_git;
 use crate::tool_path::{resolve_tool, GH_BIN_ENV, GIT_BIN_ENV};
 
 /// The GitHub identity reported by `gh api user` — the `gh` token owner.
@@ -501,21 +502,6 @@ isDraft,additions,deletions,reviewDecision,author,comments,updatedAt";
         }
         Ok(prs)
     }
-}
-
-/// Classify a finished `git` transport command: success, or git's stderr
-/// surfaced verbatim as [`StageError::GitCli`].
-fn check_git(out: &Output, what: &str) -> Result<(), StageError> {
-    if out.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let msg = match stderr.trim() {
-        "" => format!("{what} failed with {}", describe_status(out)),
-        s => s.to_string(),
-    };
-    tracing::error!(what = %what, status = ?out.status.code(), "git_transport_failed");
-    Err(StageError::GitCli(msg))
 }
 
 /// Parse `gh` stdout JSON into `T`, failing loud (never a silent default) when
