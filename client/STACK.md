@@ -39,13 +39,10 @@ Implementation choices for the local client. Open to revision; not in CONTEXT.md
 - **`notify` + `notify-debouncer-mini`** in the Rust side — fires events when the working tree or refs change so the Self-Review view stays live without manual refresh.
 
 ## Persistent client settings
-- **`tauri-plugin-store`** — small key/value store for client-side flags that should survive restarts but don't belong in the backend (e.g. the `onboarded` flag that controls whether the sign-in screen is shown on startup). Recents and the active-repo lock continue to live in their own JSON file under `app_data_dir`, separate from this store.
+- **`tauri-plugin-store`** — small key/value store for client-side flags that should survive restarts (e.g. the activity-log drawer height, `activity_log.drawer_size_pct`). Recents and the active-repo lock continue to live in their own JSON file under `app_data_dir`, separate from this store.
 
-## Backend communication
-- All calls to the Stage Backend go **through the Rust side** via Tauri commands; the webview never speaks HTTP to a remote host directly. The Rust side uses `reqwest` (or equivalent) and is the future home of the local-first sync engine described in `docs/ROADMAP.md`.
-- The client has **no GitHub credentials**. The only secret it holds is the Stage session token, stored in the OS keychain via `tauri-plugin-keyring` (or `keyring-rs`).
-- **TLS provider**: `reqwest`'s `rustls` feature is selected; rustls 0.23 picks `aws-lc-rs` as its default crypto provider. `aws-lc-sys` ships pre-built binaries for macOS (arm64 + x86_64), so no native toolchain is needed on the client's primary target. Other targets (Linux musl, BSD) may require `cmake` + a C compiler at build time.
-- **Backend URL configuration**: the SDK constructor (`api::Client::new`) takes `base_url` as a `&str` argument — the SDK does not pick a config story. Each consumer chooses its own. `examples/auth_smoke.rs` and any future CLI read `STAGE_BACKEND_URL` from the env (default `http://localhost:8000`); the future Tauri commands slice will read from `tauri.conf.json` and plumb through `AppState`. The env-var name `STAGE_BACKEND_URL` is the shared convention across non-Tauri callers.
+## Network access
+- **There is no Stage backend** (ADR-0022) and the app holds **no credentials of its own**: GitHub API calls shell out to the user's own `gh` (which owns its token), and git transport uses the user's own `git` (ssh-agent, credential helpers). The webview never speaks to the network directly — everything goes through Rust-side Tauri commands.
 
 ## Activity log (dev-only debug panel)
 A read-only, structured event stream for inspecting what the app is doing at runtime — HTTP calls, git ops, command invocations, webview console output, and raw Rust events. **Dev-only**: every piece is gated behind `#[cfg(debug_assertions)]` (Rust) / `import.meta.env.DEV` (webview), so a release build carries no ring buffer, no IPC commands, and no UI. Decisions below were settled in a `/grill-with-docs` session.
@@ -56,12 +53,12 @@ A read-only, structured event stream for inspecting what the app is doing at run
 - **Toggle**: `` Cmd+` `` on macOS (`` Ctrl+` `` cross-platform). No visible affordance anywhere — it's a developer shortcut, deliberately undiscoverable to end users.
 - **Source of truth**: a Rust-side ring buffer in `AppState` (`activity_log.rs`), **2000 entries, drop-oldest**. Always-on from app start, survives webview reload, **in-memory only** — no disk mirror, no persistence across `Cmd+Q`.
 - **Instrumentation**: a single `tracing_subscriber::Layer` (level ≥ DEBUG, filtered to `stage_client_lib`) feeds the ring. Pills are classified by the layer:
-  - `http` — target starts with `stage_client_lib::api`; one `tracing::info!` per request emitted by the wrapper in `api::Client::send` (method, url, status, duration_ms).
+  - `http` — reserved pill for events explicitly tagged `pill = "http"` (unused since the backend HTTP SDK was deleted, ADR-0022).
   - `git` — target starts with `stage_client_lib::git`; `tracing::info!` callsites inside `git.rs`.
   - `cmd` — a span with field `pill = "cmd"`, via `#[cfg_attr(debug_assertions, tracing::instrument(fields(pill = "cmd")))]` on each `commands.rs` handler; the layer reads the span field on close and records its duration.
   - `webview` — pushed in from the webview via `activity_log_push` (the `console.*` overrides and the top-level `ErrorBoundary`); `target = "console"`.
   - `rust` — catch-all for any other `stage_client_lib` event.
-- **Redaction (a-narrow)**: the layer hard-redacts only fields whose key is `authorization` (case-insensitive) to `[redacted]`; the auth token never enters a log field (the HTTP wrapper logs method/url/status, never headers). Everything else — URLs, bodies, git output, errors — is shown raw. The boundary is documented at the redactor callsite.
+- **Redaction (a-narrow)**: the layer hard-redacts only fields whose key is `authorization` (case-insensitive) to `[redacted]` — a defensive backstop; Stage holds no credentials of its own. Everything else — URLs, bodies, git output, errors — is shown raw. The boundary is documented at the redactor callsite.
 - **Tauri surface** (all `#[cfg(debug_assertions)]`):
   - `activity_log_snapshot` (webview → Rust) — returns the full ring on panel open.
   - `activity_log_push` (webview → Rust) — for the `console.*` overrides and `ErrorBoundary`.
@@ -71,7 +68,7 @@ A read-only, structured event stream for inspecting what the app is doing at run
 - **UI**: rows show timestamp, level pill, source pill, target, message, optional `duration_ms`, and expand to the full `fields` map + error. Filters: multi-select source pills, a level filter (default `INFO+`, toggle to include `DEBUG`), and a substring search over message + field values. Drawer height is persisted across restarts via `tauri-plugin-store` (key `activity_log.drawer_size_pct` — panels size in percent).
 
 ## Project layout
-- Single Cargo crate under `src-tauri/` (the default Tauri scaffold). Not a Cargo workspace. If a shared `stage-core` crate is needed when the backend lands, we restructure then; not paying for that flexibility today.
+- A Cargo workspace (`client/Cargo.toml`) with three crates: `stage-core` (the whole engine — git reads, `gh` shell-outs, `.stage` read/write, the SQLite store), `src-tauri` (thin command bindings + watchers + window), and `stage-cli` (the `st` CLI). The core is Tauri-free so the CLI never compiles Tauri.
 
 ## Tooling
 - **Package manager**: Bun. One lockfile (`bun.lock`).

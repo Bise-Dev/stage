@@ -15,13 +15,12 @@ backend (Django + Postgres) does two jobs: it **stores** Stage-native data (Work
 IntroComment) and it **brokers** GitHub on the user's behalf, holding the OAuth token and exposing
 a Stage session.
 
-The requirement set (org project #1, issues #53–#94, #105) re-derives the product as **local-first
-with no backend**. The architecture-neutral residue of each backend job has already been decided in
-those issues: identity is delegated to git/GitHub with no Stage account (#53/#55/#56); GitHub is
-reached with the user's own local credentials (#58); step discussion and review activity live on
-GitHub's native surfaces (#69–#71, #79); the dashboard is a local scan plus a GitHub PR search
-(#84/#86/#87); and it is accepted that Stage's own data appears in the PR diff as committed files
-(#77).
+The requirement set re-derives the product as **local-first with no backend**. The
+architecture-neutral residue of each backend job was already decided in those requirements: identity
+is delegated to git/GitHub with no Stage account; GitHub is reached with the user's own local
+credentials; step discussion and review activity live on GitHub's native surfaces; the dashboard is
+a local scan plus a GitHub PR search; and it is accepted that Stage's own data appears in the PR
+diff as committed files.
 
 This ADR records the concrete architecture that satisfies those decisions: the backend is deleted,
 all data handling moves to Rust, GitHub is reached through the local `gh`/`git` CLIs, and the
@@ -35,7 +34,7 @@ revisited and overturned here — see *Considered alternatives*.
 ### 1. Storage — `.stage` rides the feature branch
 
 The shareable artifact lives as ordinary committed files on the feature branch. It merges into the
-default branch with the PR and is visible in the PR diff (#77). One folder per **Review** (the
+default branch with the PR and is visible in the PR diff. One folder per **Review** (the
 renamed Workspace — see §8), keyed by branch, with **no shared index file** — the dashboard
 discovers Reviews by listing folders, not by reading a registry.
 
@@ -49,17 +48,17 @@ discovers Reviews by listing folders, not by reading a registry.
 
 - **One file per step**; order is a zero-padded numeric filename prefix (`010`, `020`, …); structure
   is TOML frontmatter (`anchor`, optional `title`); the intro is the raw markdown body.
-- **Identity (#59):** the `head_ref` field is authoritative and the folder name is a fast-path.
+- **Identity:** the `head_ref` field is authoritative and the folder name is a fast-path.
   Lookup tries `.stage/<current-branch>/`, else scans folders for a `head_ref` match. A confirmed
   branch rename re-syncs folder name + field. `pr_number` is a field (powers reviewer-from-PR
-  lookup, #93/#105).
+  lookup).
 
 ### 2. Conflict behaviour (the primary design goal)
 
 - **Cross-branch: none.** Different branches write different folders; there is no shared file to
   conflict on. This is the reason for the no-index, folder-per-Review layout.
 - **Same-branch / two-machine: rare and loud.** The storyline is **single-writer** — only the author
-  writes `.stage` (#57, enforced by git push permissions). One-file-per-step keeps independent edits
+  writes `.stage` (enforced by git push permissions). One-file-per-step keeps independent edits
   independent. A genuine conflict surfaces as a normal git conflict (fail-loud), never a silent
   clobber.
 
@@ -74,12 +73,12 @@ push.
 
 This yields **two stores split at Ready-to-share**: the existing local SQLite store holds private
 Self-Review state (Debrief, Self-Review notes, the pre-publish draft); committed `.stage` holds the
-published storyline + metadata. Consequence: unpublished drafts are strictly per-machine (#84 risk).
+published storyline + metadata. Consequence: unpublished drafts are strictly per-machine.
 
 ### 4. Discussion
 
 - **Pre-publish:** the author's annotations are **Self-Review notes** (local; no separate surface).
-- **Post-publish:** **GitHub PR threads** per step (#69–#71); resolve/edit/delete map to GitHub
+- **Post-publish:** **GitHub PR threads** per step; resolve/edit/delete map to GitHub
   natives.
 - Discussion is always **code-anchored** to the step's diff location, never to the intro paragraph.
 
@@ -88,23 +87,23 @@ published storyline + metadata. Consequence: unpublished drafts are strictly per
 - **git transport** (push, fetch) uses the system `git` and the user's existing git credentials.
 - **GitHub API** (open/read PR, submit verdict, comments, checks, search, PR actions, the
   auto-comment) shells out to **`gh`**, which owns its own token. Stage reads, stores, and holds
-  **no credential** (#58).
+  **no credential**.
 - `gh` is a **hard requirement**; absent or unauthenticated → a loud one-time "install `gh` / run
   `gh auth login`" message. There is no broker fallback.
-- **Identity (#53/#55):** committed artifacts are attributed by their git commit author; GitHub
+- **Identity:** committed artifacts are attributed by their git commit author; GitHub
   actions by the `gh` token owner; `gh api user` (cached) answers "who am I" when needed. No Stage
   account, no Stage session. Stage does **not** reconcile the git commit identity against the `gh`
   identity (assumes the same human) — an accepted simplification.
 
 ### 6. Reviewer entry — fully local, read-only by default
 
-- Default open (#68/#93/#105) is fully local and read-only: a GitHub PR search or
+- Default open is fully local and read-only: a GitHub PR search or
   `stage open <pr-url>` resolves the PR to a local clone by `origin` match, `git fetch`es the PR
   head, and renders the storyline + diff **tree-to-tree** (ADR-0018) with **no working-tree
   mutation**.
 - A **user-confirmed "Check out this branch"** action is the lone exception (narrowly amends
   ADR-0016's observe-only stance) for reviewers who want to build/run.
-- **Discovery (#105):** on first publish Stage auto-posts exactly one PR comment carrying
+- **Discovery:** on first publish Stage auto-posts exactly one PR comment carrying
   `stage open <pr-url>`. The https one-click "Open in Stage" link is deferred — it needs a host to
   redirect into a `stage://` handler, and there is no longer a backend to host it; the copy-paste
   command is the guaranteed path.
@@ -118,7 +117,7 @@ read/write + scoped commits, the SQLite store (+ draft tables), dashboard assemb
 `OpenMode::Review`. **All derived state** (Review state, staleness, ready-to-publish, dashboard
 signal) is computed in Rust; TS receives view-ready DTOs and only renders — it never reads
 `.stage`/`gh`/`git` or derives state. The Rust↔TS type contract is enforced by **ts-rs**-generated
-types (already in place, #90). Deleted: the backend HTTP SDK (`api/*`), `oauth.rs`, `session.rs`.
+types (already in place). Deleted: the backend HTTP SDK (`api/*`), `oauth.rs`, `session.rs`.
 
 ### 8. Terminology
 
@@ -135,7 +134,7 @@ types (already in place, #90). Deleted: the backend HTTP SDK (`api/*`), `oauth.r
 
 - **Keep the storyline out of the PR diff (out-of-band ref / git-notes).** Rejected: reintroduces
   the hidden machinery this refactor deletes, breaks the "scan the working tree" dashboard, and the
-  requirements already accept Stage data in the diff (#77).
+  requirements already accept Stage data in the diff.
 
 - **One fixed path for the storyline** (e.g. `.stage/storyline.toml` on every branch). Rejected: two
   branches write the same path, so *every* second merge into the default branch conflicts. The
@@ -148,7 +147,7 @@ types (already in place, #90). Deleted: the backend HTTP SDK (`api/*`), `oauth.r
   edit rewrites the whole file, so any two edits collide and reorders churn the array.
 
 - **PR number as the Review key.** Rejected: no PR exists during the entire pre-publish authoring
-  window, the key requires a network call, and a Review outlives/reuses across PRs (#62/#76) — so PR
+  window, the key requires a network call, and a Review outlives/reuses across PRs — so PR
   number is a stored field, not the key.
 
 - **Commit drafts to the branch as you author them (O1) / keep them uncommitted (O2).** O1 was the
@@ -171,10 +170,10 @@ now resolved:
 
 | ADR-0001 objection | Resolution here |
 |---|---|
-| Storyline mutates with **reviewer** activity → cross-user races on every push | The storyline is **single-writer** (author only, #57). Reviewers discuss via GitHub threads and **never** write `.stage`. The race is gone. |
+| Storyline mutates with **reviewer** activity → cross-user races on every push | The storyline is **single-writer** (author only). Reviewers discuss via GitHub threads and **never** write `.stage`. The race is gone. |
 | Reviewers without push access can't edit it | Reviewers are not meant to edit it — author-only by design. They fetch + read; they discuss on GitHub. |
 | Authors get stale-storyline warnings on every reviewer comment | Comments live on GitHub, not in `.stage`; reviewer activity never touches the storyline, so it never goes stale from a comment. |
-| GitHub credentials would live on every client (token-exposure surface) | Accepted and inverted (#58): Stage holds **no** token — it shells out to the user's `gh`. There is no Stage-managed token surface at all. |
+| GitHub credentials would live on every client (token-exposure surface) | Accepted and inverted: Stage holds **no** token — it shells out to the user's `gh`. There is no Stage-managed token surface at all. |
 
 ## Consequences
 
