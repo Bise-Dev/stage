@@ -11,4 +11,14 @@ export type NoteAnchor = { file: string, lineStart: number | null, lineEnd: numb
 /**
  * Which diff side the line range targets; `None` for a file-level anchor.
  */
-side: Side | null, };
+side: Side | null, 
+/**
+ * Which Self-Review section the anchor lives in: the committed diff
+ * (`false`, the default) or the **uncommitted** working-tree section
+ * (`true`). Both sections can hold the same path at different line
+ * numbers, so the section is part of the anchor's identity — and it picks
+ * which diff `outdated` is computed against
+ * ([`crate::diff::notes_with_outdated`]). Pre-existing rows read back as
+ * `false`, which is what they were.
+ */
+uncommitted: boolean, };

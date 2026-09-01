@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
-use stage_core::diff::{default_base, DiffLineIndex};
+use stage_core::diff::{default_base, notes_with_outdated};
 use stage_core::{
     repo_key_from_cwd, DebriefView, NoteAnchor, NoteStatus, Review, SelfReviewNote,
     SelfReviewNoteView, Store, StorylinePreview, StorylineStep,
@@ -839,8 +839,9 @@ pub fn self_review_viewed_import_legacy(
 /// Review notes for the active repo + branch (optionally filtered by `status`),
 /// each carrying its `replies` thread and a computed `outdated` flag.
 /// `outdated` is derived against the current Debrief's base (falling back to the
-/// repo default branch) — the same `DiffLineIndex` computation as the CLI's
-/// `notes` arm so the app and agent agree (ADR-0012), never stored (the
+/// repo default branch), or against the working-tree diff for a note left in
+/// the uncommitted section — `notes_with_outdated` is the same code the CLI's
+/// `notes` arm runs, so the app and agent agree (ADR-0012). Never stored (the
 /// **Stale step** pattern, at line granularity).
 #[tauri::command]
 // `pill = "cmd"` tags this span so the Activity-log layer records one row per
@@ -859,14 +860,7 @@ pub fn self_review_notes_list(
         Some(debrief) => debrief.base,
         None => default_base(&path)?,
     };
-    let index = DiffLineIndex::from_base_diff(&path, &base)?;
-    Ok(notes
-        .into_iter()
-        .map(|n| {
-            let outdated = index.is_outdated(&n.anchor);
-            n.into_view(outdated)
-        })
-        .collect())
+    Ok(notes_with_outdated(&path, &base, notes)?)
 }
 
 /// Create an `open` Review note. `anchor` is `None` for general (un-anchored)

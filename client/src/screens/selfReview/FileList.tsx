@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import { CollapsibleRail, RailStripStat } from '../../components/CollapsibleRail';
 import { Icon } from '../../components/Icon';
-import type { SelfReviewFileChange } from '../../tauri';
+import type { NoteAnchor, SelfReviewFileChange } from '../../tauri';
 
 const STATUS_BADGE: Record<SelfReviewFileChange['status'], { ch: string; color: string }> = {
   added: { ch: 'A', color: 'var(--green-d)' },
@@ -14,6 +14,12 @@ const STATUS_BADGE: Record<SelfReviewFileChange['status'], { ch: string; color: 
  *  the same path, so selection/scroll targets carry their section. */
 export const committedId = (path: string) => `c:${path}`;
 export const uncommittedId = (path: string) => `u:${path}`;
+
+/** The same id for a note's anchor, so a note lands in the section it was
+ *  written in — the two sections render one path at different line numbers, so
+ *  the path alone would put an uncommitted note on the committed block too. */
+export const anchorId = (a: Pick<NoteAnchor, 'file' | 'uncommitted'>) =>
+  a.uncommitted ? uncommittedId(a.file) : committedId(a.file);
 
 /** A Debrief chapter's presence in the file list: title + the paths it
  *  narrates, in chapter order (title only — the intro lives in the center
@@ -35,7 +41,7 @@ export type FileListChapter = { title: string; files: string[] };
  * While a filter query is active, only groups containing matches render.
  * The uncommitted section (flag F4) follows separately — no viewed
  * checkboxes (working-tree edits are too volatile to meaningfully
- * "mark seen").
+ * "mark seen"), but it does carry note counts: notes are welcome there.
  */
 export function FileList({
   files,
@@ -69,6 +75,7 @@ export function FileList({
   viewed: Set<string>;
   onToggleViewed: (path: string) => void;
   onClearViewed: () => void;
+  /** Anchored-note count per **section-qualified** id (see `anchorId`). */
   noteCounts: Map<string, number>;
   /** Author-resizable column width (px); see `useColumnWidth`. */
   width: number;
@@ -184,7 +191,7 @@ export function FileList({
                   file={f}
                   active={committedId(f.path) === selectedId}
                   isViewed={false}
-                  noteCount={noteCounts.get(f.path) ?? 0}
+                  noteCount={noteCounts.get(committedId(f.path)) ?? 0}
                   onSelect={() => onSelect(committedId(f.path))}
                   onToggleViewed={() => onToggleViewed(f.path)}
                 />
@@ -197,7 +204,7 @@ export function FileList({
                   key={f.path}
                   file={f}
                   active={committedId(f.path) === selectedId}
-                  noteCount={noteCounts.get(f.path) ?? 0}
+                  noteCount={noteCounts.get(committedId(f.path)) ?? 0}
                   onSelect={() => onSelect(committedId(f.path))}
                   onToggleViewed={() => onToggleViewed(f.path)}
                 />
@@ -227,7 +234,7 @@ export function FileList({
                 active={uncommittedId(f.path) === selectedId}
                 isViewed={false}
                 hideViewed
-                noteCount={0}
+                noteCount={noteCounts.get(uncommittedId(f.path)) ?? 0}
                 onSelect={() => onSelect(uncommittedId(f.path))}
                 onToggleViewed={() => {}}
               />

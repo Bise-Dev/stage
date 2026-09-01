@@ -37,7 +37,7 @@ pub mod worktree;
 pub use base::{base_options, branch_head_sha, BaseOptions, LocalDefault};
 pub use chapter::Chapter;
 pub use delete::{delete_execute, delete_plan, DeleteOutcome, DeletePlan, DeletePlanOutcome};
-pub use diff::DiffLineIndex;
+pub use diff::{notes_with_outdated, DiffLineIndex};
 pub use discussion::{
     group_threads_by_step, PrDiscussion, ReviewThread, StepThreads, ThreadComment,
 };

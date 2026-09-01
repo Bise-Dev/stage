@@ -355,11 +355,12 @@ impl Store {
         let line_start = anchor.and_then(|a| a.line_start);
         let line_end = anchor.and_then(|a| a.line_end);
         let side = anchor.and_then(|a| a.side).map(Side::as_str);
+        let uncommitted = anchor.is_some_and(|a| a.uncommitted);
         self.conn.execute(
             "INSERT INTO review_note \
                 (id, repo_owner, repo_name, branch, file, line_start, line_end, side, \
-                 body, status, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                 uncommitted, body, status, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
             params![
                 id,
                 key.repo_owner,
@@ -369,6 +370,7 @@ impl Store {
                 line_start,
                 line_end,
                 side,
+                uncommitted,
                 body,
                 NoteStatus::Open.as_str(),
                 now,
@@ -387,7 +389,7 @@ impl Store {
     ) -> Result<Vec<SelfReviewNote>, StageError> {
         let mut sql = String::from(
             "SELECT id, file, line_start, line_end, side, body, status, \
-                    created_at, updated_at FROM review_note \
+                    created_at, updated_at, uncommitted FROM review_note \
              WHERE repo_owner = ?1 AND repo_name = ?2 AND branch = ?3",
         );
         if status.is_some() {
@@ -421,7 +423,7 @@ impl Store {
             .conn
             .query_row(
                 "SELECT id, file, line_start, line_end, side, body, status, \
-                        created_at, updated_at FROM review_note \
+                        created_at, updated_at, uncommitted FROM review_note \
                  WHERE id = ?1 AND repo_owner = ?2 AND repo_name = ?3 AND branch = ?4",
                 params![id, key.repo_owner, key.repo_name, key.branch],
                 bare_note_from_row,
@@ -997,8 +999,9 @@ impl Store {
 
 /// Map a `review_note` row to a [`SelfReviewNote`] **without** its thread — callers
 /// hydrate `replies` via [`Store::hydrate`]. Column order:
-/// `id, file, line_start, line_end, side, body, status, created_at, updated_at`.
-/// A bad `status`/`side` string is a loud failure, never a silent default.
+/// `id, file, line_start, line_end, side, body, status, created_at, updated_at,
+/// uncommitted`. A bad `status`/`side` string is a loud failure, never a silent
+/// default.
 fn bare_note_from_row(r: &rusqlite::Row) -> rusqlite::Result<SelfReviewNote> {
     let file: Option<String> = r.get(1)?;
     let line_start: Option<u32> = r.get(2)?;
@@ -1014,11 +1017,13 @@ fn bare_note_from_row(r: &rusqlite::Row) -> rusqlite::Result<SelfReviewNote> {
         })?),
         None => None,
     };
+    let uncommitted: bool = r.get(9)?;
     let anchor = file.map(|file| NoteAnchor {
         file,
         line_start,
         line_end,
         side,
+        uncommitted,
     });
 
     let status_str: String = r.get(6)?;
@@ -1260,6 +1265,14 @@ const MIGRATIONS: &[&str] = &[
     // it — the state is cheap to re-derive by re-marking if the feature
     // returns. Viewed marks (`self_review_viewed`) are untouched.
     "DROP TABLE IF EXISTS self_review_done;",
+    // v9 — Review notes carry the Self-Review *section* they were left in: the
+    // committed diff, or the uncommitted working-tree section. The two render
+    // the same path at different line numbers, so without this a note left on
+    // an uncommitted edit would also surface — at the wrong lines — on the
+    // committed block, and `outdated` would be computed against the diff it
+    // does not belong to. Existing rows are committed-section notes, which is
+    // exactly what the default says.
+    "ALTER TABLE review_note ADD COLUMN uncommitted INTEGER NOT NULL DEFAULT 0;",
 ];
 
 fn migrate(conn: &Connection) -> Result<(), StageError> {
@@ -1547,6 +1560,7 @@ mod tests {
             line_start: Some(1),
             line_end: Some(3),
             side: Some(Side::Right),
+            uncommitted: false,
         }
     }
 
@@ -1642,6 +1656,62 @@ mod tests {
         assert!(store.get_note(&k, "n1").unwrap().is_none());
         // Deleting again fails loud (unknown note).
         assert!(store.delete_note(&k, "n1").is_err());
+    }
+
+    #[test]
+    fn note_anchor_carries_its_self_review_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("h.sqlite3")).unwrap();
+        let k = key();
+        let mut uncommitted = anchor("a.rs");
+        uncommitted.uncommitted = true;
+
+        store
+            .create_note(&k, "n1", Some(&anchor("a.rs")), "committed note")
+            .unwrap();
+        store
+            .create_note(&k, "n2", Some(&uncommitted), "working-tree note")
+            .unwrap();
+
+        // Same path, two sections — the section round-trips, so the reader can
+        // tell which block each note belongs to.
+        let committed = store.get_note(&k, "n1").unwrap().unwrap();
+        assert!(!committed.anchor.unwrap().uncommitted);
+        let working = store.get_note(&k, "n2").unwrap().unwrap();
+        let a = working.anchor.unwrap();
+        assert_eq!(a.file, "a.rs");
+        assert!(a.uncommitted);
+    }
+
+    #[test]
+    fn migration_v9_reads_pre_section_notes_as_committed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.sqlite3");
+        // Hand-build a v8 store (every migration up to, but not including, the
+        // `uncommitted` column) and insert a note the old way.
+        {
+            let conn = Connection::open(&path).unwrap();
+            for statement in &MIGRATIONS[..8] {
+                conn.execute_batch(statement).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO review_note \
+                    (id, repo_owner, repo_name, branch, file, line_start, line_end, side, \
+                     body, status, created_at, updated_at) \
+                 VALUES ('n1','octo','stage','feat/x','a.rs',1,3,'right','rename it','open',100,200)",
+                [],
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 8i64).unwrap();
+        }
+
+        // A note written before the section existed *was* a committed-diff note.
+        let store = Store::open(&path).unwrap();
+        let note = store
+            .get_note(&key(), "n1")
+            .unwrap()
+            .expect("note survived");
+        assert!(!note.anchor.unwrap().uncommitted);
     }
 
     #[test]

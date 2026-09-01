@@ -13,6 +13,7 @@ import { Icon } from '../../components/Icon';
 import type { NoteAnchor, SelfReviewFileChange, SelfReviewNoteView, Side } from '../../tauri';
 import { type CommentRange, CommentableFileDiff, type ViewMode } from './CommentableFileDiff';
 import { Composer } from './Composer';
+import { anchorId, committedId, uncommittedId } from './FileList';
 import { Thread } from './Thread';
 
 const STATUS_BADGE = {
@@ -57,8 +58,10 @@ type DiffPaneProps = NoteOps & {
   /** The committed section's files (the reviewable unit, flag F4). */
   files: SelfReviewFileChange[];
   /** The uncommitted section's files; null when the section is off. Rendered
-   *  after a divider, read-only: no viewed toggle, no Review notes (their
-   *  anchors would be against volatile working-tree content). */
+   *  after a divider, without the viewed toggle (working-tree edits are too
+   *  volatile to meaningfully "mark seen") but *with* Review notes: the anchor
+   *  records its section, so an uncommitted note is checked against the
+   *  working-tree diff and never bleeds onto the committed block. */
   uncommittedFiles: SelfReviewFileChange[] | null;
   viewLayout: ViewLayout;
   /** Section-qualified id the sidebar has selected; in 'single' layout
@@ -77,9 +80,10 @@ type DiffPaneProps = NoteOps & {
   ref?: Ref<DiffPaneHandle>;
 };
 
-/** Section-qualified block ids, mirroring FileList's helpers. */
-const cid = (path: string) => `c:${path}`;
-const uid = (path: string) => `u:${path}`;
+/** Section-qualified block ids — the same helpers the sidebar and the note
+ *  anchors use, so a block, its sidebar row and its notes share one key. */
+const cid = committedId;
+const uid = uncommittedId;
 
 /**
  * Renders one or many file diffs depending on `viewLayout`.
@@ -146,21 +150,23 @@ export function DiffPane({
     [onCreateNote, onReplyNote, onResolveNote, onReopenNote, onDeleteNote],
   );
 
-  // Bucket notes by file once, instead of `notes.filter(...)` per file per
-  // render. Crucially we preserve each slice's array identity when its content
-  // is unchanged: a note mutation replaces the whole `notes` array with fresh
-  // objects, so without this every block would re-render on any note change.
-  // With it, only the file whose notes actually changed gets a new slice.
+  // Bucket notes by *section-qualified* file id once, instead of
+  // `notes.filter(...)` per file per render — qualified because a path can be
+  // in both sections at once, at different line numbers. Crucially we preserve
+  // each slice's array identity when its content is unchanged: a note mutation
+  // replaces the whole `notes` array with fresh objects, so without this every
+  // block would re-render on any note change. With it, only the file whose
+  // notes actually changed gets a new slice.
   const prevSlicesRef = useRef<Map<string, SelfReviewNoteView[]>>(new Map());
   const prevSigsRef = useRef<Map<string, string>>(new Map());
   const notesByFile = useMemo(() => {
     const grouped = new Map<string, SelfReviewNoteView[]>();
     for (const n of notes) {
-      const file = n.anchor?.file;
-      if (!file) continue;
-      const arr = grouped.get(file);
+      if (!n.anchor) continue;
+      const id = anchorId(n.anchor);
+      const arr = grouped.get(id);
       if (arr) arr.push(n);
-      else grouped.set(file, [n]);
+      else grouped.set(id, [n]);
     }
     const prevSlices = prevSlicesRef.current;
     const prevSigs = prevSigsRef.current;
@@ -235,9 +241,9 @@ export function DiffPane({
                   viewMode={viewMode}
                   collapsed={collapsed}
                   isViewed={isViewed}
-                  readOnly={false}
+                  section="committed"
                   onToggleViewed={onToggleViewed}
-                  notes={notesByFile.get(f.path) ?? EMPTY_NOTES}
+                  notes={notesByFile.get(cid(f.path)) ?? EMPTY_NOTES}
                   {...noteOps}
                 />
               </Fragment>
@@ -272,9 +278,9 @@ export function DiffPane({
               viewMode={viewMode}
               collapsed={false}
               isViewed={false}
-              readOnly
+              section="uncommitted"
               onToggleViewed={onToggleViewed}
-              notes={EMPTY_NOTES}
+              notes={notesByFile.get(uid(f.path)) ?? EMPTY_NOTES}
               {...noteOps}
             />
           ))}
@@ -414,9 +420,10 @@ type FileBlockProps = NoteOps & {
    *  viewed and we're in scroll layout (see DiffPane). */
   collapsed: boolean;
   isViewed: boolean;
-  /** Uncommitted-section blocks (flag F4): no viewed toggle, no Review-note
-   *  affordances — the diff renders read-only. */
-  readOnly: boolean;
+  /** Which section the block belongs to. Uncommitted blocks drop the viewed
+   *  toggle (flag F4) and stamp `uncommitted` on the anchors they create; note
+   *  affordances are otherwise identical. */
+  section: 'committed' | 'uncommitted';
   /** Stable parent callback; the block calls it with its own `file.path`. */
   onToggleViewed(path: string): void;
   /** Notes anchored to this file (line- or file-level). */
@@ -428,7 +435,7 @@ const FileBlock = memo(function FileBlock({
   viewMode,
   collapsed,
   isViewed,
-  readOnly,
+  section,
   onToggleViewed,
   notes,
   onCreateNote,
@@ -495,13 +502,21 @@ const FileBlock = memo(function FileBlock({
     [lineNotes, onReplyNote, onResolveNote, onReopenNote, onDeleteNote],
   );
 
+  const uncommitted = section === 'uncommitted';
+
   const handleCreate = useCallback(
     (range: CommentRange, body: string) =>
       onCreateNote(
-        { file: file.path, lineStart: range.lineStart, lineEnd: range.lineEnd, side: range.side },
+        {
+          file: file.path,
+          lineStart: range.lineStart,
+          lineEnd: range.lineEnd,
+          side: range.side,
+          uncommitted,
+        },
         body,
       ),
-    [file.path, onCreateNote],
+    [file.path, uncommitted, onCreateNote],
   );
 
   // Header-only render when collapsed. We keep the same chrome so the
@@ -583,7 +598,13 @@ const FileBlock = memo(function FileBlock({
                     return;
                   }
                   onCreateNote(
-                    { file: file.path, lineStart: null, lineEnd: null, side: null },
+                    {
+                      file: file.path,
+                      lineStart: null,
+                      lineEnd: null,
+                      side: null,
+                      uncommitted,
+                    },
                     trimmed,
                   )
                     .then(() => setAddingFile(false))
@@ -645,30 +666,33 @@ const FileBlock = memo(function FileBlock({
           </span>
         )}
         <div style={{ flex: 1 }} />
-        {!readOnly && (
-          <>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => setAddingFile(true)}
-              title="Add a file-level Review note"
-            >
-              <Icon name="comment-fill" size={11} /> Note
-            </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => onToggleViewed(file.path)}
-              style={
-                isViewed
-                  ? { background: 'rgba(52,199,89,0.14)', color: 'var(--green-d)' }
-                  : undefined
-              }
-            >
-              <Icon name={isViewed ? 'check' : 'eye'} size={11} />{' '}
-              {isViewed ? 'Viewed' : 'Mark viewed'}
-            </button>
-          </>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setAddingFile(true)}
+          title={
+            uncommitted
+              ? 'Add a file-level Review note on this working-tree change'
+              : 'Add a file-level Review note'
+          }
+        >
+          <Icon name="comment-fill" size={11} /> Note
+        </button>
+        {/* No viewed toggle in the uncommitted section (flag F4): a viewed mark
+            is anchored to the blob the author saw, and working-tree content has
+            no blob to anchor to. */}
+        {!uncommitted && (
+          <button
+            type="button"
+            className="btn"
+            onClick={() => onToggleViewed(file.path)}
+            style={
+              isViewed ? { background: 'rgba(52,199,89,0.14)', color: 'var(--green-d)' } : undefined
+            }
+          >
+            <Icon name={isViewed ? 'check' : 'eye'} size={11} />{' '}
+            {isViewed ? 'Viewed' : 'Mark viewed'}
+          </button>
         )}
       </div>
 
@@ -712,7 +736,7 @@ const FileBlock = memo(function FileBlock({
                   return;
                 }
                 onCreateNote(
-                  { file: file.path, lineStart: null, lineEnd: null, side: null },
+                  { file: file.path, lineStart: null, lineEnd: null, side: null, uncommitted },
                   trimmed,
                 )
                   .then(() => setAddingFile(false))
@@ -736,7 +760,7 @@ const FileBlock = memo(function FileBlock({
         viewMode={viewMode}
         inlineAnchors={inlineAnchors}
         renderInline={renderInline}
-        onCreate={readOnly ? undefined : handleCreate}
+        onCreate={handleCreate}
         composerPlaceholder="Leave a note…"
       />
     </div>
