@@ -1,4 +1,3 @@
-#[cfg(debug_assertions)]
 pub mod activity_log;
 mod agent_sessions;
 mod commands;
@@ -54,21 +53,20 @@ fn parse_open_intent(argv: &[String]) -> Option<OpenIntent> {
 }
 
 pub fn run() {
-    // Base console logging (unchanged). In debug we additionally fan events into
-    // the dev-only Activity log ring via a second layer; both are scoped by
+    // Base console logging (unchanged). A second layer fans the same events
+    // into the in-app Activity log ring — in release builds too, so the drawer
+    // is a real diagnostic on a shipped app (⌘`). Both layers are scoped by
     // their own filter so the fmt layer keeps its existing verbosity.
     let fmt_layer = tracing_subscriber::fmt::layer().with_filter(
         EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new("info,stage_client_lib=debug")),
     );
 
-    #[cfg(debug_assertions)]
     let activity_log = Arc::new(activity_log::ActivityLog::new());
 
     let subscriber = tracing_subscriber::registry().with(fmt_layer);
     // The ring layer captures DEBUG+ from our crate only — that's where the
     // http/git/cmd/rust pills come from; dependency noise stays out.
-    #[cfg(debug_assertions)]
     let subscriber = subscriber.with(
         activity_log::ActivityLogLayer::new(activity_log.clone())
             .with_filter(EnvFilter::new("stage_client_lib=debug")),
@@ -170,7 +168,6 @@ pub fn run() {
         .setup(move |app| {
             // Stream new ring entries to the webview once the app handle exists.
             // Records before this point still land in the ring (always-on).
-            #[cfg(debug_assertions)]
             activity_log.set_app(app.handle().clone());
 
             let data_dir = app
@@ -198,7 +195,6 @@ pub fn run() {
                 // off the UI thread without re-running the auth gate (ADR-0023).
                 github: Arc::new(stage_core::GitHub::new()),
                 pending_open: Mutex::new(pending_open),
-                #[cfg(debug_assertions)]
                 activity_log,
             });
             Ok(())
@@ -284,11 +280,8 @@ pub fn run() {
             commands::pr_reopen_thread,
             commands::pr_edit_comment,
             commands::pr_delete_comment,
-            #[cfg(debug_assertions)]
             activity_log::activity_log_snapshot,
-            #[cfg(debug_assertions)]
             activity_log::activity_log_push,
-            #[cfg(debug_assertions)]
             activity_log::activity_log_clear,
         ])
         .run(tauri::generate_context!())

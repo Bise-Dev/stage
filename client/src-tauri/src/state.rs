@@ -27,10 +27,9 @@ pub struct AppState {
     /// here (not on the engine) so it survives repo switches — each new
     /// [`crate::sync`] engine is seeded from it.
     pub auto_fetch_secs: Mutex<u32>,
-    /// Dev-only Activity log ring (decision #6). The `tracing` layer in
-    /// `lib.rs` holds the same `Arc`, so both the layer and the IPC commands
-    /// read/write one buffer. Absent from release builds — see `activity_log.rs`.
-    #[cfg(debug_assertions)]
+    /// Activity log ring (decision #6). The `tracing` layer in `lib.rs` holds
+    /// the same `Arc`, so both the layer and the IPC commands read/write one
+    /// buffer. Present in release builds too — see `activity_log.rs`.
     pub activity_log: Arc<crate::activity_log::ActivityLog>,
 }
 

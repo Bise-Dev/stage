@@ -656,10 +656,8 @@ export const selfReviewNoteReopen = (id: string) =>
 /** Author action: permanently delete a note and its thread. */
 export const selfReviewNoteDelete = (id: string) => invoke<void>('self_review_note_delete', { id });
 
-// --- Activity log (dev-only debug panel; see client/STACK.md "Activity log").
-// The backing commands exist only in debug builds (gated `#[cfg(debug_assertions)]`
-// on the Rust side); the webview only ever calls these from dev-gated code
-// (`import.meta.env.DEV`), so a release build never invokes a missing command.
+// --- Activity log (the ⌘` debug drawer; see client/STACK.md "Activity log").
+// The backing commands are registered in every build, debug and release alike.
 // `ActivityLogEntry` + the `ActivityLogLevel`/`ActivityLogPill` unions are
 // generated from Rust (see imports above). ---
 

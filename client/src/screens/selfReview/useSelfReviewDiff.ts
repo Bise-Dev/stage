@@ -93,23 +93,21 @@ export function useSelfReviewDiff(
       setLoading(true);
       return;
     }
-    // Dev-only timing for the invoke→setDiff round-trip. `console.*` is
-    // forwarded into the Activity-log ring in dev (activityLog/console.ts), so
-    // this surfaces in the drawer without ad-hoc logging. Gated on DEV — no
-    // instrumentation ships to production (see plan Phase 1b).
-    const startedAt = import.meta.env.DEV ? performance.now() : 0;
+    // Timing for the invoke→setDiff round-trip. `console.*` is forwarded into
+    // the Activity-log ring (activityLog/console.ts), so this surfaces in the
+    // drawer without ad-hoc logging — in release builds too, where a slow diff
+    // is the thing a user would actually report.
+    const startedAt = performance.now();
     try {
       const next = await selfReviewDiff(scope, scope === 'base' ? baseRef : null);
       cacheRef.current.set(`${scope}:${scope === 'base' ? (baseRef ?? '') : ''}`, next);
       setDiff(next);
       setError(null);
-      if (import.meta.env.DEV) {
-        console.debug('self_review_diff_timing', {
-          scope,
-          files: next.files.length,
-          ms: Math.round(performance.now() - startedAt),
-        });
-      }
+      console.debug('self_review_diff_timing', {
+        scope,
+        files: next.files.length,
+        ms: Math.round(performance.now() - startedAt),
+      });
     } catch (e) {
       console.warn('self_review_diff_failed', e);
       const msg =

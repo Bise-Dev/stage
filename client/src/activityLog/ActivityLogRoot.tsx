@@ -5,16 +5,15 @@ import { ActivityLogDrawer } from './ActivityLogDrawer';
 import { loadDrawerSizePct, saveDrawerSizePct } from './store';
 
 /**
- * Hosts the dev-only Activity-log drawer beneath the app. The whole app lives in
- * the top panel; the drawer is a bottom panel mounted only while open, toggled
- * with ⌘` (macOS) / Ctrl+` (cross-platform). No visible affordance — it's a
- * developer shortcut (decision #5). In production this is a passthrough.
+ * Hosts the Activity-log drawer beneath the app. The whole app lives in the top
+ * panel; the drawer is a bottom panel mounted only while open, toggled with ⌘`
+ * (macOS) / Ctrl+` (cross-platform). No visible affordance — it's a diagnostic
+ * shortcut (decision #5), and it ships in release builds too: the shipped app is
+ * the one whose behaviour is hardest to reproduce. Until it is opened the drawer
+ * costs nothing but this keydown listener — the ring itself fills in Rust from
+ * app start either way (see `src-tauri/src/activity_log.rs`).
  */
-export function DevRoot({ children }: { children: ReactNode }) {
-  return import.meta.env.DEV ? <DevRootWithDrawer>{children}</DevRootWithDrawer> : <>{children}</>;
-}
-
-function DevRootWithDrawer({ children }: { children: ReactNode }) {
+export function ActivityLogRoot({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [sizePct, setSizePct] = useState<number | null>(null);
 
