@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import { Icon } from '../../components/Icon';
 import { isMaterialized } from '../../lib/worktree';
-import type { AgentSession, OverviewRow, ReviewStatus } from '../../tauri';
+import { type AgentSession, type OverviewRow, type ReviewStatus, openUrl } from '../../tauri';
 import { relativeTimeFromEpoch } from '../../time';
 import { type BranchActions, useBranchMenu } from './BranchMenu';
 import { AgentSessionPill, DebriefPill, SelfReviewPill, selfReviewStarted } from './pills';
@@ -13,10 +13,12 @@ import { AgentSessionPill, DebriefPill, SelfReviewPill, selfReviewStarted } from
  * freshness, self-review progress). A pure renderer: every cell shows a value
  * Rust already derived; absent data renders as absent ('—'), never faked.
  *
- * COMMENTED OUT here: the review surface. This version of Stage supports local
- * Self-Review + the agent's Debrief only, so the draft/published Review chip,
- * the GitHub PR column (it carries GitHub's *review decision*) and the
- * Storyline / Discard-review row actions are commented out rather than deleted.
+ * COMMENTED OUT here: the rest of the review surface. This version of Stage
+ * supports local Self-Review + the agent's Debrief only, so the draft/published
+ * Review chip and the Storyline / Discard-review row actions are commented out
+ * rather than deleted. The GitHub PR column is *not* — it reads GitHub's own
+ * review decision off the row and opens the PR in the browser, neither of which
+ * needs the in-app reviewer.
  */
 
 /** Status badge label + class per derived status (WS-5), shared by the GitHub
@@ -72,17 +74,6 @@ function Head({ label, right }: { label: string; right?: boolean }) {
   );
 }
 
-// Fed the commented-out PR cell; commented out with it:
-//
-// /** Parse `{owner}/{name}#{number}` out of a PR's github.com URL — same rule as
-//  *  the board rows used; null on unknown shapes (the chip then stays inert). */
-// function prRefFromUrl(url: string | null): PrRef | null {
-//   if (!url) return null;
-//   const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-//   if (!m) return null;
-//   return { owner: m[1], name: m[2], number: Number(m[3]) };
-// }
-
 export function BranchTable({
   rows,
   defaultBase,
@@ -124,7 +115,7 @@ export function BranchTable({
             <Head label="Base" right />
             <Head label="Diff" right />
             <Head label="Self-review" />
-            {/* <Head label="GitHub" /> — commented out with the PR column */}
+            <Head label="GitHub" />
             <Head label="Updated" right />
             <Head label="" right />
           </tr>
@@ -173,9 +164,7 @@ function BranchRow({
   const materialized = isMaterialized(meta);
   const menuOpen = openBranch === r.branch;
   const sr = meta.selfReview;
-  // Both only fed the commented-out Review chip + PR cell:
-  // const st = statusBadge(r);
-  // const pr = prRefFromUrl(r.url);
+  const st = statusBadge(r);
   // Base: a Review row carries its chosen base; a plain branch diffs against
   // the repo default (the DTO says so) — name it when we know it.
   const base = r.baseRef ?? (meta.isDefault ? null : defaultBase);
@@ -304,21 +293,30 @@ function BranchRow({
           )}
         </div>
       </td>
-      {/* The GitHub PR cell, commented out with the review surface — it renders
-          GitHub's review decision (In review / Changes requested / Approved)
-          and opens the PR in the reviewer:
-
+      {/* The GitHub PR cell: GitHub's own review decision (In review / Changes
+          requested / Approved), opening the PR in the browser. The in-app
+          reviewer it used to open is still commented out; the browser is the
+          honest destination while it is. */}
       <td style={{ ...CELL }}>
-        {r.prNumber !== null ? (
+        {r.prNumber !== null && r.url !== null ? (
           <button
             type="button"
             className={`badge ${st.cls || 'badge-green'}`}
-            onClick={() => pr && actions.onOpenReview(pr)}
-            disabled={!pr}
-            title={r.url ?? undefined}
+            onClick={(e) => {
+              // The row's own click is the menu trigger — keep the chip's to
+              // itself. Fail loud on the open: log it and hand the verbatim
+              // cause to the overview's banner, same contract as the menu's
+              // `runAsync` (CLAUDE.md).
+              e.stopPropagation();
+              openUrl(r.url as string).catch((err) => {
+                console.error('pr_pill_open_failed', { branch: r.branch, err: String(err) });
+                actions.onError("Couldn't open the pull request", String(err));
+              });
+            }}
+            title={`Open ${r.url} in your browser`}
             style={{
               border: 'none',
-              cursor: 'default',
+              cursor: 'pointer',
               fontFamily: 'inherit',
               display: 'inline-flex',
               alignItems: 'center',
@@ -331,7 +329,6 @@ function BranchRow({
           <span style={{ fontSize: 11, color: 'var(--gray-300)' }}>—</span>
         )}
       </td>
-      */}
       <td style={{ ...CELL, textAlign: 'right', color: 'var(--gray-400)', fontSize: 11 }}>
         {relativeTimeFromEpoch(meta.updatedAt)}
       </td>
