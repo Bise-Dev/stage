@@ -33,6 +33,15 @@ run:
     branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
     exec mprocs --proc-list-title "⎇ $branch"
 
+# Print the dev-stack log with the pane's terminal escapes stripped.
+# `proc_log` mirrors the pty verbatim, so the pane keeps its colours and the
+# file keeps their escape sequences — which makes a raw `grep -i warn` miss
+# coloured levels and drags control codes into anything you paste. Read through
+# this instead: `just logs | grep -i error`, `just logs | pbcopy`.
+[group('dev')]
+logs:
+    python3 scripts/strip-ansi.py logs/client.log
+
 alias pc := pre-commit
 
 # Run all pre-commit hooks against every file
