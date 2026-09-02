@@ -1,7 +1,8 @@
 import { type ActivityLogLevel, activityLogPush } from '../tauri';
 
 // Forward `window.console.*` into the Rust Activity-log ring as `webview` rows.
-// Dev-only — callers gate on `import.meta.env.DEV`. See client/STACK.md.
+// Installed unconditionally from `main.tsx` (debug and release). See
+// client/STACK.md.
 
 type ConsoleMethod = 'log' | 'info' | 'warn' | 'error' | 'debug';
 

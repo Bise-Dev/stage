@@ -44,22 +44,22 @@ Implementation choices for the local client. Open to revision; not in CONTEXT.md
 ## Network access
 - **There is no Stage backend** (ADR-0022) and the app holds **no credentials of its own**: GitHub API calls shell out to the user's own `gh` (which owns its token), and git transport uses the user's own `git` (ssh-agent, credential helpers). The webview never speaks to the network directly — everything goes through Rust-side Tauri commands.
 
-## Activity log (dev-only debug panel)
-A read-only, structured event stream for inspecting what the app is doing at runtime — HTTP calls, git ops, command invocations, webview console output, and raw Rust events. **Dev-only**: every piece is gated behind `#[cfg(debug_assertions)]` (Rust) / `import.meta.env.DEV` (webview), so a release build carries no ring buffer, no IPC commands, and no UI. Decisions below were settled in a `/grill-with-docs` session.
+## Activity log (the ⌘` debug panel)
+A read-only, structured event stream for inspecting what the app is doing at runtime — HTTP calls, git ops, command invocations, webview console output, and raw Rust events. **Ships in every build**, debug and release alike: the shipped app is the one whose behaviour is hardest to reproduce, so the drawer goes with it. It stays undiscoverable (no visible affordance, ⌘` only) and costs one bounded ring plus a filtered tracing layer; nothing is written to disk and nothing leaves the process. Decisions below were settled in a `/grill-with-docs` session.
 
 - **Name**: *Activity log* (not "Terminal"/"Console"/"Debug log") — it's an observability surface, not a shell.
 - **Shape**: read-only structured event stream. No `xterm.js`, no interactive shell — nothing the user can type into.
 - **Placement**: a bottom-docked, resizable drawer inside the main window, built with **`react-resizable-panels`** (the resizable-panels pickable above — this is its first use). The whole app sits in the top panel; the drawer is the bottom panel, mounted only while open.
-- **Toggle**: `` Cmd+` `` on macOS (`` Ctrl+` `` cross-platform). No visible affordance anywhere — it's a developer shortcut, deliberately undiscoverable to end users.
+- **Toggle**: `` Cmd+` `` on macOS (`` Ctrl+` `` cross-platform). No visible affordance anywhere — deliberately undiscoverable to end users, but present for them to be walked onto when something needs diagnosing.
 - **Source of truth**: a Rust-side ring buffer in `AppState` (`activity_log.rs`), **2000 entries, drop-oldest**. Always-on from app start, survives webview reload, **in-memory only** — no disk mirror, no persistence across `Cmd+Q`.
 - **Instrumentation**: a single `tracing_subscriber::Layer` (level ≥ DEBUG, filtered to `stage_client_lib`) feeds the ring. Pills are classified by the layer:
   - `http` — reserved pill for events explicitly tagged `pill = "http"` (unused since the backend HTTP SDK was deleted, ADR-0022).
   - `git` — target starts with `stage_client_lib::git`; `tracing::info!` callsites inside `git.rs`.
-  - `cmd` — a span with field `pill = "cmd"`, via `#[cfg_attr(debug_assertions, tracing::instrument(fields(pill = "cmd")))]` on each `commands.rs` handler; the layer reads the span field on close and records its duration.
+  - `cmd` — a span with field `pill = "cmd"`, via `#[tracing::instrument(fields(pill = "cmd"))]` on each `commands.rs` handler; the layer reads the span field on close and records its duration.
   - `webview` — pushed in from the webview via `activity_log_push` (the `console.*` overrides and the top-level `ErrorBoundary`); `target = "console"`.
   - `rust` — catch-all for any other `stage_client_lib` event.
 - **Redaction (a-narrow)**: the layer hard-redacts only fields whose key is `authorization` (case-insensitive) to `[redacted]` — a defensive backstop; Stage holds no credentials of its own. Everything else — URLs, bodies, git output, errors — is shown raw. The boundary is documented at the redactor callsite.
-- **Tauri surface** (all `#[cfg(debug_assertions)]`):
+- **Tauri surface** (registered in every build):
   - `activity_log_snapshot` (webview → Rust) — returns the full ring on panel open.
   - `activity_log_push` (webview → Rust) — for the `console.*` overrides and `ErrorBoundary`.
   - `activity_log_clear` (webview → Rust) — empties the ring.

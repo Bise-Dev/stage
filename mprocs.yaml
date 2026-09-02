@@ -2,12 +2,23 @@
 # Stage is backend-free (ADR-0022): the Tauri client is the whole app, reaching
 # GitHub through the user's own local `gh`/`git`. One pane — the client.
 
-# Mirror every pane's output to logs/<name>.log (logs/ is gitignored).
-# Paths resolve relative to this config, so logs land at the repo root
-# regardless of each proc's cwd.
+# Mirror every pane's output to logs/<name>.log (logs/ is gitignored) so a dev
+# session leaves something to grep and paste after the fact, not just the live
+# pane.
+#
+# REQUIRES mprocs >= 0.9.0 — `proc_log` landed there. Older mprocs parses this
+# block and drops it without a word, which is how the repo spent a while
+# believing it had logs and having none; `just run` checks the version for
+# exactly that reason.
+#
+# `<CONFIG_DIR>` is mprocs' own placeholder for the directory holding this file,
+# so the logs land at the repo root whatever each proc's `cwd` is and wherever
+# mprocs was launched from. A bare relative path would resolve against mprocs'
+# cwd instead.
 proc_log:
-  dir: logs
+  dir: <CONFIG_DIR>/logs
   file: "{name}.log"
+  # Per run, not per lifetime — `append` is the mprocs default.
   mode: truncate
 
 procs:

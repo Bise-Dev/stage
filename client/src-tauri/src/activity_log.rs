@@ -1,10 +1,12 @@
-//! Dev-only Activity log: an in-memory ring buffer of structured runtime events
-//! (HTTP calls, git ops, command invocations, webview console output, raw Rust
+//! Activity log: an in-memory ring buffer of structured runtime events (HTTP
+//! calls, git ops, command invocations, webview console output, raw Rust
 //! events) plus the `tracing_subscriber::Layer` that feeds it.
 //!
-//! The entire module is compiled only under `#[cfg(debug_assertions)]` (it's
-//! wired up that way in `lib.rs`): a release build has no ring, no layer, and no
-//! IPC surface. See `client/STACK.md` → "Activity log (dev-only debug panel)".
+//! Compiled into **every** build, debug and release alike: a shipped Stage is
+//! the build whose behaviour is hardest to reproduce, so the drawer (⌘` /
+//! Ctrl+`) is the diagnostic that goes with it. The cost is one bounded ring of
+//! [`CAPACITY`] entries and a filtered tracing layer; nothing is written to
+//! disk and nothing leaves the process. See `client/STACK.md` → "Activity log".
 //!
 //! Source-of-truth lives here, not in the webview: the ring fills from app start
 //! (even before any panel is opened) and survives webview reloads. The webview

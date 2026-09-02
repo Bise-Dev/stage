@@ -7,7 +7,7 @@ import {
   type ViewLayout,
   type ViewMode,
 } from '../selfReview/DiffPane';
-import { FileList, committedId } from '../selfReview/FileList';
+import { FileList, anchorId, committedId, uncommittedId } from '../selfReview/FileList';
 import { NotesPopover } from '../selfReview/NotesPopover';
 import { Subheader } from '../selfReview/Subheader';
 import { ResizeHandle, useColumnWidth } from '../selfReview/columnResize';
@@ -276,12 +276,19 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
     [viewLayout],
   );
 
-  // Per-file note counts for the sidebar badge — anchored notes only.
+  // The uncommitted section's files, or null when the section is toggled off
+  // (the sidebar and the diff pane both read `null` as "no section").
+  const selectedUncommittedFiles = includeUncommitted ? (workdir?.files ?? []) : null;
+
+  // Per-file note counts for the sidebar badge — anchored notes only, keyed by
+  // section-qualified id so a note left on an uncommitted edit counts on that
+  // row and not on the committed row for the same path.
   const noteCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const n of notes) {
-      const file = n.anchor?.file;
-      if (file) m.set(file, (m.get(file) ?? 0) + 1);
+      if (!n.anchor) continue;
+      const id = anchorId(n.anchor);
+      m.set(id, (m.get(id) ?? 0) + 1);
     }
     return m;
   }, [notes]);
@@ -289,7 +296,13 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
   const onCopy = useCallback(async () => {
     if (!committed || !currentBranch) return;
     try {
-      const md = notesToMarkdown(currentBranch, committed.baseRef, committed.files, notes);
+      const md = notesToMarkdown(
+        currentBranch,
+        committed.baseRef,
+        committed.files,
+        selectedUncommittedFiles ?? [],
+        notes,
+      );
       await navigator.clipboard.writeText(md);
       setCopyState('copied');
       setTimeout(() => setCopyState('idle'), 1500);
@@ -298,16 +311,17 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
       setCopyState('error');
       setTimeout(() => setCopyState('idle'), 2000);
     }
-  }, [committed, currentBranch, notes]);
+  }, [committed, currentBranch, notes, selectedUncommittedFiles]);
 
-  const selectedUncommittedFiles = includeUncommitted ? (workdir?.files ?? []) : null;
-
-  // Anchored notes on files outside the committed diff have no inline home —
-  // the notes popover surfaces them (L9 §3c N2).
-  const committedPaths = useMemo(
-    () => new Set((committed?.files ?? []).map((f) => f.path)),
-    [committed],
-  );
+  // Anchored notes with no block on screen have no inline home — the notes
+  // popover surfaces them (L9 §3c N2). "On screen" is per *section*: a file
+  // that left the committed diff, and every uncommitted-section note while the
+  // section is toggled off (its blocks aren't rendered at all).
+  const visibleAnchors = useMemo(() => {
+    const ids = new Set((committed?.files ?? []).map((f) => committedId(f.path)));
+    for (const f of selectedUncommittedFiles ?? []) ids.add(uncommittedId(f.path));
+    return ids;
+  }, [committed, selectedUncommittedFiles]);
 
   return (
     <>
@@ -335,7 +349,7 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
           <NotesPopover
             debrief={debrief}
             notes={notes}
-            committedPaths={committedPaths}
+            visibleAnchors={visibleAnchors}
             onCreateNote={createNote}
             onReplyNote={replyNote}
             onResolveNote={resolveNote}

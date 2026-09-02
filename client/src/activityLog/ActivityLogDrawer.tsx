@@ -49,7 +49,7 @@ function formatTime(tsMs: number): string {
 type Props = { onClose: () => void };
 
 /**
- * The dev-only Activity-log drawer body. On mount it snapshots the Rust ring,
+ * The Activity-log drawer body. On mount it snapshots the Rust ring,
  * then tails `activity_log:event` for live rows (de-duped by monotonic id).
  * Filters: source pills, level (default INFO+, toggle DEBUG/TRACE), and a
  * substring search over message + field values. Copy-as-JSONL exports exactly
@@ -281,7 +281,7 @@ export function ActivityLogDrawer({ onClose }: Props) {
   );
 }
 
-// Inline styles keep this dev-only surface self-contained (no styles.css churn).
+// Inline styles keep this diagnostic surface self-contained (no styles.css churn).
 const S: Record<string, CSSProperties> = {
   root: {
     display: 'flex',

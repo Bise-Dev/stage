@@ -6,8 +6,8 @@ type State = { error: Error | null };
 
 /**
  * Top-level error boundary. It forwards any render error into the Activity log
- * (pill `webview`) in dev builds, then shows a minimal fallback. In production
- * there's no Activity-log command to call, so it only renders the fallback.
+ * (pill `webview`) — in release builds too, where a render crash is exactly what
+ * the drawer exists to explain — then shows a minimal fallback.
  * See client/STACK.md → "Activity log".
  */
 export class ErrorBoundary extends Component<Props, State> {
@@ -18,14 +18,17 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    if (import.meta.env.DEV) {
-      void activityLogPush({
-        level: 'error',
-        message: `render error: ${error.message}`,
-        fields: { componentStack: info.componentStack ?? '' },
-        error: error.stack ?? null,
-      }).catch(() => {});
-    }
+    // Fire-and-forget by necessity: we are already rendering the fallback for a
+    // crash, and the fallback is the user-facing half. The push failing would
+    // only cost this row in the ring, so it is swallowed rather than re-thrown
+    // into a boundary that has nowhere left to go (CLAUDE.md's documented
+    // exception).
+    void activityLogPush({
+      level: 'error',
+      message: `render error: ${error.message}`,
+      fields: { componentStack: info.componentStack ?? '' },
+      error: error.stack ?? null,
+    }).catch(() => {});
   }
 
   render(): ReactNode {

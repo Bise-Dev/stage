@@ -18,12 +18,19 @@ export function notesToMarkdown(
   branch: string,
   baseRef: string | null,
   files: SelfReviewFileChange[],
+  /** The uncommitted section's files — their notes render under their own
+   *  heading, and their snippets must come from *this* diff, not the
+   *  committed one (same path, different line numbers). */
+  uncommittedFiles: SelfReviewFileChange[],
   notes: SelfReviewNoteView[],
 ): string {
   const scopeLabel = `vs ${baseRef ?? 'base'}`;
   const anchored = notes.filter((n) => n.anchor !== null);
   const general = notes.filter((n) => n.anchor === null);
-  const fileCount = new Set(anchored.map((n) => n.anchor?.file)).size;
+  // Section-qualified: the same path in both sections is two review targets.
+  const fileCount = new Set(
+    anchored.map((n) => `${n.anchor?.uncommitted ? 'u' : 'c'}:${n.anchor?.file}`),
+  ).size;
   const today = new Date().toISOString().slice(0, 10);
 
   const out: string[] = [];
@@ -36,12 +43,42 @@ export function notesToMarkdown(
     return `${out.join('\n')}\n`;
   }
 
-  // File order follows the diff payload — same as the sidebar — so an eyeball
-  // scan of the markdown matches the screen scan.
+  // Two passes, one per Self-Review section: the committed diff first, then
+  // the working tree. A path can appear in both with different line numbers,
+  // so they never share a heading — and each note's snippet is read from its
+  // own section's patch.
+  emitSection(out, 'committed', files, anchored);
+  emitSection(out, 'uncommitted', uncommittedFiles, anchored);
+
+  if (general.length > 0) {
+    out.push('## General');
+    for (const n of general) {
+      for (const line of renderNote(n, undefined)) out.push(line);
+    }
+    out.push('');
+  }
+
+  return `${out.join('\n').trimEnd()}\n`;
+}
+
+/** Emit `## path` blocks for one section's notes, in the section's own file
+ *  order — same as the sidebar — so an eyeball scan of the markdown matches the
+ *  screen scan. Files not in this section's diff sort last (still emitted; a
+ *  note is never dropped for having lost its file). */
+function emitSection(
+  out: string[],
+  section: 'committed' | 'uncommitted',
+  files: SelfReviewFileChange[],
+  anchored: SelfReviewNoteView[],
+): void {
+  const uncommitted = section === 'uncommitted';
+  const mine = anchored.filter((n) => (n.anchor?.uncommitted ?? false) === uncommitted);
+  if (mine.length === 0) return;
+
   const fileOrder = new Map<string, number>();
   files.forEach((f, i) => fileOrder.set(f.path, i));
   const byFile = new Map<string, SelfReviewNoteView[]>();
-  for (const n of anchored) {
+  for (const n of mine) {
     const file = n.anchor?.file;
     if (!file) continue;
     const arr = byFile.get(file) ?? [];
@@ -53,24 +90,18 @@ export function notesToMarkdown(
       (fileOrder.get(a) ?? Number.MAX_SAFE_INTEGER) - (fileOrder.get(b) ?? Number.MAX_SAFE_INTEGER),
   );
 
+  if (uncommitted) {
+    out.push('## Uncommitted (working tree)');
+    out.push('');
+  }
   for (const path of orderedPaths) {
-    out.push(`## ${path}`);
+    out.push(`## ${path}${uncommitted ? ' *(uncommitted)*' : ''}`);
     const file = files.find((f) => f.path === path);
     for (const n of byFile.get(path) ?? []) {
       for (const line of renderNote(n, file)) out.push(line);
     }
     out.push('');
   }
-
-  if (general.length > 0) {
-    out.push('## General');
-    for (const n of general) {
-      for (const line of renderNote(n, undefined)) out.push(line);
-    }
-    out.push('');
-  }
-
-  return `${out.join('\n').trimEnd()}\n`;
 }
 
 function renderNote(n: SelfReviewNoteView, file: SelfReviewFileChange | undefined): string[] {

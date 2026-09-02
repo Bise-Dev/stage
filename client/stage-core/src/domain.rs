@@ -245,6 +245,15 @@ pub struct NoteAnchor {
     /// Which diff side the line range targets; `None` for a file-level anchor.
     #[serde(default)]
     pub side: Option<Side>,
+    /// Which Self-Review section the anchor lives in: the committed diff
+    /// (`false`, the default) or the **uncommitted** working-tree section
+    /// (`true`). Both sections can hold the same path at different line
+    /// numbers, so the section is part of the anchor's identity — and it picks
+    /// which diff `outdated` is computed against
+    /// ([`crate::diff::notes_with_outdated`]). Pre-existing rows read back as
+    /// `false`, which is what they were.
+    #[serde(default)]
+    pub uncommitted: bool,
 }
 
 /// Who authored a thread entry on a [`SelfReviewNote`].

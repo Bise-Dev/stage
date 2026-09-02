@@ -9,7 +9,7 @@ use std::process::{ExitCode, Stdio};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use stage_core::diff::{
-    assert_files_in_base_diff, default_base, self_review_diff, DiffLineIndex, SelfReviewScope,
+    assert_files_in_base_diff, default_base, notes_with_outdated, self_review_diff, SelfReviewScope,
 };
 // `parse_pr_ref`, `resolve_clone` and `PrRef` were used only by the
 // commented-out reviewer entry (see `open` below).
@@ -401,21 +401,16 @@ fn self_review(cmd: SelfReviewCmd, cwd: &Path, root: &Path) -> Result<(), StageE
             let store = Store::open_default()?;
             let notes = store.list_notes(&key, status.map(Into::into))?;
             // `outdated` is computed against the current Debrief's base (the
-            // diff the notes live on), falling back to the default branch. The
-            // line index is built once and shared across notes — and matches the
-            // app's computation (ADR-0012) so the agent and author never disagree.
+            // diff the notes live on), falling back to the default branch —
+            // and, for notes left in the uncommitted section, against the
+            // working-tree diff instead. `notes_with_outdated` is the one
+            // implementation the app calls too (ADR-0012), so the agent and
+            // author never disagree about which notes are stale.
             let base = match store.get_debrief(&key)? {
                 Some(debrief) => debrief.base,
                 None => default_base(root)?,
             };
-            let index = DiffLineIndex::from_base_diff(root, &base)?;
-            let views: Vec<_> = notes
-                .into_iter()
-                .map(|n| {
-                    let outdated = index.is_outdated(&n.anchor);
-                    n.into_view(outdated)
-                })
-                .collect();
+            let views = notes_with_outdated(root, &base, notes)?;
             println!("{}", serde_json::to_string_pretty(&views)?);
         }
         SelfReviewCmd::Address { id, reply } => {

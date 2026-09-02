@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 use ts_rs::TS;
 
-use crate::domain::{NoteAnchor, Side};
+use crate::domain::{NoteAnchor, SelfReviewNote, SelfReviewNoteView, Side};
 use crate::error::StageError;
 use crate::repo_key::current_branch;
 
@@ -633,6 +633,15 @@ impl DiffLineIndex {
         Ok(Self::from_diff(&diff))
     }
 
+    /// Build directly from the repo's Workdir-scope diff — the uncommitted
+    /// section the Self-Review renders below the committed one. Notes anchored
+    /// there (`NoteAnchor::uncommitted`) are only meaningful against *this*
+    /// diff; the Base index would call every one of them outdated.
+    pub fn from_workdir_diff(repo_path: &Path) -> Result<Self, StageError> {
+        let diff = self_review_diff(repo_path, SelfReviewScope::Workdir, None)?;
+        Ok(Self::from_diff(&diff))
+    }
+
     /// Whether a note's anchor is outdated against this diff. Anchorless →
     /// never. File-level anchor → outdated iff the file is gone. Line anchor →
     /// outdated iff the file is gone or any line in the range is absent on its
@@ -723,6 +732,45 @@ fn parse_hunk_header(line: &str) -> Option<(u32, u32)> {
         .parse()
         .ok()?;
     Some((left, right))
+}
+
+/// Pair each note with its computed `outdated` flag, ready for emission.
+///
+/// The flag is derived, never stored (the **Stale step** pattern), and each
+/// anchor is checked against the diff of the section it was left in: the
+/// Base-scope diff against `base_ref` for a committed-section note, the
+/// Workdir-scope diff for an uncommitted one. Sharing this between the desktop
+/// app and the `stage` CLI is what keeps the author's screen and the agent's
+/// `notes` output agreeing on which notes are stale (ADR-0012).
+///
+/// The workdir index is built only when some note actually needs it — a branch
+/// with no uncommitted-section notes pays for one diff, exactly as before.
+pub fn notes_with_outdated(
+    repo_path: &Path,
+    base_ref: &str,
+    notes: Vec<SelfReviewNote>,
+) -> Result<Vec<SelfReviewNoteView>, StageError> {
+    let base = DiffLineIndex::from_base_diff(repo_path, base_ref)?;
+    let needs_workdir = notes
+        .iter()
+        .any(|n| n.anchor.as_ref().is_some_and(|a| a.uncommitted));
+    let workdir = if needs_workdir {
+        Some(DiffLineIndex::from_workdir_diff(repo_path)?)
+    } else {
+        None
+    };
+    Ok(notes
+        .into_iter()
+        .map(|n| {
+            let uncommitted = n.anchor.as_ref().is_some_and(|a| a.uncommitted);
+            let index = match (uncommitted, workdir.as_ref()) {
+                (true, Some(w)) => w,
+                _ => &base,
+            };
+            let outdated = index.is_outdated(&n.anchor);
+            n.into_view(outdated)
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -883,7 +931,74 @@ mod tests {
             line_start: Some(start),
             line_end: Some(end),
             side: Some(side),
+            uncommitted: false,
         })
+    }
+
+    /// A bare note for the outdated tests — no thread, status irrelevant.
+    fn note(id: &str, anchor: NoteAnchor) -> SelfReviewNote {
+        SelfReviewNote {
+            id: id.into(),
+            anchor: Some(anchor),
+            body: "look at this".into(),
+            status: crate::domain::NoteStatus::Open,
+            replies: Vec::new(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn notes_with_outdated_checks_each_note_against_its_own_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        fs::write(dir.path().join("a.txt"), "1\n2\n3\n4\n5\n").unwrap();
+        fs::write(dir.path().join("b.txt"), "b1\n").unwrap();
+        let base = commit_all(&repo, "base", None);
+
+        // Committed branch work touches b.txt only…
+        fs::write(dir.path().join("b.txt"), "b1\nb2\n").unwrap();
+        commit_all(&repo, "feat", Some(base));
+        // …and the working tree touches a.txt only. So the two sections hold
+        // disjoint files: b.txt is in the committed diff, a.txt in the workdir.
+        fs::write(dir.path().join("a.txt"), "1\n2\nedited\n4\n5\n").unwrap();
+
+        let base_ref = base.to_string();
+        let anchor = |file: &str, uncommitted: bool| NoteAnchor {
+            file: file.into(),
+            line_start: Some(2),
+            line_end: Some(2),
+            side: Some(Side::Right),
+            uncommitted,
+        };
+        let views = notes_with_outdated(
+            dir.path(),
+            &base_ref,
+            vec![
+                note("committed-live", anchor("b.txt", false)),
+                note("workdir-live", anchor("a.txt", true)),
+                // Same file as the live committed note, but claimed for the
+                // uncommitted section — b.txt has no working-tree change, so
+                // there is nothing there to anchor to.
+                note("workdir-stale", anchor("b.txt", true)),
+            ],
+        )
+        .unwrap();
+
+        let outdated = |id: &str| {
+            views
+                .iter()
+                .find(|v| v.note.id == id)
+                .unwrap_or_else(|| panic!("{id} missing"))
+                .outdated
+        };
+        assert!(!outdated("committed-live"));
+        assert!(!outdated("workdir-live"));
+        assert!(
+            outdated("workdir-stale"),
+            "an uncommitted anchor must be checked against the working-tree diff, \
+             not the base diff that happens to contain the same file"
+        );
     }
 
     #[test]
@@ -903,6 +1018,7 @@ mod tests {
             line_start: None,
             line_end: None,
             side: None,
+            uncommitted: false,
         })));
         // Anchor to a file not in the diff → outdated.
         assert!(index.is_outdated(&line_anchor("gone.rs", 1, 1, Side::Right)));
