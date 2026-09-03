@@ -96,6 +96,11 @@ pub struct SyncStatus {
     /// with this when there is no snapshot to serve at all.
     pub local_error: Option<String>,
     pub github_state: GithubSyncState,
+    /// Whether a GitHub poll is in flight right now. `github_state` only says
+    /// how the *last* poll ended, so without this the webview cannot tell a
+    /// refresh in progress from a finished one — every poll after the first
+    /// would be invisible.
+    pub github_polling: bool,
     /// The last GitHub poll failure, verbatim (`gh`'s own message).
     pub github_error: Option<String>,
     /// When GitHub was last polled successfully.
@@ -114,6 +119,7 @@ impl SyncStatus {
             local_synced_at: None,
             local_error: None,
             github_state: GithubSyncState::Pending,
+            github_polling: false,
             github_error: None,
             github_synced_at: None,
             auto_fetch_error: None,
@@ -513,6 +519,11 @@ impl Engine {
     async fn poll_github(&mut self) -> PollOutcome {
         let github = Arc::clone(&self.github);
         let path = self.repo_path.clone();
+        // Announce the in-flight poll before blocking on it: `gh` can take
+        // seconds, and the webview has nothing else to distinguish "refreshing"
+        // from "done". Cleared on both exits below.
+        self.mutate(|s| s.status.github_polling = true);
+        self.emit(SyncScope::Status, None);
         let result = tauri::async_runtime::spawn_blocking(move || {
             let key = repo_key_from_cwd(&path)?;
             fetch_overview_github(&github, &key)
@@ -524,20 +535,16 @@ impl Engine {
             Ok(data) => {
                 self.github_data = Some(data);
                 self.consecutive_failures = 0;
-                let was_degraded = {
-                    let s = self.snap.borrow();
-                    s.status.github_state != GithubSyncState::Ok
-                };
                 self.mutate(|s| {
                     s.status.github_state = GithubSyncState::Ok;
+                    s.status.github_polling = false;
                     s.status.github_error = None;
                     s.status.github_synced_at = Some(epoch_ms());
                 });
-                // Row changes are detected (and emitted) by the recompute that
-                // follows; only a state transition warrants its own event.
-                if was_degraded {
-                    self.emit(SyncScope::Status, None);
-                }
+                // Unconditional now: the spinner clearing is itself a visible
+                // change. It used to ride on the recompute that follows, which
+                // only emits when rows actually differ.
+                self.emit(SyncScope::Status, None);
                 PollOutcome::Ok
             }
             Err(e) => {
@@ -548,6 +555,7 @@ impl Engine {
                 let pause = matches!(e, StageError::GhUnavailable(_));
                 self.mutate(|s| {
                     s.status.github_state = GithubSyncState::Degraded;
+                    s.status.github_polling = false;
                     s.status.github_error = Some(e.to_string());
                 });
                 self.emit(SyncScope::Status, None);

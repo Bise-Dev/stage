@@ -21,6 +21,13 @@ localSyncedAt: number | null,
  */
 localError: string | null, githubState: GithubSyncState, 
 /**
+ * Whether a GitHub poll is in flight right now. `github_state` only says
+ * how the *last* poll ended, so without this the webview cannot tell a
+ * refresh in progress from a finished one — every poll after the first
+ * would be invisible.
+ */
+githubPolling: boolean, 
+/**
  * The last GitHub poll failure, verbatim (`gh`'s own message).
  */
 githubError: string | null, 

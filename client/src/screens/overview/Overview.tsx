@@ -1,4 +1,12 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { type MenuPoint, pointFromEvent } from '../../components/ContextMenu';
 import { FetchButton } from '../../components/FetchButton';
 import { GitDialog } from '../../components/GitDialog';
@@ -104,9 +112,9 @@ export function Overview({
   const [repoSlug, setRepoSlug] = useState<string | null>(null);
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [rows, setRows] = useState<OverviewRow[]>([]);
-  // Only read by the commented-out "On GitHub" section; still set so the load
-  // path stays intact.
-  const [, setGithubIncluded] = useState(true);
+  // Whether `gh` was consulted for the current rows — gates the archived
+  // toggle, since `archived` can only be known from GitHub.
+  const [githubIncluded, setGithubIncluded] = useState(true);
   // The sync engine's status: freshness timestamps + the loud, verbatim causes
   // of a degraded GitHub poll / failed local assembly / failed auto-fetch.
   const [sync, setSync] = useState<SyncStatus | null>(null);
@@ -115,9 +123,8 @@ export function Overview({
   const [query, setQuery] = useState('');
   // Archived (closed/merged-PR) reviews are hidden by default (DB-5 #88). The
   // load always fetches them (ADR-0028) and this filters the *view*, so the
-  // toggle — which lived in the commented-out "On GitHub" section — can come
-  // back by uncommenting, with no reload. It stays false meanwhile.
-  const [showArchived] = useState(false);
+  // toggle in the summary strip flips it with no reload.
+  const [showArchived, setShowArchived] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   // Table ⇄ Graph home choice (v6-light L6), persisted like other view prefs.
@@ -448,6 +455,10 @@ export function Overview({
     });
   // "Show archived" is a display filter from here down.
   const localRows = allLocalRows.filter((r) => showArchived || !r.archived);
+  // What the toggle reveals: branches still in this clone whose PR is merged or
+  // closed. Counted off allLocalRows, not `rows`, because a PR with no local
+  // branch has no row to show either way.
+  const archivedCount = allLocalRows.filter((r) => r.archived).length;
   // Fed the commented-out "On GitHub" section:
   // const ghRows = rows.filter((r) => r.branchMeta === null).filter(visible);
   const defaultBase = localRows.find((r) => r.branchMeta?.isDefault)?.branch ?? null;
@@ -554,6 +565,34 @@ export function Overview({
               <span style={{ fontSize: 12, color: 'var(--gray-600)' }}>
                 {localRows.length} {localRows.length === 1 ? 'branch' : 'branches'}
               </span>
+              {githubIncluded && archivedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowArchived((v) => !v)}
+                  title={
+                    showArchived
+                      ? 'Hide branches whose PR is merged or closed'
+                      : 'Show branches whose PR is merged or closed'
+                  }
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                    fontSize: 11.5,
+                    color: 'var(--gray-500)',
+                  }}
+                >
+                  <Icon name="eye" size={11} color="var(--gray-500)" />
+                  {showArchived
+                    ? `Hide archived (${archivedCount})`
+                    : `Show archived (${archivedCount})`}
+                </button>
+              )}
               {debriefNew > 0 && (
                 <span
                   style={{
@@ -965,12 +1004,38 @@ function SyncedAgo({ status }: { status: SyncStatus | null }) {
     const id = setInterval(() => setTick((t) => t + 1), 10_000);
     return () => clearInterval(id);
   }, []);
-  if (!status?.githubSyncedAt) return null;
+  const base: CSSProperties = {
+    fontSize: 11,
+    color: 'var(--gray-500)',
+    flex: '0 0 auto',
+    whiteSpace: 'nowrap',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+  };
+  // In flight wins over freshness: a poll takes seconds against a busy repo,
+  // and "Updated 30s ago" while we're mid-request reads as though nothing is
+  // happening.
+  if (status?.githubPolling) {
+    return (
+      <span title="Fetching pull requests from GitHub" style={base}>
+        <span className="pulse-dot" />
+        {status.githubSyncedAt ? 'Syncing GitHub…' : 'Loading pull requests…'}
+      </span>
+    );
+  }
+  if (!status?.githubSyncedAt) {
+    // Pending with no poll in flight: paused (an unavailable `gh`) or backing
+    // off after a failure. The degraded banner carries the verbatim cause.
+    if (status?.githubState === 'degraded') return null;
+    return (
+      <span title="Waiting for the first GitHub sync" style={base}>
+        Pull requests not loaded yet
+      </span>
+    );
+  }
   return (
-    <span
-      title="Last successful GitHub sync"
-      style={{ fontSize: 11, color: 'var(--gray-500)', flex: '0 0 auto', whiteSpace: 'nowrap' }}
-    >
+    <span title="Last successful GitHub sync" style={base}>
       Updated {relativeTimeFromEpoch(Math.floor(status.githubSyncedAt / 1000))}
     </span>
   );
