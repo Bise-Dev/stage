@@ -91,9 +91,9 @@ pub struct GhAuthor {
     pub login: String,
 }
 
-/// One pull request from `gh pr list --json …` — exactly the fields the
-/// dashboard needs to derive a row's status + signal (ADR-0022 §6, DB-2 #85).
-/// Unknown fields in gh's payload are ignored (serde default).
+/// One pull request at full detail — every field a *rendered* overview row
+/// needs (ADR-0022 §6, DB-2 #85). Only fetched for open PRs; archived ones come
+/// back as the much cheaper [`GhPrState`]. Unknown fields are ignored.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GhPullRequest {
@@ -106,7 +106,6 @@ pub struct GhPullRequest {
     /// committed `.stage/<branch>/` folders.
     pub head_ref_name: String,
     pub base_ref_name: String,
-    pub is_draft: bool,
     pub additions: u32,
     pub deletions: u32,
     /// gh's review decision: `""` (none yet), `"APPROVED"`, `"CHANGES_REQUESTED"`,
@@ -114,24 +113,26 @@ pub struct GhPullRequest {
     #[serde(default)]
     pub review_decision: String,
     pub author: GhAuthor,
-    /// Issue-comment count for the dashboard signal. `gh` returns the full
-    /// `comments` array; only its length is kept (see [`count_json_array`]).
-    #[serde(rename = "comments", deserialize_with = "count_json_array")]
-    pub comments: u32,
     /// ISO-8601 last-update time (`updatedAt`) — the overview row's right-edge
     /// relative timestamp. Defaulted (empty) so an older payload still parses.
     #[serde(default)]
     pub updated_at: String,
 }
 
-/// Deserialize a JSON array as just its length, discarding the elements — the
-/// dashboard signal needs the `comments` *count*, not the bodies gh streams.
-fn count_json_array<'de, D>(deserializer: D) -> Result<u32, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let items = Vec::<serde::de::IgnoredAny>::deserialize(deserializer)?;
-    Ok(items.len() as u32)
+/// One pull request at *state* detail — the cheap tier. Enough to hide an
+/// archived branch ([`crate::status::is_archived`]) and to keep the branch
+/// menu's "Open #N on GitHub" working, and deliberately nothing more: a
+/// separate type from [`GhPullRequest`] so a field we never fetched cannot be
+/// mistaken for one that came back empty.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhPrState {
+    pub number: u32,
+    /// gh's uppercase PR state: `"OPEN"`, `"CLOSED"`, or `"MERGED"`.
+    pub state: String,
+    /// The join key against local branches.
+    pub head_ref_name: String,
+    pub url: String,
 }
 
 /// Page size for [`GitHub::list_repo_prs`]. gh defaults to 30; we raise it so a
@@ -464,11 +465,15 @@ impl GitHub {
         check_git(&out, "git checkout")
     }
 
-    /// List the repo's PRs for the dashboard (DB-1 #84 / DB-3 #86, ADR-0022 §6).
-    /// `repo` is the `owner/name` slug; `filter` picks authored vs.
-    /// review-requested. `--state all` is deliberate: the archived view-filter
-    /// (DB-5 #88) is a *computed* dashboard concern, so this returns open **and**
-    /// closed/merged PRs and the caller hides them — state is never stored.
+    /// List the repo's **open** PRs at full detail (DB-1 #84 / DB-3 #86,
+    /// ADR-0022 §6) — the tier the overview actually paints. `repo` is the
+    /// `owner/name` slug; `filter` picks authored vs. review-requested.
+    ///
+    /// Pair this with [`GitHub::list_repo_pr_states`]: `--state open` here keeps
+    /// the expensive field set off the archived majority, and the cheap
+    /// state-only call still tells the caller which branches are done. The
+    /// archived view-filter (DB-5 #88) stays a *computed* concern either way —
+    /// state is never stored.
     ///
     /// Fail loud through [`GitHub::run_gh_json`]: a missing/unauthenticated `gh`,
     /// a non-zero `gh` exit (its stderr verbatim), or unparseable JSON all
@@ -479,12 +484,48 @@ impl GitHub {
         filter: PrFilter,
     ) -> Result<Vec<GhPullRequest>, StageError> {
         // Field set drives the JSON shape of [`GhPullRequest`]; keep them in sync.
-        const FIELDS: &str = "number,title,state,url,headRefName,baseRefName,\
-isDraft,additions,deletions,reviewDecision,author,comments,updatedAt";
+        //
+        // **Never add `comments` here.** `gh` expands that one word into a
+        // nested `comments(first: 100){nodes{body,reactionGroups{…},…}}`
+        // connection, so a 100-PR page resolves up to 10k comment nodes with
+        // full bodies. Measured on a 1000-PR repo it alone cost 5s and 300KB
+        // per call — and the overview renders no comment count at all.
+        const DETAIL_FIELDS: &str = "number,title,state,url,headRefName,baseRefName,\
+additions,deletions,reviewDecision,author,updatedAt";
+        self.list_prs_tier(repo, filter, "open", DETAIL_FIELDS)
+    }
+
+    /// List **every** PR's state, at the cheap tier — enough for the caller to
+    /// hide an archived branch (DB-5 #88) without paying detail for PRs no row
+    /// ever paints. Same fail-loud contract as [`GitHub::list_repo_prs`].
+    pub fn list_repo_pr_states(
+        &self,
+        repo: &str,
+        filter: PrFilter,
+    ) -> Result<Vec<GhPrState>, StageError> {
+        // Keep in sync with [`GhPrState`]. `url` rides along because the branch
+        // menu's "Open #N on GitHub" needs it for a merged PR's branch.
+        // `title`/`author` deliberately do not: they feed only the search
+        // filter, which can match visible rows, and every row that comes from
+        // this tier alone is archived and therefore hidden.
+        const STATE_FIELDS: &str = "number,state,headRefName,url";
+        self.list_prs_tier(repo, filter, "all", STATE_FIELDS)
+    }
+
+    /// Shared body of the two PR-list tiers: same `gh pr list` shape, same
+    /// filter handling, same loud over-limit warning — only `--state` and the
+    /// `--json` field set differ.
+    fn list_prs_tier<T: DeserializeOwned>(
+        &self,
+        repo: &str,
+        filter: PrFilter,
+        state: &str,
+        fields: &str,
+    ) -> Result<Vec<T>, StageError> {
         // `--limit` wants a &str; PR_LIST_LIMIT is the matching numeric guard.
         const LIMIT_ARG: &str = "200";
         let mut args: Vec<&str> = vec![
-            "pr", "list", "--repo", repo, "--state", "all", "--limit", LIMIT_ARG, "--json", FIELDS,
+            "pr", "list", "--repo", repo, "--state", state, "--limit", LIMIT_ARG, "--json", fields,
         ];
         match filter {
             PrFilter::Authored => args.extend_from_slice(&["--author", "@me"]),
@@ -492,10 +533,11 @@ isDraft,additions,deletions,reviewDecision,author,comments,updatedAt";
                 args.extend_from_slice(&["--search", "review-requested:@me"])
             }
         }
-        let prs: Vec<GhPullRequest> = self.run_gh_json(&args, None)?;
+        let prs: Vec<T> = self.run_gh_json(&args, None)?;
         if prs.len() >= PR_LIST_LIMIT {
             tracing::warn!(
                 repo = %repo,
+                state = %state,
                 limit = PR_LIST_LIMIT,
                 "pr_list_hit_limit: the dashboard may be missing older PRs for this repo"
             );
@@ -925,16 +967,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // The fake gh dispatches on the args: a `review-requested:@me` search
         // returns the reviewer fixture, anything else the authored fixture.
-        // `comments` is the full array gh streams — we keep only its length;
         // `author` carries gh's extra fields (node id, is_bot) which we ignore.
         let body = "#!/usr/bin/env bash\n\
              if [ \"$1\" = auth ] && [ \"$2\" = status ]; then exit 0; fi\n\
              case \"$*\" in\n\
                *review-requested*)\n\
-                 echo '[{\"number\":7,\"title\":\"Their PR\",\"state\":\"OPEN\",\"url\":\"https://gh/7\",\"headRefName\":\"feat/their\",\"baseRefName\":\"main\",\"isDraft\":false,\"additions\":3,\"deletions\":1,\"reviewDecision\":\"REVIEW_REQUIRED\",\"author\":{\"login\":\"them\",\"id\":\"NID\",\"is_bot\":false},\"comments\":[{},{}]}]'\n\
+                 echo '[{\"number\":7,\"title\":\"Their PR\",\"state\":\"OPEN\",\"url\":\"https://gh/7\",\"headRefName\":\"feat/their\",\"baseRefName\":\"main\",\"additions\":3,\"deletions\":1,\"reviewDecision\":\"REVIEW_REQUIRED\",\"author\":{\"login\":\"them\",\"id\":\"NID\",\"is_bot\":false}}]'\n\
                  ;;\n\
                *)\n\
-                 echo '[{\"number\":5,\"title\":\"My PR\",\"state\":\"MERGED\",\"url\":\"https://gh/5\",\"headRefName\":\"feat/mine\",\"baseRefName\":\"main\",\"isDraft\":false,\"additions\":10,\"deletions\":2,\"reviewDecision\":\"\",\"author\":{\"login\":\"me\",\"id\":\"NID\",\"is_bot\":false},\"comments\":[]}]'\n\
+                 echo '[{\"number\":5,\"title\":\"My PR\",\"state\":\"OPEN\",\"url\":\"https://gh/5\",\"headRefName\":\"feat/mine\",\"baseRefName\":\"main\",\"additions\":10,\"deletions\":2,\"reviewDecision\":\"\",\"author\":{\"login\":\"me\",\"id\":\"NID\",\"is_bot\":false}}]'\n\
                  ;;\n\
              esac\n\
              exit 0\n";
@@ -944,12 +985,10 @@ mod tests {
         let mine = gh.list_repo_prs("o/r", PrFilter::Authored).unwrap();
         assert_eq!(mine.len(), 1);
         assert_eq!(mine[0].number, 5);
-        assert_eq!(mine[0].state, "MERGED");
+        assert_eq!(mine[0].state, "OPEN");
         assert_eq!(mine[0].author.login, "me");
         assert_eq!(mine[0].additions, 10);
         assert_eq!(mine[0].deletions, 2);
-        // Empty comments array → count 0.
-        assert_eq!(mine[0].comments, 0);
         assert_eq!(mine[0].review_decision, "");
 
         let theirs = gh.list_repo_prs("o/r", PrFilter::ReviewRequested).unwrap();
@@ -958,7 +997,75 @@ mod tests {
         assert_eq!(theirs[0].state, "OPEN");
         assert_eq!(theirs[0].review_decision, "REVIEW_REQUIRED");
         assert_eq!(theirs[0].author.login, "them");
-        // Two-element comments array → count 2 (the bodies are discarded).
-        assert_eq!(theirs[0].comments, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_repo_pr_states_parses_the_cheap_tier() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "#!/usr/bin/env bash\n\
+             if [ \"$1\" = auth ] && [ \"$2\" = status ]; then exit 0; fi\n\
+             echo '[{\"number\":9,\"state\":\"MERGED\",\"headRefName\":\"feat/old\",\"url\":\"https://gh/9\"}]'\n\
+             exit 0\n";
+        let fake = write_script(dir.path(), "gh", body);
+        let gh = GitHub::with_bins(fake, "git");
+
+        let states = gh.list_repo_pr_states("o/r", PrFilter::Authored).unwrap();
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].number, 9);
+        assert_eq!(states[0].state, "MERGED");
+        assert_eq!(states[0].head_ref_name, "feat/old");
+        assert_eq!(states[0].url, "https://gh/9");
+    }
+
+    /// The two tiers exist purely to keep the expensive field set off the
+    /// archived majority, so the *query shape* is the thing worth pinning: a
+    /// `comments` re-added to the detail tier silently restores a 100-comments-
+    /// per-PR nested connection (and the 502s that came with it).
+    #[cfg(unix)]
+    #[test]
+    fn pr_list_tiers_query_only_what_they_render() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("args.log");
+        let body = format!(
+            "#!/usr/bin/env bash\n\
+             if [ \"$1\" = auth ] && [ \"$2\" = status ]; then exit 0; fi\n\
+             printf '%s\\n' \"$*\" >> {log}\n\
+             echo '[]'\n\
+             exit 0\n",
+            log = log.display()
+        );
+        let fake = write_script(dir.path(), "gh", &body);
+        let gh = GitHub::with_bins(fake, "git");
+
+        gh.list_repo_prs("o/r", PrFilter::Authored).unwrap();
+        gh.list_repo_pr_states("o/r", PrFilter::Authored).unwrap();
+
+        let logged = std::fs::read_to_string(&log).unwrap();
+        let mut lines = logged.lines();
+        let detail = lines.next().expect("detail tier ran");
+        let state = lines.next().expect("state tier ran");
+
+        // Detail tier: open PRs only, and never the comment bodies.
+        assert!(detail.contains("--state open"), "detail tier: {detail}");
+        assert!(
+            !detail.contains("comments"),
+            "detail tier must not request `comments` — it expands to a \
+             100-comments-per-PR nested connection: {detail}"
+        );
+        assert!(!detail.contains("isDraft"), "detail tier: {detail}");
+        assert!(
+            detail.contains("additions,deletions"),
+            "detail tier: {detail}"
+        );
+
+        // State tier: every state, but only the join key and PR identity.
+        assert!(state.contains("--state all"), "state tier: {state}");
+        assert!(
+            state.contains("number,state,headRefName,url"),
+            "state tier: {state}"
+        );
+        assert!(!state.contains("additions"), "state tier: {state}");
+        assert!(!state.contains("comments"), "state tier: {state}");
     }
 }
