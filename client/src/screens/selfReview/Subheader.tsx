@@ -6,10 +6,10 @@ import { relativeTimeFromEpoch } from '../../time';
 /**
  * Top bar of the review shell's Self-Review mode.
  *
- * v6-light L7 (flag F4; §3b M4–M6/M8): the committed-vs-base diff is always
- * the reviewable unit, and "+ Uncommitted" folds the working tree in as a
- * separate section — greyed out when there is nothing to fold in. The
- * composer's single entry point is the Overview's "New review" button (M4),
+ * v6-light L7 (§3b M4–M6/M8): the committed-vs-base diff is the reviewable
+ * unit, and "+ Uncommitted" widens it to include the working tree — one merged
+ * diff, not a second section (ADR-0030) — greyed out when there is nothing to
+ * fold in. The composer's single entry point is the Overview's "New review" button (M4),
  * and "Mark reviewed" is gone (M5, F3 rescinded). Since L9 (§3c N3) the
  * general-notes popover mounts here via `notesControl`.
  */
@@ -36,21 +36,21 @@ export function Subheader({
   notesControl,
 }: {
   branch: string;
-  /** Committed-section stats (the reviewable unit). */
+  /** Stats for the diff on screen, in the current scope. */
   fileCount: number;
   added: number;
   removed: number;
   /** True once the committed diff has resolved (gates the action buttons). */
   ready: boolean;
   defaultBranch: string | null;
-  /** The author-chosen base ref the committed diff compares against. */
+  /** The author-chosen base ref the diff compares against. */
   baseRef: string | null;
   /** Resolved base options (recommended ref, behind-count, last fetch). */
   baseOptions: BaseOptions | null;
   /** Local branches backing the base picker. */
   branches: BranchInfo[];
   viewedCount: number;
-  /** Whether the working tree folds in as a separate section (flag F4). */
+  /** Whether the working tree is folded into the diff (ADR-0030). */
   includeUncommitted: boolean;
   /** Workdir-diff file count for the toggle badge; null until known. */
   uncommittedCount: number | null;
@@ -134,7 +134,7 @@ export function Subheader({
         />
       </div>
 
-      {/* "+ Uncommitted" — fold the working tree in as a separate section.
+      {/* "+ Uncommitted" — widen the diff to the working tree (ADR-0030).
           Greyed out (M6) when there is no working tree / nothing uncommitted. */}
       <button
         type="button"
@@ -143,12 +143,12 @@ export function Subheader({
         disabled={uncommittedInert}
         title={
           includeUncommitted
-            ? 'Hide the working-tree section'
+            ? 'Review the committed diff only'
             : uncommittedCount === null
               ? 'No working tree for this branch'
               : uncommittedCount === 0
                 ? 'Nothing uncommitted in the working tree'
-                : 'Show uncommitted changes as a separate section'
+                : 'Fold uncommitted changes into the diff'
         }
         style={
           includeUncommitted

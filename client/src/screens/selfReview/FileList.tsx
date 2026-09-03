@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import { CollapsibleRail, RailStripStat } from '../../components/CollapsibleRail';
 import { Icon } from '../../components/Icon';
-import type { NoteAnchor, SelfReviewFileChange } from '../../tauri';
+import type { SelfReviewFileChange } from '../../tauri';
 
 const STATUS_BADGE: Record<SelfReviewFileChange['status'], { ch: string; color: string }> = {
   added: { ch: 'A', color: 'var(--green-d)' },
@@ -9,17 +9,6 @@ const STATUS_BADGE: Record<SelfReviewFileChange['status'], { ch: string; color: 
   deleted: { ch: 'D', color: 'var(--red-d)' },
   renamed: { ch: 'R', color: 'var(--purple)' },
 };
-
-/** Section-qualified row id: the committed and uncommitted sections can hold
- *  the same path, so selection/scroll targets carry their section. */
-export const committedId = (path: string) => `c:${path}`;
-export const uncommittedId = (path: string) => `u:${path}`;
-
-/** The same id for a note's anchor, so a note lands in the section it was
- *  written in — the two sections render one path at different line numbers, so
- *  the path alone would put an uncommitted note on the committed block too. */
-export const anchorId = (a: Pick<NoteAnchor, 'file' | 'uncommitted'>) =>
-  a.uncommitted ? uncommittedId(a.file) : committedId(a.file);
 
 /** A Debrief chapter's presence in the file list: title + the paths it
  *  narrates, in chapter order (title only — the intro lives in the center
@@ -34,18 +23,18 @@ export type FileListChapter = { title: string; files: string[] };
  * unrelated files whose diff happens to contain it.
  *
  * Rendered inside the shared `CollapsibleRail` (M2). When a Debrief exists,
- * committed files group under **chapter title headers** (L9 §3c N1) with a
- * trailing "Other files" group for unnarrated ones; no Debrief → one flat
- * group. Within each group, viewed files compact into dim struck-through
- * rows at the group's bottom (design `V6_FileList`, per-group since L9).
- * While a filter query is active, only groups containing matches render.
- * The uncommitted section (flag F4) follows separately — no viewed
- * checkboxes (working-tree edits are too volatile to meaningfully
- * "mark seen"), but it does carry note counts: notes are welcome there.
+ * files group under **chapter title headers** (L9 §3c N1) with a trailing
+ * "Other files" group for unnarrated ones; no Debrief → one flat group.
+ * Within each group, viewed files compact into dim struck-through rows at the
+ * group's bottom (design `V6_FileList`, per-group since L9). While a filter
+ * query is active, only groups containing matches render.
+ *
+ * There is exactly **one list**: folding the working tree in widens the diff
+ * the parent hands down, it doesn't append a second section (ADR-0030), so a
+ * file the author committed to and has since edited appears once.
  */
 export function FileList({
   files,
-  uncommittedFiles,
   chapters,
   filter,
   setFilter,
@@ -60,22 +49,20 @@ export function FileList({
   collapsed,
   onToggleCollapsed,
 }: {
-  /** The committed section's files. */
+  /** Every file in the reviewable diff, in presentation order. */
   files: SelfReviewFileChange[];
-  /** The uncommitted section's files; null/empty when the section is off. */
-  uncommittedFiles: SelfReviewFileChange[] | null;
   /** The Debrief's chapters (title + narrated paths); empty when no Debrief. */
   chapters: FileListChapter[];
   filter: string;
   setFilter: (s: string) => void;
   filterRef: React.RefObject<HTMLInputElement | null>;
-  /** Section-qualified id (see `committedId`/`uncommittedId`). */
+  /** Path of the selected file. */
   selectedId: string | null;
-  onSelect: (id: string) => void;
+  onSelect: (path: string) => void;
   viewed: Set<string>;
   onToggleViewed: (path: string) => void;
   onClearViewed: () => void;
-  /** Anchored-note count per **section-qualified** id (see `anchorId`). */
+  /** Anchored-note count per file path. */
   noteCounts: Map<string, number>;
   /** Author-resizable column width (px); see `useColumnWidth`. */
   width: number;
@@ -87,9 +74,8 @@ export function FileList({
   const match = (f: SelfReviewFileChange) => !q || f.path.toLowerCase().includes(q);
 
   const filtered = files.filter(match);
-  const filteredUncommitted = (uncommittedFiles ?? []).filter(match);
 
-  // Group the (already filtered) committed files under their chapter titles,
+  // Group the (already filtered) files under their chapter titles,
   // in chapter order; unnarrated files trail under "Other files". A file
   // claimed by an earlier chapter isn't repeated by a later one. Groups
   // emptied by the filter drop out entirely (header included).
@@ -114,7 +100,7 @@ export function FileList({
     }
   }
 
-  const empty = filtered.length === 0 && filteredUncommitted.length === 0;
+  const empty = filtered.length === 0;
 
   return (
     <CollapsibleRail
@@ -160,9 +146,7 @@ export function FileList({
               color: 'var(--gray-500)',
             }}
           >
-            {files.length === 0 && (uncommittedFiles?.length ?? 0) === 0
-              ? 'No changes.'
-              : 'No files match the filter.'}
+            {files.length === 0 ? 'No changes.' : 'No files match the filter.'}
           </div>
         )}
         {groups.map((g, gi) => {
@@ -189,10 +173,10 @@ export function FileList({
                 <FileRow
                   key={f.path}
                   file={f}
-                  active={committedId(f.path) === selectedId}
+                  active={f.path === selectedId}
                   isViewed={false}
-                  noteCount={noteCounts.get(committedId(f.path)) ?? 0}
-                  onSelect={() => onSelect(committedId(f.path))}
+                  noteCount={noteCounts.get(f.path) ?? 0}
+                  onSelect={() => onSelect(f.path)}
                   onToggleViewed={() => onToggleViewed(f.path)}
                 />
               ))}
@@ -203,44 +187,15 @@ export function FileList({
                 <SeenRow
                   key={f.path}
                   file={f}
-                  active={committedId(f.path) === selectedId}
-                  noteCount={noteCounts.get(committedId(f.path)) ?? 0}
-                  onSelect={() => onSelect(committedId(f.path))}
+                  active={f.path === selectedId}
+                  noteCount={noteCounts.get(f.path) ?? 0}
+                  onSelect={() => onSelect(f.path)}
                   onToggleViewed={() => onToggleViewed(f.path)}
                 />
               ))}
             </Fragment>
           );
         })}
-
-        {/* Uncommitted — the separate working-tree section (flag F4). */}
-        {uncommittedFiles !== null && (
-          <>
-            <div
-              className="section-label"
-              style={{ padding: '12px 8px 4px', color: 'var(--orange)' }}
-            >
-              Uncommitted · {filteredUncommitted.length}
-            </div>
-            {filteredUncommitted.length === 0 && (
-              <div style={{ padding: '2px 12px 8px', fontSize: 11, color: 'var(--gray-500)' }}>
-                Working tree is clean.
-              </div>
-            )}
-            {filteredUncommitted.map((f) => (
-              <FileRow
-                key={f.path}
-                file={f}
-                active={uncommittedId(f.path) === selectedId}
-                isViewed={false}
-                hideViewed
-                noteCount={noteCounts.get(uncommittedId(f.path)) ?? 0}
-                onSelect={() => onSelect(uncommittedId(f.path))}
-                onToggleViewed={() => {}}
-              />
-            ))}
-          </>
-        )}
       </div>
       {viewed.size > 0 && (
         <div
@@ -339,7 +294,6 @@ function FileRow({
   file,
   active,
   isViewed,
-  hideViewed,
   noteCount,
   onSelect,
   onToggleViewed,
@@ -347,8 +301,6 @@ function FileRow({
   file: SelfReviewFileChange;
   active: boolean;
   isViewed: boolean;
-  /** Uncommitted-section rows carry no viewed checkbox (flag F4). */
-  hideViewed?: boolean;
   noteCount: number;
   onSelect: () => void;
   onToggleViewed: () => void;
@@ -442,7 +394,7 @@ function FileRow({
           <span style={{ color: active ? '#7a3530' : 'var(--red-d)' }}>−{file.deletions}</span>
         )}
       </span>
-      {!hideViewed && <ViewedCheckbox isViewed={isViewed} onToggle={onToggleViewed} />}
+      <ViewedCheckbox isViewed={isViewed} onToggle={onToggleViewed} />
     </button>
   );
 }

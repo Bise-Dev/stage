@@ -7,7 +7,7 @@ import {
   type ViewLayout,
   type ViewMode,
 } from '../selfReview/DiffPane';
-import { FileList, anchorId, committedId, uncommittedId } from '../selfReview/FileList';
+import { FileList } from '../selfReview/FileList';
 import { NotesPopover } from '../selfReview/NotesPopover';
 import { Subheader } from '../selfReview/Subheader';
 import { ResizeHandle, useColumnWidth } from '../selfReview/columnResize';
@@ -15,7 +15,7 @@ import { notesToMarkdown } from '../selfReview/markdown';
 import { clearViewed, loadViewed, setViewed } from '../selfReview/viewedMarks';
 import { ChapterBanner, type ChapterBannerData } from './ChapterBanner';
 import type { ShellModeBodyProps } from './modes';
-import { useSectionedDiff } from './useSectionedDiff';
+import { useReviewDiff } from './useReviewDiff';
 
 /**
  * Self-Review mode of the review shell — the one review surface (v6-light L7):
@@ -28,9 +28,11 @@ import { useSectionedDiff } from './useSectionedDiff';
  * Debrief whose recorded head the branch has moved past is called out in a
  * warning banner, since its chapters narrate a diff that no longer holds.
  *
- * Scope model (flag F4): the committed diff (`merge_base(base, HEAD) → HEAD`)
- * is the reviewable unit; "+ Uncommitted" folds the working tree in as a
- * separate section.
+ * Scope model (ADR-0030): "+ Uncommitted" is a **scope switch**, not a second
+ * section. Off, the reviewable diff is the committed one
+ * (`merge_base(base, HEAD) → HEAD`); on, it widens to
+ * `merge_base(base, HEAD) → working tree`, so a file with both committed and
+ * uncommitted work shows up once, with all of it in a single patch.
  */
 const LAYOUT_KEY = 'selfReview:viewLayout';
 const VIEWMODE_KEY = 'selfReview:viewMode';
@@ -72,14 +74,14 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
   );
 
   const {
-    committed,
-    workdir,
+    diff,
+    currentBranch,
     includeUncommitted,
     setIncludeUncommitted,
     uncommittedCount,
     loading,
     error,
-  } = useSectionedDiff(repoPath, baseRef);
+  } = useReviewDiff(repoPath, baseRef);
 
   const {
     debrief,
@@ -119,11 +121,11 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
     [debrief],
   );
 
-  // The committed section's ordered file list (see the pre-shell SelfReview
-  // for the full rationale): Debrief chapters order the files they narrate,
-  // everything else keeps the diff's path order below them.
+  // The ordered file list (see the pre-shell SelfReview for the full
+  // rationale): Debrief chapters order the files they narrate, everything else
+  // keeps the diff's path order below them.
   const orderedFiles = useMemo(() => {
-    const files = committed?.files ?? [];
+    const files = diff?.files ?? [];
     if (debriefPaths.size === 0) return files;
     const orderOf = new Map(debriefFileOrder.map((file, i) => [file, i]));
     return [...files].sort((a, b) => {
@@ -134,13 +136,13 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
       if (bi !== undefined) return 1;
       return 0;
     });
-  }, [committed, debriefFileOrder, debriefPaths]);
+  }, [diff, debriefFileOrder, debriefPaths]);
 
   // The Debrief's inline presence (§3b M1): a collapsed chapter banner above
-  // the chapter's FIRST file present in the committed diff.
+  // the chapter's FIRST file present in the diff.
   const chapterBanners = useMemo(() => {
     const m = new Map<string, ChapterBannerData>();
-    const inDiff = new Set((committed?.files ?? []).map((f) => f.path));
+    const inDiff = new Set((diff?.files ?? []).map((f) => f.path));
     (debrief?.chapters ?? []).forEach((ch, i) => {
       const first = ch.files.find((f) => inDiff.has(f));
       if (first && !m.has(first)) {
@@ -153,7 +155,7 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
       }
     });
     return m;
-  }, [debrief, committed]);
+  }, [debrief, diff]);
   const renderBefore = useCallback(
     (path: string) => {
       const ch = chapterBanners.get(path);
@@ -162,8 +164,7 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
     [chapterBanners],
   );
 
-  const currentBranch = workdir?.currentBranch ?? null;
-  const headSha = committed?.headSha ?? null;
+  const headSha = diff?.headSha ?? null;
 
   // Mark-viewed state, engine-backed per (repo, branch) and content-anchored
   // (F2b): reload on branch/head changes so only currently-valid marks show.
@@ -251,58 +252,41 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
   // open` re-pin rationale).
   const userPickedRef = useRef(false);
   useEffect(() => {
-    if (!committed) return;
-    const head = orderedFiles[0] ? committedId(orderedFiles[0].path) : null;
-    const validIds = new Set([
-      ...orderedFiles.map((f) => committedId(f.path)),
-      ...(includeUncommitted ? (workdir?.files ?? []).map((f) => `u:${f.path}`) : []),
-    ]);
-    const valid = selectedId !== null && validIds.has(selectedId);
+    if (!diff) return;
+    const head = orderedFiles[0]?.path ?? null;
+    const valid = selectedId !== null && orderedFiles.some((f) => f.path === selectedId);
     if (!valid) {
       setSelectedId(head);
     } else if (!userPickedRef.current && selectedId !== head) {
       setSelectedId(head);
     }
-  }, [committed, orderedFiles, selectedId, includeUncommitted, workdir]);
+  }, [diff, orderedFiles, selectedId]);
 
   const onSelectId = useCallback(
-    (id: string) => {
+    (path: string) => {
       userPickedRef.current = true;
-      setSelectedId(id);
+      setSelectedId(path);
       if (viewLayout === 'scroll') {
-        diffPaneRef.current?.scrollFileIntoView(id);
+        diffPaneRef.current?.scrollFileIntoView(path);
       }
     },
     [viewLayout],
   );
 
-  // The uncommitted section's files, or null when the section is toggled off
-  // (the sidebar and the diff pane both read `null` as "no section").
-  const selectedUncommittedFiles = includeUncommitted ? (workdir?.files ?? []) : null;
-
-  // Per-file note counts for the sidebar badge — anchored notes only, keyed by
-  // section-qualified id so a note left on an uncommitted edit counts on that
-  // row and not on the committed row for the same path.
+  // Per-file note counts for the sidebar badge — anchored notes only.
   const noteCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const n of notes) {
       if (!n.anchor) continue;
-      const id = anchorId(n.anchor);
-      m.set(id, (m.get(id) ?? 0) + 1);
+      m.set(n.anchor.file, (m.get(n.anchor.file) ?? 0) + 1);
     }
     return m;
   }, [notes]);
 
   const onCopy = useCallback(async () => {
-    if (!committed || !currentBranch) return;
+    if (!diff || !currentBranch) return;
     try {
-      const md = notesToMarkdown(
-        currentBranch,
-        committed.baseRef,
-        committed.files,
-        selectedUncommittedFiles ?? [],
-        notes,
-      );
+      const md = notesToMarkdown(currentBranch, diff.baseRef, diff.files, notes);
       await navigator.clipboard.writeText(md);
       setCopyState('copied');
       setTimeout(() => setCopyState('idle'), 1500);
@@ -311,26 +295,22 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
       setCopyState('error');
       setTimeout(() => setCopyState('idle'), 2000);
     }
-  }, [committed, currentBranch, notes, selectedUncommittedFiles]);
+  }, [diff, currentBranch, notes]);
 
   // Anchored notes with no block on screen have no inline home — the notes
-  // popover surfaces them (L9 §3c N2). "On screen" is per *section*: a file
-  // that left the committed diff, and every uncommitted-section note while the
-  // section is toggled off (its blocks aren't rendered at all).
-  const visibleAnchors = useMemo(() => {
-    const ids = new Set((committed?.files ?? []).map((f) => committedId(f.path)));
-    for (const f of selectedUncommittedFiles ?? []) ids.add(uncommittedId(f.path));
-    return ids;
-  }, [committed, selectedUncommittedFiles]);
+  // popover surfaces them (L9 §3c N2). "On screen" means "in the current
+  // scope": a note on a file that has left the diff, or on a working-tree-only
+  // file while "+ Uncommitted" is off.
+  const visibleAnchors = useMemo(() => new Set((diff?.files ?? []).map((f) => f.path)), [diff]);
 
   return (
     <>
       <Subheader
         branch={currentBranch ?? '…'}
-        fileCount={committed?.stats.filesChanged ?? 0}
-        added={committed?.stats.added ?? 0}
-        removed={committed?.stats.removed ?? 0}
-        ready={committed !== null}
+        fileCount={diff?.stats.filesChanged ?? 0}
+        added={diff?.stats.added ?? 0}
+        removed={diff?.stats.removed ?? 0}
+        ready={diff !== null}
         defaultBranch={defaultBranch}
         baseRef={baseRef}
         baseOptions={baseOptions}
@@ -379,7 +359,7 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
       )}
 
       {/* Committed-only scope + a dirty tree: say what the review does NOT
-          cover (flag F4's warning banner). */}
+          cover (ADR-0030). */}
       {!includeUncommitted && (uncommittedCount ?? 0) > 0 && (
         <div style={warnBanner}>
           {uncommittedCount} uncommitted file{uncommittedCount === 1 ? ' is' : 's are'} not part of
@@ -395,7 +375,6 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <FileList
           files={orderedFiles}
-          uncommittedFiles={selectedUncommittedFiles}
           chapters={fileListChapters}
           filter={filter}
           setFilter={setFilter}
@@ -475,7 +454,6 @@ export function SelfReviewMode({ shell, debriefState, onExit }: ShellModeBodyPro
           <DiffPane
             ref={diffPaneRef}
             files={orderedFiles}
-            uncommittedFiles={selectedUncommittedFiles}
             viewLayout={viewLayout}
             selectedId={selectedId}
             viewMode={viewMode}

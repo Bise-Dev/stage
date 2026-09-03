@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../../components/Icon';
 import type { DebriefView, NoteAnchor, SelfReviewNoteView } from '../../tauri';
 import { Composer } from './Composer';
-import { anchorId } from './FileList';
 import { Thread } from './Thread';
 
 /**
@@ -38,10 +37,9 @@ export function NotesPopover({
 }: NoteOps & {
   debrief: DebriefView | null;
   notes: SelfReviewNoteView[];
-  /** Section-qualified ids (see `anchorId`) with a file block on screen right
-   *  now — the committed diff's files, plus the uncommitted section's while it
-   *  is toggled on. Anchored notes on anything else are invisible inline, so
-   *  they surface here (never silently orphaned). */
+  /** Paths with a file block on screen right now — the files of the diff in
+   *  the current scope. Anchored notes on anything else are invisible inline,
+   *  so they surface here (never silently orphaned). */
   visibleAnchors: Set<string>;
 }) {
   const [open, setOpen] = useState(false);
@@ -49,16 +47,14 @@ export function NotesPopover({
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const general = useMemo(() => notes.filter((n) => n.anchor === null), [notes]);
-  // Label → its orphaned notes (anchored, but no block on screen shows them).
-  // The label carries the section so two same-path orphans stay distinct.
+  // File path → its orphaned notes (anchored, but no block on screen shows them).
   const orphansByFile = useMemo(() => {
     const m = new Map<string, SelfReviewNoteView[]>();
     for (const n of notes) {
-      if (!n.anchor || visibleAnchors.has(anchorId(n.anchor))) continue;
-      const label = n.anchor.uncommitted ? `${n.anchor.file} · uncommitted` : n.anchor.file;
-      const arr = m.get(label) ?? [];
+      if (!n.anchor || visibleAnchors.has(n.anchor.file)) continue;
+      const arr = m.get(n.anchor.file) ?? [];
       arr.push(n);
-      m.set(label, arr);
+      m.set(n.anchor.file, arr);
     }
     return m;
   }, [notes, visibleAnchors]);
@@ -198,8 +194,8 @@ export function NotesPopover({
                   Other notes
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--gray-500)', marginBottom: 6 }}>
-                  Anchored to files with nothing on screen — gone from the diff, or left in the
-                  uncommitted section while it is folded away.
+                  Anchored to files with nothing on screen — gone from the diff, or changed only in
+                  the working tree while “+ Uncommitted” is off.
                 </div>
                 {[...orphansByFile.entries()].map(([file, fileNotes]) => (
                   <div key={file} style={{ marginBottom: 8 }}>
