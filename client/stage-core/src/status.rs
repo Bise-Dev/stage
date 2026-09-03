@@ -48,24 +48,36 @@ pub enum ReviewRole {
     Reviewer,
 }
 
-/// The at-a-glance signal for a row (DB-2 #85): diff size + comment volume.
+/// The at-a-glance signal for a row (DB-2 #85): diff size.
+///
+/// Carried a `comments` count until the overview's PR query stopped fetching
+/// comment bodies to derive it. Nothing rendered the count, and a field pinned
+/// at `0` would be indistinguishable from a real one (CLAUDE.md: no value that
+/// implies data we don't have) — so it is absent rather than always-zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ReviewSignal {
     pub added: u32,
     pub removed: u32,
-    pub comments: u32,
 }
 
 /// Derive a PR's status (WS-5) from gh's `state` + `reviewDecision`. Merged/closed
 /// win over any review decision; an open PR reflects its decision, else `Open`.
 pub(crate) fn status_from_pr(pr: &GhPullRequest) -> ReviewStatus {
-    match pr.state.as_str() {
+    status_from_state(&pr.state, &pr.review_decision)
+}
+
+/// [`status_from_pr`] over the raw pair, for the cheap PR tier
+/// ([`crate::github::GhPrState`]) which carries `state` without a review
+/// decision. Merged/closed ignore the decision anyway, and that tier only ever
+/// supplies the archived remainder.
+pub(crate) fn status_from_state(state: &str, review_decision: &str) -> ReviewStatus {
+    match state {
         "MERGED" => ReviewStatus::Merged,
         "CLOSED" => ReviewStatus::Closed,
         // "OPEN" (and any unexpected state): reflect the review decision.
-        _ => match pr.review_decision.as_str() {
+        _ => match review_decision {
             "APPROVED" => ReviewStatus::Approved,
             "CHANGES_REQUESTED" => ReviewStatus::ChangesRequested,
             // "" (none) or "REVIEW_REQUIRED": open, awaiting a verdict.
@@ -92,12 +104,10 @@ mod tests {
             url: "u".into(),
             head_ref_name: "b".into(),
             base_ref_name: "main".into(),
-            is_draft: false,
             additions: 0,
             deletions: 0,
             review_decision: decision.into(),
             author: crate::github::GhAuthor { login: "me".into() },
-            comments: 0,
             updated_at: String::new(),
         };
         assert_eq!(status_from_pr(&mk("MERGED", "")), ReviewStatus::Merged);

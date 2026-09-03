@@ -35,8 +35,9 @@ status: ReviewStatus | null,
  */
 role: ReviewRole, 
 /**
- * ± lines (+ comments). `None` when there is no comparable base (e.g. the
- * default branch itself, or no merge base) — absent, not `0/0`.
+ * ± lines. `None` when there is no comparable base (e.g. the default
+ * branch itself, or no merge base), or when only the cheap PR tier was
+ * fetched for this row — absent, not `0/0`.
  */
 signal: ReviewSignal | null, 
 /**

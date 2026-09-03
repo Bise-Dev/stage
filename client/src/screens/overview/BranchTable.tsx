@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { Icon } from '../../components/Icon';
 import { isMaterialized } from '../../lib/worktree';
 import { type AgentSession, type OverviewRow, type ReviewStatus, openUrl } from '../../tauri';
@@ -56,7 +56,17 @@ const CELL: CSSProperties = {
   height: 40,
 };
 
-function Head({ label, right }: { label: string; right?: boolean }) {
+function Head({
+  label,
+  right,
+  trailing,
+}: {
+  label: string;
+  right?: boolean;
+  /** Rendered just after the label — for a live indicator on the column whose
+   *  data is still arriving. Inline-flex so it can't change the row height. */
+  trailing?: ReactNode;
+}) {
   return (
     <th
       style={{
@@ -69,7 +79,21 @@ function Head({ label, right }: { label: string; right?: boolean }) {
         color: 'var(--gray-400)',
       }}
     >
-      {label}
+      {trailing ? (
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            justifyContent: right ? 'flex-end' : 'flex-start',
+          }}
+        >
+          {label}
+          {trailing}
+        </span>
+      ) : (
+        label
+      )}
     </th>
   );
 }
@@ -79,6 +103,7 @@ export function BranchTable({
   defaultBase,
   actions,
   agentSessions,
+  githubPolling,
 }: {
   rows: OverviewRow[];
   defaultBase: string | null;
@@ -86,6 +111,9 @@ export function BranchTable({
   /** Live Claude Code sessions keyed by branch (opt-in; absent = feature off
    *  or nothing running). Probed by Rust — the table only looks its row up. */
   agentSessions?: ReadonlyMap<string, AgentSession>;
+  /** A `gh` poll is in flight, so this column's cells are still the previous
+   *  answer (or `—` on the first load). Spins a wheel beside the header. */
+  githubPolling?: boolean;
 }) {
   // The menu itself lives in the BranchMenuProvider (ADR-0028): one instance
   // for the whole overview, fixed-positioned, so the card no longer has to open
@@ -115,7 +143,19 @@ export function BranchTable({
             <Head label="Base" right />
             <Head label="Diff" right />
             <Head label="Self-review" />
-            <Head label="GitHub" />
+            <Head
+              label="GitHub"
+              trailing={
+                githubPolling ? (
+                  <span
+                    className="spinner"
+                    role="status"
+                    aria-label="Syncing pull requests from GitHub"
+                    title="Syncing pull requests from GitHub"
+                  />
+                ) : null
+              }
+            />
             <Head label="Updated" right />
             <Head label="" right />
           </tr>

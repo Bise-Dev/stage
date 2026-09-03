@@ -36,10 +36,12 @@ use ts_rs::TS;
 use crate::diff::diff_stats;
 use crate::domain::{DebriefFreshness, Review};
 use crate::error::StageError;
-use crate::github::{GhPullRequest, GitHub, PrFilter};
+use crate::github::{GhPrState, GhPullRequest, GitHub, PrFilter};
 use crate::repo_key::RepoKey;
 use crate::review_folder::{read_review_from_tree, StageReview};
-use crate::status::{is_archived, status_from_pr, ReviewRole, ReviewSignal, ReviewStatus};
+use crate::status::{
+    is_archived, status_from_pr, status_from_state, ReviewRole, ReviewSignal, ReviewStatus,
+};
 use crate::store::Store;
 use crate::viewed::current_post_image_oid;
 use crate::worktree::list_worktrees;
@@ -150,8 +152,9 @@ pub struct OverviewRow {
     pub status: Option<ReviewStatus>,
     /// Mine vs. awaiting my review. Local-only rows are always `Author`.
     pub role: ReviewRole,
-    /// ± lines (+ comments). `None` when there is no comparable base (e.g. the
-    /// default branch itself, or no merge base) — absent, not `0/0`.
+    /// ± lines. `None` when there is no comparable base (e.g. the default
+    /// branch itself, or no merge base), or when only the cheap PR tier was
+    /// fetched for this row — absent, not `0/0`.
     pub signal: Option<ReviewSignal>,
     /// Stage-guided (draft, or committed `.stage` at the head) vs. plain.
     pub stage_guided: bool,
@@ -201,16 +204,28 @@ struct LocalBranch {
 /// re-asking `gh` on every recompute.
 #[derive(Debug, Clone)]
 pub struct OverviewGithubData {
-    /// My PRs, deduped (authored ordering wins over review-requested), each with
-    /// the role it was found under.
+    /// My **open** PRs at full detail, deduped (authored ordering wins over
+    /// review-requested), each with the role it was found under. These are the
+    /// only PRs a rendered row paints.
     pub prs: Vec<(GhPullRequest, ReviewRole)>,
+    /// The archived remainder at state detail — every other PR, deduped the
+    /// same way and with anything already in `prs` removed. Enough to absorb a
+    /// finished branch's row and hide it (DB-5 #88) without paying the detail
+    /// field set for ~40x as many PRs as the overview ever shows.
+    pub pr_states: Vec<(GhPrState, ReviewRole)>,
     /// The `gh` token owner's login — attributes local draft rows.
     pub me: Option<String>,
 }
 
-/// Fetch the GitHub half of the overview: the two `gh` PR searches (authored +
+/// Fetch the GitHub half of the overview: the `gh` PR searches (authored +
 /// review-requested, DB-1/DB-3) and the token owner's identity. Fail loud —
 /// any `gh` failure fails the whole call, never a partial result.
+///
+/// Each search runs at two tiers (see [`GitHub::list_repo_prs`]): full detail
+/// for the open PRs a row actually paints, then `state` alone for every PR so
+/// the archived view-filter still knows which branches are done. On a busy repo
+/// that is the difference between one field set over ~200 PRs and over the ~5
+/// that are open.
 pub fn fetch_overview_github(
     gh: &GitHub,
     repo_key: &RepoKey,
@@ -218,6 +233,8 @@ pub fn fetch_overview_github(
     let repo_slug = format!("{}/{}", repo_key.repo_owner, repo_key.repo_name);
     let authored = gh.list_repo_prs(&repo_slug, PrFilter::Authored)?;
     let review_requested = gh.list_repo_prs(&repo_slug, PrFilter::ReviewRequested)?;
+    let authored_states = gh.list_repo_pr_states(&repo_slug, PrFilter::Authored)?;
+    let review_requested_states = gh.list_repo_pr_states(&repo_slug, PrFilter::ReviewRequested)?;
     let me = gh.current_user()?.login;
 
     let mut seen_numbers: HashSet<u32> = HashSet::new();
@@ -231,7 +248,27 @@ pub fn fetch_overview_github(
             prs.push((pr, role));
         }
     }
-    Ok(OverviewGithubData { prs, me: Some(me) })
+    // Same dedup set, so the detail tier wins wherever both saw a PR: whatever
+    // the state tier adds on top is exactly the archived remainder.
+    let mut pr_states = Vec::new();
+    for (pr, role) in authored_states
+        .into_iter()
+        .map(|p| (p, ReviewRole::Author))
+        .chain(
+            review_requested_states
+                .into_iter()
+                .map(|p| (p, ReviewRole::Reviewer)),
+        )
+    {
+        if seen_numbers.insert(pr.number) {
+            pr_states.push((pr, role));
+        }
+    }
+    Ok(OverviewGithubData {
+        prs,
+        pr_states,
+        me: Some(me),
+    })
 }
 
 /// A branch's tree-to-tree diff vs. the default base, as the overview needs
@@ -506,7 +543,6 @@ pub fn assemble_overview_with(
                 signal: Some(ReviewSignal {
                     added: pr.additions,
                     removed: pr.deletions,
-                    comments: pr.comments,
                 }),
                 stage_guided,
                 pr_number: Some(pr.number),
@@ -514,6 +550,35 @@ pub fn assemble_overview_with(
                 author_login: Some(pr.author.login.clone()),
                 storyline_count: committed.map(|r| r.steps.len() as u32),
                 updated_at: (!pr.updated_at.is_empty()).then(|| pr.updated_at.clone()),
+                branch_meta: meta_by_branch.get(&pr.head_ref_name).cloned(),
+            });
+        }
+        // The archived remainder. These rows exist to absorb their branch and
+        // then be hidden (DB-5 #88) — so they claim only what the state tier
+        // actually fetched: `signal`/`base_ref`/`author_login` stay `None`
+        // rather than standing in at `0`/`""` (CLAUDE.md: no value that implies
+        // data we don't have). `kind`/`stage_guided` skip the per-PR
+        // `committed_review` tree probe for the same reason: nothing renders
+        // them here, and paying ~200 git lookups to fill a hidden row is the
+        // cost this tier exists to avoid.
+        for (pr, role) in &data.pr_states {
+            let status = status_from_state(&pr.state, "");
+            pr_heads.insert(pr.head_ref_name.clone());
+            rows.push(OverviewRow {
+                kind: OverviewKind::PlainPr,
+                title: pr.head_ref_name.clone(),
+                branch: pr.head_ref_name.clone(),
+                base_ref: None,
+                archived: is_archived(status),
+                status: Some(status),
+                role: *role,
+                signal: None,
+                stage_guided: false,
+                pr_number: Some(pr.number),
+                url: Some(pr.url.clone()),
+                author_login: None,
+                storyline_count: None,
+                updated_at: None,
                 branch_meta: meta_by_branch.get(&pr.head_ref_name).cloned(),
             });
         }
@@ -658,7 +723,7 @@ fn committed_review(
 /// The ±lines signal for a pre-publish draft, from its branch's committed diff
 /// vs. its base. `Ok(None)` when the branch isn't present in this clone (the
 /// accepted DB-1 per-machine risk) so the caller skips the row rather than fail
-/// the overview or fake a size. Comment count is 0 — a draft has no PR thread.
+/// the overview or fake a size.
 fn draft_signal(repo_root: &Path, draft: &Review) -> Result<Option<ReviewSignal>, StageError> {
     if !branch_present(repo_root, &draft.head_ref)? {
         return Ok(None);
@@ -667,7 +732,6 @@ fn draft_signal(repo_root: &Path, draft: &Review) -> Result<Option<ReviewSignal>
     Ok(Some(ReviewSignal {
         added: stats.added as u32,
         removed: stats.removed as u32,
-        comments: 0,
     }))
 }
 
@@ -726,7 +790,6 @@ fn branch_diff(
         signal: ReviewSignal {
             added: stats.insertions() as u32,
             removed: stats.deletions() as u32,
-            comments: 0,
         },
         files: Arc::new(files),
     }))
@@ -863,25 +926,55 @@ mod tests {
     }
 
     /// Mirrors the dashboard's fake `gh` (see `dashboard.rs::tests`).
+    ///
+    /// Dispatches on both axes the real query varies: the role filter and the
+    /// `--state` tier. Every PR here is open, so the `--state all` tier adds
+    /// nothing the detail tier didn't already carry — see
+    /// [`archived_pr_absorbs_its_branch_and_stays_hidden`] for the tier that does.
     #[cfg(unix)]
     fn fake_gh(dir: &Path) -> std::path::PathBuf {
         let authored = r#"[
-          {"number":1,"title":"Published","state":"OPEN","url":"https://gh/1","headRefName":"feat/published-stage","baseRefName":"main","isDraft":false,"additions":5,"deletions":2,"reviewDecision":"APPROVED","author":{"login":"me"},"comments":[{}]}
+          {"number":1,"title":"Published","state":"OPEN","url":"https://gh/1","headRefName":"feat/published-stage","baseRefName":"main","additions":5,"deletions":2,"reviewDecision":"APPROVED","author":{"login":"me"}}
         ]"#;
         let reviewer = r#"[
-          {"number":3,"title":"Their PR","state":"OPEN","url":"https://gh/3","headRefName":"feat/their-pr","baseRefName":"main","isDraft":false,"additions":7,"deletions":1,"reviewDecision":"","author":{"login":"them"},"comments":[{},{}]}
+          {"number":3,"title":"Their PR","state":"OPEN","url":"https://gh/3","headRefName":"feat/their-pr","baseRefName":"main","additions":7,"deletions":1,"reviewDecision":"","author":{"login":"them"}}
         ]"#;
-        std::fs::write(dir.join("authored.json"), authored).unwrap();
-        std::fs::write(dir.join("reviewer.json"), reviewer).unwrap();
-        let authored_path = dir.join("authored.json").to_string_lossy().into_owned();
-        let reviewer_path = dir.join("reviewer.json").to_string_lossy().into_owned();
+        let states = r#"[
+          {"number":1,"state":"OPEN","headRefName":"feat/published-stage","url":"https://gh/1"}
+        ]"#;
+        let reviewer_states = r#"[
+          {"number":3,"state":"OPEN","headRefName":"feat/their-pr","url":"https://gh/3"}
+        ]"#;
+        fake_gh_with(dir, authored, reviewer, states, reviewer_states)
+    }
+
+    /// The fake `gh` behind [`fake_gh`], with each of the four PR-list
+    /// responses supplied explicitly: (authored, reviewer) × (detail, state).
+    #[cfg(unix)]
+    fn fake_gh_with(
+        dir: &Path,
+        authored: &str,
+        reviewer: &str,
+        authored_states: &str,
+        reviewer_states: &str,
+    ) -> std::path::PathBuf {
+        let write = |name: &str, body: &str| {
+            std::fs::write(dir.join(name), body).unwrap();
+            dir.join(name).to_string_lossy().into_owned()
+        };
+        let a_detail = write("authored-open.json", authored);
+        let r_detail = write("reviewer-open.json", reviewer);
+        let a_state = write("authored-all.json", authored_states);
+        let r_state = write("reviewer-all.json", reviewer_states);
         let body = format!(
             "#!/usr/bin/env bash\n\
              if [ \"$1\" = auth ] && [ \"$2\" = status ]; then exit 0; fi\n\
              if [ \"$1\" = api ] && [ \"$2\" = user ]; then echo '{{\"login\":\"me\",\"id\":1,\"name\":\"Me\"}}'; exit 0; fi\n\
              case \"$*\" in\n\
-               *review-requested*) cat {reviewer_path:?} ;;\n\
-               *) cat {authored_path:?} ;;\n\
+               *\"--state all\"*review-requested*) cat {r_state:?} ;;\n\
+               *\"--state all\"*) cat {a_state:?} ;;\n\
+               *review-requested*) cat {r_detail:?} ;;\n\
+               *) cat {a_detail:?} ;;\n\
              esac\n\
              exit 0\n",
         );
@@ -905,27 +998,25 @@ mod tests {
         // The same PR #1 comes back from both searches (e.g. self-requested
         // review); #3 is review-requested only.
         let authored = r#"[
-          {"number":1,"title":"Mine","state":"OPEN","url":"https://gh/1","headRefName":"feat/mine","baseRefName":"main","isDraft":false,"additions":5,"deletions":2,"reviewDecision":"","author":{"login":"me"},"comments":[]}
+          {"number":1,"title":"Mine","state":"OPEN","url":"https://gh/1","headRefName":"feat/mine","baseRefName":"main","additions":5,"deletions":2,"reviewDecision":"","author":{"login":"me"}}
         ]"#;
         let reviewer = r#"[
-          {"number":1,"title":"Mine","state":"OPEN","url":"https://gh/1","headRefName":"feat/mine","baseRefName":"main","isDraft":false,"additions":5,"deletions":2,"reviewDecision":"","author":{"login":"me"},"comments":[]},
-          {"number":3,"title":"Their PR","state":"OPEN","url":"https://gh/3","headRefName":"feat/their","baseRefName":"main","isDraft":false,"additions":7,"deletions":1,"reviewDecision":"","author":{"login":"them"},"comments":[]}
+          {"number":1,"title":"Mine","state":"OPEN","url":"https://gh/1","headRefName":"feat/mine","baseRefName":"main","additions":5,"deletions":2,"reviewDecision":"","author":{"login":"me"}},
+          {"number":3,"title":"Their PR","state":"OPEN","url":"https://gh/3","headRefName":"feat/their","baseRefName":"main","additions":7,"deletions":1,"reviewDecision":"","author":{"login":"them"}}
         ]"#;
-        std::fs::write(dir.join("authored.json"), authored).unwrap();
-        std::fs::write(dir.join("reviewer.json"), reviewer).unwrap();
-        let body = format!(
-            "#!/usr/bin/env bash\n\
-             if [ \"$1\" = auth ] && [ \"$2\" = status ]; then exit 0; fi\n\
-             if [ \"$1\" = api ] && [ \"$2\" = user ]; then echo '{{\"login\":\"me\",\"id\":1,\"name\":\"Me\"}}'; exit 0; fi\n\
-             case \"$*\" in\n\
-               *review-requested*) cat {reviewer:?} ;;\n\
-               *) cat {authored:?} ;;\n\
-             esac\n\
-             exit 0\n",
-            reviewer = dir.join("reviewer.json").to_string_lossy(),
-            authored = dir.join("authored.json").to_string_lossy(),
+        // Both PRs are open, so the state tier re-reports them; the detail
+        // tier must win, leaving the archived remainder empty.
+        let states = r#"[
+          {"number":1,"state":"OPEN","headRefName":"feat/mine","url":"https://gh/1"}
+        ]"#;
+        let reviewer_states = r#"[
+          {"number":1,"state":"OPEN","headRefName":"feat/mine","url":"https://gh/1"},
+          {"number":3,"state":"OPEN","headRefName":"feat/their","url":"https://gh/3"}
+        ]"#;
+        let gh = GitHub::with_bins(
+            fake_gh_with(dir, authored, reviewer, states, reviewer_states),
+            "git",
         );
-        let gh = GitHub::with_bins(write_script(dir, "gh", &body), "git");
 
         let data = fetch_overview_github(&gh, &key()).unwrap();
         assert_eq!(data.me.as_deref(), Some("me"));
@@ -934,6 +1025,58 @@ mod tests {
         assert_eq!(one.1, ReviewRole::Author, "authored wins the role");
         let three = data.prs.iter().find(|(p, _)| p.number == 3).unwrap();
         assert_eq!(three.1, ReviewRole::Reviewer);
+        assert!(
+            data.pr_states.is_empty(),
+            "every PR came back at full detail, so the cheap tier adds nothing: {:#?}",
+            data.pr_states
+        );
+    }
+
+    /// The regression the two-tier split exists to prevent: a merged PR is no
+    /// longer fetched at detail, but its `state` still has to absorb the local
+    /// branch and hide it — otherwise every finished-but-undeleted branch
+    /// reappears in the default view.
+    #[cfg(unix)]
+    #[test]
+    fn archived_pr_absorbs_its_branch_and_stays_hidden() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        setup_repo(root);
+        let store = Store::open(&root.join("store.sqlite3")).unwrap();
+        // No open PRs. `feat/spare` exists locally and its PR #9 is merged, so
+        // it comes back from the state tier only.
+        let empty = "[]";
+        let states = r#"[
+          {"number":9,"state":"MERGED","headRefName":"feat/spare","url":"https://gh/9"}
+        ]"#;
+        let gh = GitHub::with_bins(fake_gh_with(root, empty, empty, states, empty), "git");
+
+        // include_archived: the row is built, carries the PR, and is flagged.
+        let all = assemble_overview(&store, Some(&gh), root, &key(), true).unwrap();
+        let spare = by_branch(&all, "feat/spare");
+        assert!(spare.archived, "merged PR ⇒ archived: {spare:#?}");
+        assert_eq!(spare.status, Some(ReviewStatus::Merged));
+        assert_eq!(spare.pr_number, Some(9), "branch menu still resolves #9");
+        assert_eq!(spare.url.as_deref(), Some("https://gh/9"));
+        assert_eq!(
+            spare.signal, None,
+            "the cheap tier fetched no diff stats, so none are claimed"
+        );
+        assert_eq!(
+            all.rows.iter().filter(|r| r.branch == "feat/spare").count(),
+            1,
+            "the PR row absorbs the branch — no duplicate Branch row: {:#?}",
+            all.rows
+        );
+
+        // Default view: the DB-5 filter hides it, as it did when the detail
+        // tier still fetched merged PRs.
+        let view = assemble_overview(&store, Some(&gh), root, &key(), false).unwrap();
+        assert!(
+            !view.rows.iter().any(|r| r.branch == "feat/spare"),
+            "a merged PR's branch must stay hidden: {:#?}",
+            view.rows
+        );
     }
 
     /// The signal memo never serves a stale diff: a new commit moves the
