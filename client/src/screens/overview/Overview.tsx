@@ -640,6 +640,7 @@ export function Overview({
                   defaultBase={defaultBase}
                   actions={branchActions}
                   agentSessions={agentByBranch}
+                  githubPolling={sync?.githubPolling ?? false}
                 />
 
                 {/* Live sessions with no dedicated worktree yet — an agent that

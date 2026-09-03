@@ -605,3 +605,28 @@ body {
     opacity: 0.7;
   }
 }
+
+/* Loading wheel for a column whose data is mid-flight. Sized to sit inside a
+   10px uppercase table header without changing the row height. */
+.spinner {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border: 1.5px solid var(--gray-200);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: stage-spin 0.7s linear infinite;
+}
+
+@keyframes stage-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Reduced motion: hold a static ring rather than spinning it. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
