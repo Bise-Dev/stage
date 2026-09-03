@@ -1,5 +1,4 @@
 import {
-  Fragment,
   type Ref,
   memo,
   useCallback,
@@ -31,6 +30,14 @@ const EMPTY_NOTES: SelfReviewNoteView[] = [];
 // the last selected line). Module-scope (pure) so the render callbacks that use
 // it aren't forced to list it as a dependency.
 const lineEndOf = (n: SelfReviewNoteView): number => n.anchor?.lineEnd ?? n.anchor?.lineStart ?? 0;
+
+// `scrollFileIntoView`'s re-align loop: breathing room to leave above the file
+// header, how many consecutive already-aligned frames count as settled, and a
+// hard frame budget (~1.5s at 60fps) so a block that keeps remounting can't
+// keep the loop alive forever.
+const SCROLL_GAP = 8;
+const ALIGN_SETTLED_FRAMES = 3;
+const ALIGN_MAX_FRAMES = 90;
 
 // `ViewMode` lives with the shared diff surface (CommentableFileDiff); re-export
 // it here so importers of DiffPane don't need to know that.
@@ -110,15 +117,58 @@ export function DiffPane({
   onDeleteNote,
   ref,
 }: DiffPaneProps) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
   const fileRefs = useRef(new Map<string, HTMLDivElement>());
+
+  // Handle of the in-flight re-align loop below, so a second click (or the
+  // author taking over with the wheel) supersedes the first.
+  const alignRef = useRef<number | null>(null);
+  const cancelAlign = useCallback(() => {
+    if (alignRef.current !== null) {
+      cancelAnimationFrame(alignRef.current);
+      alignRef.current = null;
+    }
+  }, []);
+  useEffect(() => cancelAlign, [cancelAlign]);
+
   useImperativeHandle(
     ref,
     () => ({
       scrollFileIntoView(path: string) {
-        fileRefs.current.get(path)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const scroller = scrollerRef.current;
+        if (!scroller || !fileRefs.current.has(path)) return;
+        cancelAlign();
+        // Deliberately *not* `scrollIntoView({ behavior: 'smooth' })`. A smooth
+        // animation drags the viewport across every lazy placeholder between
+        // here and the target; each one mounts on the way past (600px
+        // rootMargin) and grows to its real height, so the destination the
+        // animation committed to is stale by the time it arrives and the author
+        // lands on some earlier file. Jump straight there instead, then
+        // re-align each frame until the offset stops moving — that absorbs both
+        // the placeholder estimate error and any block that mounts late.
+        let frames = 0;
+        let settled = 0;
+        const step = () => {
+          alignRef.current = null;
+          // Re-read the node every frame: a diff refetch can replace it mid-loop.
+          const el = fileRefs.current.get(path);
+          if (!el) return;
+          const delta =
+            el.getBoundingClientRect().top - scroller.getBoundingClientRect().top - SCROLL_GAP;
+          if (Math.abs(delta) > 1) {
+            scroller.scrollTop += delta;
+            settled = 0;
+          } else {
+            settled += 1;
+          }
+          if (settled < ALIGN_SETTLED_FRAMES && ++frames < ALIGN_MAX_FRAMES) {
+            alignRef.current = requestAnimationFrame(step);
+          }
+        };
+        step();
       },
     }),
-    [],
+    [cancelAlign],
   );
 
   // One stable ref registrar for every block — passed straight through, so a
@@ -176,6 +226,11 @@ export function DiffPane({
 
   return (
     <div
+      ref={scrollerRef}
+      // The author touching the wheel/trackpad mid-jump wins over the
+      // re-align loop; without this it would keep yanking them back.
+      onWheel={cancelAlign}
+      onTouchStart={cancelAlign}
       style={{
         flex: 1,
         minWidth: 0,
@@ -207,12 +262,10 @@ export function DiffPane({
             // navigated to a file, so don't second-guess them.
             const collapsed = isViewed && viewLayout === 'scroll';
             return (
-              <Fragment key={f.path}>
+              <FileAnchor key={f.path} blockId={f.path} registerRef={registerFileRef}>
                 {renderBefore?.(f.path)}
                 <LazyFileBlock
-                  blockId={f.path}
                   file={f}
-                  registerRef={registerFileRef}
                   viewMode={viewMode}
                   collapsed={collapsed}
                   isViewed={isViewed}
@@ -220,13 +273,36 @@ export function DiffPane({
                   notes={notesByFile.get(f.path) ?? EMPTY_NOTES}
                   {...noteOps}
                 />
-              </Fragment>
+              </FileAnchor>
             );
           })}
         </>
       )}
     </div>
   );
+}
+
+/**
+ * The scroll target for one file. It wraps the Debrief's chapter banner
+ * *together with* the block, so jumping to a chapter's first file reveals the
+ * banner instead of scrolling the narration off the top edge. Owning the
+ * registered node here also keeps it stable across `LazyFileBlock`'s
+ * placeholder-to-real swap.
+ */
+function FileAnchor({
+  blockId,
+  registerRef,
+  children,
+}: {
+  blockId: string;
+  registerRef(id: string, el: HTMLDivElement | null): void;
+  children: React.ReactNode;
+}) {
+  const setRef = useCallback(
+    (el: HTMLDivElement | null) => registerRef(blockId, el),
+    [registerRef, blockId],
+  );
+  return <div ref={setRef}>{children}</div>;
 }
 
 /**
@@ -243,25 +319,9 @@ export function DiffPane({
  * touch this block at all, since every prop it receives is referentially
  * stable.
  */
-type LazyFileBlockProps = FileBlockProps & {
-  /** The file path this block registers under (scroll targeting). */
-  blockId: string;
-  registerRef(path: string, el: HTMLDivElement | null): void;
-};
-const LazyFileBlock = memo(function LazyFileBlock({
-  registerRef,
-  blockId,
-  ...rest
-}: LazyFileBlockProps) {
+const LazyFileBlock = memo(function LazyFileBlock(rest: FileBlockProps) {
   const [mounted, setMounted] = useState(false);
   const localRef = useRef<HTMLDivElement>(null);
-  const setRef = useCallback(
-    (el: HTMLDivElement | null) => {
-      localRef.current = el;
-      registerRef(blockId, el);
-    },
-    [registerRef, blockId],
-  );
 
   // Collapsed files render as a tiny header-only row; no need to defer them
   // behind an IntersectionObserver — the cost is already minimal and
@@ -289,21 +349,26 @@ const LazyFileBlock = memo(function LazyFileBlock({
 
   if (eager) {
     return (
-      <div ref={setRef}>
+      <div ref={localRef}>
         <FileBlock {...rest} />
       </div>
     );
   }
 
-  // Cheap estimate of the rendered block's height so the scrollbar stays
-  // close to truthful before the real mount. 18px per line + ~80px chrome,
-  // clamped so a 10k-line file doesn't reserve the whole window.
+  // Estimate of the rendered block's height. This has to be *close*, not just
+  // cheap: the scroll offset of every block below is computed from it, so
+  // under-reserving here is what made a sidebar jump land on the wrong file.
+  // A diff row is ~21px (12.5px mono at line-height 1.6, and `diffViewWrap`
+  // can push a wrapped line taller), and ~3 context lines render either side
+  // of each hunk, so the row count runs well above the changed-line count —
+  // hence the 1.35 allowance. The clamp only stops a pathological 10k-line
+  // file from reserving a comically long scrollbar.
   const lines = rest.file.additions + rest.file.deletions;
-  const estimated = Math.min(800, 80 + lines * 18);
+  const estimated = Math.min(20000, 50 + Math.ceil(lines * 1.35) * 21);
   const badge = STATUS_BADGE[rest.file.status];
   return (
     <div
-      ref={setRef}
+      ref={localRef}
       style={{
         background: '#fff',
         border: '1px solid var(--hairline)',
