@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { Icon } from '../../components/Icon';
 import { isMaterialized } from '../../lib/worktree';
 import { type AgentSession, type OverviewRow, type ReviewStatus, openUrl } from '../../tauri';
-import { relativeTimeFromEpoch } from '../../time';
+import { ColumnResizeHandle, useColumnWidth } from '../selfReview/columnResize';
 import { type BranchActions, useBranchMenu } from './BranchMenu';
 import { AgentSessionPill, DebriefPill, SelfReviewPill, selfReviewStarted } from './pills';
 
@@ -54,22 +54,33 @@ const CELL: CSSProperties = {
   color: 'var(--gray-700)',
   whiteSpace: 'nowrap',
   height: 40,
+  // `table-layout: fixed` sizes the column, but content wider than it would
+  // still paint over the next cell (and past the card's right edge) — clip it.
+  overflow: 'hidden',
 };
 
 function Head({
   label,
   right,
   trailing,
+  resize,
 }: {
   label: string;
   right?: boolean;
   /** Rendered just after the label — for a live indicator on the column whose
    *  data is still arriving. Inline-flex so it can't change the row height. */
   trailing?: ReactNode;
+  /** The column's width handle (`useColumnWidth`), when the author can drag
+   *  this column's right edge. */
+  resize?: {
+    onResizeStart: (e: React.PointerEvent) => void;
+    onResizeKey: (e: React.KeyboardEvent) => void;
+  };
 }) {
   return (
     <th
       style={{
+        position: 'relative',
         padding: '0 10px',
         textAlign: right ? 'right' : 'left',
         fontSize: 10,
@@ -77,6 +88,7 @@ function Head({
         letterSpacing: 0.5,
         textTransform: 'uppercase',
         color: 'var(--gray-400)',
+        overflow: 'hidden',
       }}
     >
       {trailing ? (
@@ -94,19 +106,39 @@ function Head({
       ) : (
         label
       )}
+      {resize && (
+        <ColumnResizeHandle
+          onResizeStart={resize.onResizeStart}
+          onResizeKey={resize.onResizeKey}
+          ariaLabel={`Resize the ${label} column`}
+        />
+      )}
     </th>
   );
 }
 
+/** Column widths the author can drag, persisted per column (`useColumnWidth`).
+ *  The trailing actions column is the flexible one — it soaks up whatever is
+ *  left — so the sum below is the table's minimum width and the card scrolls
+ *  horizontally rather than clipping a row's buttons. */
+const COLS = {
+  branch: { key: 'overview:col:branch', def: 300, min: 160, max: 720 },
+  diff: { key: 'overview:col:diff', def: 110, min: 70, max: 220 },
+  selfReview: { key: 'overview:col:selfReview', def: 260, min: 120, max: 560 },
+  github: { key: 'overview:col:github', def: 180, min: 100, max: 400 },
+} as const;
+
+/** The non-resizable columns: the branch-icon gutter and the actions column. */
+const GUTTER_W = 34;
+const ACTIONS_W = 176;
+
 export function BranchTable({
   rows,
-  defaultBase,
   actions,
   agentSessions,
   githubPolling,
 }: {
   rows: OverviewRow[];
-  defaultBase: string | null;
   actions: BranchActions;
   /** Live Claude Code sessions keyed by branch (opt-in; absent = feature off
    *  or nothing running). Probed by Rust — the table only looks its row up. */
@@ -118,6 +150,36 @@ export function BranchTable({
   // The menu itself lives in the BranchMenuProvider (ADR-0028): one instance
   // for the whole overview, fixed-positioned, so the card no longer has to open
   // its overflow to let a menu overhang.
+  const branchCol = useColumnWidth(
+    COLS.branch.key,
+    COLS.branch.def,
+    COLS.branch.min,
+    COLS.branch.max,
+    'right',
+  );
+  const diffCol = useColumnWidth(
+    COLS.diff.key,
+    COLS.diff.def,
+    COLS.diff.min,
+    COLS.diff.max,
+    'right',
+  );
+  const selfCol = useColumnWidth(
+    COLS.selfReview.key,
+    COLS.selfReview.def,
+    COLS.selfReview.min,
+    COLS.selfReview.max,
+    'right',
+  );
+  const githubCol = useColumnWidth(
+    COLS.github.key,
+    COLS.github.def,
+    COLS.github.min,
+    COLS.github.max,
+    'right',
+  );
+  const minWidth =
+    GUTTER_W + branchCol.width + diffCol.width + selfCol.width + githubCol.width + ACTIONS_W;
 
   return (
     <div
@@ -129,71 +191,82 @@ export function BranchTable({
         overflow: 'hidden',
       }}
     >
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr
-            style={{
-              height: 30,
-              borderBottom: '1px solid var(--hairline)',
-              background: 'var(--gray-50)',
-            }}
-          >
-            <Head label="" />
-            <Head label="Branch" />
-            <Head label="Base" right />
-            <Head label="Diff" right />
-            <Head label="Self-review" />
-            <Head
-              label="GitHub"
-              trailing={
-                githubPolling ? (
-                  <span
-                    className="spinner"
-                    role="status"
-                    aria-label="Syncing pull requests from GitHub"
-                    title="Syncing pull requests from GitHub"
-                  />
-                ) : null
-              }
-            />
-            <Head label="Updated" right />
-            <Head label="" right />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <BranchRow
-              key={r.branch}
-              r={r}
-              defaultBase={defaultBase}
-              actions={actions}
-              agentSession={agentSessions?.get(r.branch) ?? null}
-            />
-          ))}
-          {rows.length === 0 && (
-            <tr>
-              <td
-                colSpan={8}
-                style={{ ...CELL, textAlign: 'center', color: 'var(--gray-400)', height: 56 }}
-              >
-                No local branches match.
-              </td>
+      {/* The card clips (rounded corners); the scroller inside it is what
+          absorbs a table wider than the window — dragging a column past the
+          card's edge scrolls it rather than painting over the border. */}
+      <div style={{ overflowX: 'auto' }}>
+        <table
+          style={{ width: '100%', minWidth, tableLayout: 'fixed', borderCollapse: 'collapse' }}
+        >
+          <colgroup>
+            <col style={{ width: GUTTER_W }} />
+            <col style={{ width: branchCol.width }} />
+            <col style={{ width: diffCol.width }} />
+            <col style={{ width: selfCol.width }} />
+            <col style={{ width: githubCol.width }} />
+            <col />
+          </colgroup>
+          <thead>
+            <tr
+              style={{
+                height: 30,
+                borderBottom: '1px solid var(--hairline)',
+                background: 'var(--gray-50)',
+              }}
+            >
+              <Head label="" />
+              <Head label="Branch" resize={branchCol} />
+              <Head label="Diff" right resize={diffCol} />
+              <Head label="Self-review" resize={selfCol} />
+              <Head
+                label="GitHub"
+                resize={githubCol}
+                trailing={
+                  githubPolling ? (
+                    <span
+                      className="spinner"
+                      role="status"
+                      aria-label="Syncing pull requests from GitHub"
+                      title="Syncing pull requests from GitHub"
+                    />
+                  ) : null
+                }
+              />
+              <Head label="" right />
             </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <BranchRow
+                key={r.branch}
+                r={r}
+                actions={actions}
+                agentSession={agentSessions?.get(r.branch) ?? null}
+              />
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td
+                  colSpan={6}
+                  style={{ ...CELL, textAlign: 'center', color: 'var(--gray-400)', height: 56 }}
+                >
+                  No local branches match.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
 
 function BranchRow({
   r,
-  defaultBase,
   actions,
   agentSession,
 }: {
   r: OverviewRow;
-  defaultBase: string | null;
   actions: BranchActions;
   agentSession: AgentSession | null;
 }) {
@@ -205,9 +278,6 @@ function BranchRow({
   const menuOpen = openBranch === r.branch;
   const sr = meta.selfReview;
   const st = statusBadge(r);
-  // Base: a Review row carries its chosen base; a plain branch diffs against
-  // the repo default (the DTO says so) — name it when we know it.
-  const base = r.baseRef ?? (meta.isDefault ? null : defaultBase);
   const selfLabel = selfReviewStarted(sr) ? 'Continue' : 'Self-review';
   const showSelfButton = !meta.isDefault;
   // The draft/published Review chip, commented out with the review surface — the
@@ -247,10 +317,10 @@ function BranchRow({
         background: meta.isCurrent ? 'var(--blue-tint-2)' : '#fff',
       }}
     >
-      <td style={{ ...CELL, width: 20, paddingLeft: 16 }}>
+      <td style={{ ...CELL, paddingLeft: 16, paddingRight: 0 }}>
         <Icon name="branch" size={12} color={meta.isCurrent ? 'var(--blue)' : 'var(--gray-400)'} />
       </td>
-      <td style={{ ...CELL, maxWidth: 0, minWidth: 180 }}>
+      <td style={{ ...CELL }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
           <span
             className="mono"
@@ -291,17 +361,8 @@ function BranchRow({
           )}
         </div>
       </td>
-      <td style={{ ...CELL, textAlign: 'right' }}>
-        {base ? (
-          <span className="mono" style={{ fontSize: 11, color: 'var(--gray-500)' }}>
-            {base}
-          </span>
-        ) : (
-          ''
-        )}
-      </td>
       <td
-        style={{ ...CELL, textAlign: 'right', width: 110 }}
+        style={{ ...CELL, textAlign: 'right' }}
         title={
           meta.changedFileCount !== null
             ? `${meta.changedFileCount} file${meta.changedFileCount === 1 ? '' : 's'} changed vs base`
@@ -323,7 +384,7 @@ function BranchRow({
         </span>
       </td>
       <td style={{ ...CELL }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
           <AgentSessionPill s={agentSession} />
           <DebriefPill r={r} />
           <SelfReviewPill sr={sr} />
@@ -369,10 +430,7 @@ function BranchRow({
           <span style={{ fontSize: 11, color: 'var(--gray-300)' }}>—</span>
         )}
       </td>
-      <td style={{ ...CELL, textAlign: 'right', color: 'var(--gray-400)', fontSize: 11 }}>
-        {relativeTimeFromEpoch(meta.updatedAt)}
-      </td>
-      <td style={{ ...CELL, width: 170, paddingRight: 14 }}>
+      <td style={{ ...CELL, paddingRight: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           {showSelfButton && (
             <button

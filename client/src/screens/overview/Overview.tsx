@@ -461,8 +461,6 @@ export function Overview({
   const archivedCount = allLocalRows.filter((r) => r.archived).length;
   // Fed the commented-out "On GitHub" section:
   // const ghRows = rows.filter((r) => r.branchMeta === null).filter(visible);
-  const defaultBase = localRows.find((r) => r.branchMeta?.isDefault)?.branch ?? null;
-
   const debriefNew = localRows.filter((r) => r.branchMeta?.debriefFreshness === 'new').length;
   const selfInProgress = localRows.filter((r) =>
     selfReviewStarted(r.branchMeta?.selfReview),
@@ -637,7 +635,6 @@ export function Overview({
               <div style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingBottom: 14 }}>
                 <BranchTable
                   rows={filteredLocal}
-                  defaultBase={defaultBase}
                   actions={branchActions}
                   agentSessions={agentByBranch}
                   githubPolling={sync?.githubPolling ?? false}
