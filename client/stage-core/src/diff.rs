@@ -161,8 +161,10 @@ pub enum SelfReviewScope {
     /// `HEAD → index → workdir + untracked` — only uncommitted edits.
     Workdir,
     /// `merge_base(base_ref, HEAD) → workdir + index` — committed branch work
-    /// plus any pending uncommitted edits, i.e. "what the PR would contain if
-    /// the author committed everything right now".
+    /// and any pending uncommitted edits as **one merged diff**, i.e. "what the
+    /// PR would contain if the author committed everything right now". This is
+    /// what Self-Review renders when "+ Uncommitted" is on (ADR-0030): one
+    /// diff per file, never a committed and an uncommitted copy side by side.
     Base,
 }
 
@@ -214,7 +216,9 @@ pub struct SelfReviewStats {
 pub struct SelfReviewDiff {
     pub current_branch: String,
     pub scope: SelfReviewScope,
-    /// Only set when `scope == Base`; the ref the diff was computed against.
+    /// Only set when `scope == Base`; the ref the diff was actually computed
+    /// against, after the remote-tracking preference in [`resolve_base_commit`]
+    /// (e.g. `origin/main` for a requested `main`).
     pub base_ref: Option<String>,
     /// Short HEAD sha (8 chars), surfaced for stale-anchor detection on the
     /// frontend when the watcher re-fetches mid-session.
@@ -285,14 +289,11 @@ pub fn self_review_diff(
                     "self_review_diff: base_ref required in base scope but was not provided".into(),
                 )
             })?;
-            let base_commit = repo.revparse_single(base_ref).map_err(|e| {
-                StageError::Diff(format!(
-                    "self_review_diff: base ref '{base_ref}' not found: {e}"
-                ))
-            })?;
-            let base_commit = base_commit.peel_to_commit().map_err(|e| {
-                StageError::Diff(format!("self_review_diff: peel base commit failed: {e}"))
-            })?;
+            // Same resolver as `committed_diff` (ADR-0016/ADR-0018): prefer
+            // `origin/<base>` over a possibly-stale local branch of the same
+            // name, so folding the working tree in doesn't silently move the
+            // base out from under the committed-only view.
+            let (base_commit, resolved_base) = resolve_base_commit(&repo, base_ref)?;
             let head_commit = head_commit.ok_or_else(|| {
                 StageError::Diff("self_review_diff: repository has no HEAD".into())
             })?;
@@ -314,7 +315,7 @@ pub fn self_review_diff(
                 .map_err(|e| {
                     StageError::Diff(format!("self_review_diff: tree→workdir diff failed: {e}"))
                 })?;
-            (diff, Some(base_ref.to_string()))
+            (diff, Some(resolved_base))
         }
     };
 
@@ -736,15 +737,16 @@ fn parse_hunk_header(line: &str) -> Option<(u32, u32)> {
 
 /// Pair each note with its computed `outdated` flag, ready for emission.
 ///
-/// The flag is derived, never stored (the **Stale step** pattern), and each
-/// anchor is checked against the diff of the section it was left in: the
-/// Base-scope diff against `base_ref` for a committed-section note, the
-/// Workdir-scope diff for an uncommitted one. Sharing this between the desktop
+/// The flag is derived, never stored (the **Stale step** pattern). Every note
+/// is checked against the Base-scope diff against `base_ref` — the same diff
+/// Self-Review renders with "+ Uncommitted" on (ADR-0030) — except a legacy
+/// anchor still carrying `uncommitted: true`, which is checked against the
+/// Workdir-scope diff it was written against. Sharing this between the desktop
 /// app and the `stage` CLI is what keeps the author's screen and the agent's
 /// `notes` output agreeing on which notes are stale (ADR-0012).
 ///
-/// The workdir index is built only when some note actually needs it — a branch
-/// with no uncommitted-section notes pays for one diff, exactly as before.
+/// The workdir index is built only when some legacy note actually needs it — a
+/// branch without one pays for a single diff.
 pub fn notes_with_outdated(
     repo_path: &Path,
     base_ref: &str,
@@ -855,6 +857,35 @@ mod tests {
             "uncommitted working-tree change must be excluded: {paths:?}"
         );
         assert_eq!(diff.head_ref, "feat");
+    }
+
+    #[test]
+    fn base_scope_prefers_the_remote_tracking_base_like_the_committed_diff() {
+        // A local `main` left ahead of `origin/main` must not shrink the diff:
+        // both scopes of Self-Review resolve the base the same way (ADR-0016),
+        // so toggling "+ Uncommitted" never moves the base under the author.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+        let a = commit_all(&repo, "a", None);
+        repo.reference("refs/remotes/origin/main", a, true, "seed")
+            .unwrap();
+        // Local `main` moves ahead of the remote-tracking copy.
+        fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+        commit_all(&repo, "b", Some(a));
+
+        let diff = self_review_diff(dir.path(), SelfReviewScope::Base, Some("main")).unwrap();
+        assert_eq!(
+            diff.base_ref.as_deref(),
+            Some("origin/main"),
+            "base scope must report the ref it actually diffed against"
+        );
+        assert!(
+            diff.files.iter().any(|f| f.path == "b.txt"),
+            "work the stale local base already contains must still be in the diff: {:?}",
+            diff.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
     }
 
     #[test]

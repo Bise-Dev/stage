@@ -402,8 +402,8 @@ fn self_review(cmd: SelfReviewCmd, cwd: &Path, root: &Path) -> Result<(), StageE
             let notes = store.list_notes(&key, status.map(Into::into))?;
             // `outdated` is computed against the current Debrief's base (the
             // diff the notes live on), falling back to the default branch —
-            // and, for notes left in the uncommitted section, against the
-            // working-tree diff instead. `notes_with_outdated` is the one
+            // and, for legacy anchors written in the old uncommitted section,
+            // against the working-tree diff instead. `notes_with_outdated` is the one
             // implementation the app calls too (ADR-0012), so the agent and
             // author never disagree about which notes are stale.
             let base = match store.get_debrief(&key)? {

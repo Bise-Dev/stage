@@ -13,7 +13,6 @@ import { Icon } from '../../components/Icon';
 import type { NoteAnchor, SelfReviewFileChange, SelfReviewNoteView, Side } from '../../tauri';
 import { type CommentRange, CommentableFileDiff, type ViewMode } from './CommentableFileDiff';
 import { Composer } from './Composer';
-import { anchorId, committedId, uncommittedId } from './FileList';
 import { Thread } from './Thread';
 
 const STATUS_BADGE = {
@@ -34,14 +33,13 @@ const EMPTY_NOTES: SelfReviewNoteView[] = [];
 const lineEndOf = (n: SelfReviewNoteView): number => n.anchor?.lineEnd ?? n.anchor?.lineStart ?? 0;
 
 // `ViewMode` lives with the shared diff surface (CommentableFileDiff); re-export
-// it here so existing importers (SelfReview.tsx) are unaffected.
+// it here so importers of DiffPane don't need to know that.
 export type { ViewMode };
 export type ViewLayout = 'scroll' | 'single';
 
 export type DiffPaneHandle = {
-  /** Scrolls a file block into view by its section-qualified id (see
-   *  FileList's `committedId`/`uncommittedId`; used in `scroll` layout). */
-  scrollFileIntoView(id: string): void;
+  /** Scrolls a file block into view by its path (used in `scroll` layout). */
+  scrollFileIntoView(path: string): void;
 };
 
 /** The note operations DiffPane needs — a subset of the Debrief hook. */
@@ -55,35 +53,24 @@ type NoteOps = {
 };
 
 type DiffPaneProps = NoteOps & {
-  /** The committed section's files (the reviewable unit, flag F4). */
+  /** Every file in the reviewable diff — one block per path, whether its
+   *  changes are committed, uncommitted, or both (ADR-0030). */
   files: SelfReviewFileChange[];
-  /** The uncommitted section's files; null when the section is off. Rendered
-   *  after a divider, without the viewed toggle (working-tree edits are too
-   *  volatile to meaningfully "mark seen") but *with* Review notes: the anchor
-   *  records its section, so an uncommitted note is checked against the
-   *  working-tree diff and never bleeds onto the committed block. */
-  uncommittedFiles: SelfReviewFileChange[] | null;
   viewLayout: ViewLayout;
-  /** Section-qualified id the sidebar has selected; in 'single' layout
-   *  determines what is rendered, in 'scroll' layout it's only the scroll
-   *  target. */
+  /** Path the sidebar has selected; in 'single' layout determines what is
+   *  rendered, in 'scroll' layout it's only the scroll target. */
   selectedId: string | null;
   viewMode: ViewMode;
   viewed: Set<string>;
   onToggleViewed(path: string): void;
   /** All Review notes for the branch; DiffPane buckets them by file/anchor. */
   notes: SelfReviewNoteView[];
-  /** Optional leading content above a committed file's block — the Debrief's
-   *  inline chapter banners (v6-light L7 M1). Called per committed file. */
+  /** Optional leading content above a file's block — the Debrief's inline
+   *  chapter banners (v6-light L7 M1). Called per file. */
   renderBefore?: (path: string) => React.ReactNode;
   /** React 19 ref-as-prop. Parent supplies a `useRef<DiffPaneHandle>(null)`. */
   ref?: Ref<DiffPaneHandle>;
 };
-
-/** Section-qualified block ids — the same helpers the sidebar and the note
- *  anchors use, so a block, its sidebar row and its notes share one key. */
-const cid = committedId;
-const uid = uncommittedId;
 
 /**
  * Renders one or many file diffs depending on `viewLayout`.
@@ -109,7 +96,6 @@ const uid = uncommittedId;
  */
 export function DiffPane({
   files,
-  uncommittedFiles,
   viewLayout,
   selectedId,
   viewMode,
@@ -128,8 +114,8 @@ export function DiffPane({
   useImperativeHandle(
     ref,
     () => ({
-      scrollFileIntoView(id: string) {
-        fileRefs.current.get(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      scrollFileIntoView(path: string) {
+        fileRefs.current.get(path)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       },
     }),
     [],
@@ -137,9 +123,9 @@ export function DiffPane({
 
   // One stable ref registrar for every block — passed straight through, so a
   // block's `ref` callback identity doesn't change on parent re-renders.
-  const registerFileRef = useCallback((id: string, el: HTMLDivElement | null) => {
-    if (el) fileRefs.current.set(id, el);
-    else fileRefs.current.delete(id);
+  const registerFileRef = useCallback((path: string, el: HTMLDivElement | null) => {
+    if (el) fileRefs.current.set(path, el);
+    else fileRefs.current.delete(path);
   }, []);
 
   // Bundle the note ops once. They're already stable (useCallback in the
@@ -150,23 +136,20 @@ export function DiffPane({
     [onCreateNote, onReplyNote, onResolveNote, onReopenNote, onDeleteNote],
   );
 
-  // Bucket notes by *section-qualified* file id once, instead of
-  // `notes.filter(...)` per file per render — qualified because a path can be
-  // in both sections at once, at different line numbers. Crucially we preserve
-  // each slice's array identity when its content is unchanged: a note mutation
-  // replaces the whole `notes` array with fresh objects, so without this every
-  // block would re-render on any note change. With it, only the file whose
-  // notes actually changed gets a new slice.
+  // Bucket notes by file path once, instead of `notes.filter(...)` per file per
+  // render. Crucially we preserve each slice's array identity when its content
+  // is unchanged: a note mutation replaces the whole `notes` array with fresh
+  // objects, so without this every block would re-render on any note change.
+  // With it, only the file whose notes actually changed gets a new slice.
   const prevSlicesRef = useRef<Map<string, SelfReviewNoteView[]>>(new Map());
   const prevSigsRef = useRef<Map<string, string>>(new Map());
   const notesByFile = useMemo(() => {
     const grouped = new Map<string, SelfReviewNoteView[]>();
     for (const n of notes) {
       if (!n.anchor) continue;
-      const id = anchorId(n.anchor);
-      const arr = grouped.get(id);
+      const arr = grouped.get(n.anchor.file);
       if (arr) arr.push(n);
-      else grouped.set(id, [n]);
+      else grouped.set(n.anchor.file, [n]);
     }
     const prevSlices = prevSlicesRef.current;
     const prevSigs = prevSigsRef.current;
@@ -187,17 +170,9 @@ export function DiffPane({
     return nextSlices;
   }, [notes]);
 
-  // Section-tagged render lists. In single layout only the selected block
-  // renders (from either section); in scroll layout the committed section
-  // stacks first, then a divider, then the uncommitted section.
-  const visibleCommitted =
-    viewLayout === 'scroll' ? files : files.filter((f) => cid(f.path) === selectedId);
-  const uncommitted = uncommittedFiles ?? [];
-  const visibleUncommitted =
-    viewLayout === 'scroll' ? uncommitted : uncommitted.filter((f) => uid(f.path) === selectedId);
-
-  const totalFiles = files.length + uncommitted.length;
-  const visibleCount = visibleCommitted.length + visibleUncommitted.length;
+  // In single layout only the selected block renders; in scroll layout the
+  // whole diff stacks.
+  const visible = viewLayout === 'scroll' ? files : files.filter((f) => f.path === selectedId);
 
   return (
     <div
@@ -209,7 +184,7 @@ export function DiffPane({
         padding: '12px 14px',
       }}
     >
-      {visibleCount === 0 ? (
+      {visible.length === 0 ? (
         <div
           style={{
             padding: '40px 20px',
@@ -218,13 +193,13 @@ export function DiffPane({
             fontSize: 13,
           }}
         >
-          {totalFiles === 0
+          {files.length === 0
             ? 'No changes to review on this branch.'
             : 'Pick a file from the sidebar.'}
         </div>
       ) : (
         <>
-          {visibleCommitted.map((f) => {
+          {visible.map((f) => {
             const isViewed = viewed.has(f.path);
             // Viewed files collapse to a header-only row in scroll mode
             // (GitHub's behavior — clears clutter as the author moves
@@ -232,58 +207,22 @@ export function DiffPane({
             // navigated to a file, so don't second-guess them.
             const collapsed = isViewed && viewLayout === 'scroll';
             return (
-              <Fragment key={cid(f.path)}>
+              <Fragment key={f.path}>
                 {renderBefore?.(f.path)}
                 <LazyFileBlock
-                  blockId={cid(f.path)}
+                  blockId={f.path}
                   file={f}
                   registerRef={registerFileRef}
                   viewMode={viewMode}
                   collapsed={collapsed}
                   isViewed={isViewed}
-                  section="committed"
                   onToggleViewed={onToggleViewed}
-                  notes={notesByFile.get(cid(f.path)) ?? EMPTY_NOTES}
+                  notes={notesByFile.get(f.path) ?? EMPTY_NOTES}
                   {...noteOps}
                 />
               </Fragment>
             );
           })}
-          {uncommittedFiles !== null && viewLayout === 'scroll' && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '6px 2px 12px',
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: 0.05,
-                textTransform: 'uppercase',
-                color: 'var(--orange)',
-              }}
-            >
-              Uncommitted · {uncommitted.length}
-              <span style={{ fontWeight: 400, textTransform: 'none', color: 'var(--gray-500)' }}>
-                working-tree changes, not part of the committed diff
-              </span>
-            </div>
-          )}
-          {visibleUncommitted.map((f) => (
-            <LazyFileBlock
-              key={uid(f.path)}
-              blockId={uid(f.path)}
-              file={f}
-              registerRef={registerFileRef}
-              viewMode={viewMode}
-              collapsed={false}
-              isViewed={false}
-              section="uncommitted"
-              onToggleViewed={onToggleViewed}
-              notes={notesByFile.get(uid(f.path)) ?? EMPTY_NOTES}
-              {...noteOps}
-            />
-          ))}
         </>
       )}
     </div>
@@ -305,9 +244,9 @@ export function DiffPane({
  * stable.
  */
 type LazyFileBlockProps = FileBlockProps & {
-  /** Section-qualified id this block registers under (scroll targeting). */
+  /** The file path this block registers under (scroll targeting). */
   blockId: string;
-  registerRef(id: string, el: HTMLDivElement | null): void;
+  registerRef(path: string, el: HTMLDivElement | null): void;
 };
 const LazyFileBlock = memo(function LazyFileBlock({
   registerRef,
@@ -420,10 +359,6 @@ type FileBlockProps = NoteOps & {
    *  viewed and we're in scroll layout (see DiffPane). */
   collapsed: boolean;
   isViewed: boolean;
-  /** Which section the block belongs to. Uncommitted blocks drop the viewed
-   *  toggle (flag F4) and stamp `uncommitted` on the anchors they create; note
-   *  affordances are otherwise identical. */
-  section: 'committed' | 'uncommitted';
   /** Stable parent callback; the block calls it with its own `file.path`. */
   onToggleViewed(path: string): void;
   /** Notes anchored to this file (line- or file-level). */
@@ -435,7 +370,6 @@ const FileBlock = memo(function FileBlock({
   viewMode,
   collapsed,
   isViewed,
-  section,
   onToggleViewed,
   notes,
   onCreateNote,
@@ -502,8 +436,6 @@ const FileBlock = memo(function FileBlock({
     [lineNotes, onReplyNote, onResolveNote, onReopenNote, onDeleteNote],
   );
 
-  const uncommitted = section === 'uncommitted';
-
   const handleCreate = useCallback(
     (range: CommentRange, body: string) =>
       onCreateNote(
@@ -512,11 +444,14 @@ const FileBlock = memo(function FileBlock({
           lineStart: range.lineStart,
           lineEnd: range.lineEnd,
           side: range.side,
-          uncommitted,
+          // One diff, one anchor space (ADR-0030): a note's staleness is
+          // always checked against the base-scope diff. `uncommitted` stays on
+          // the wire only so pre-ADR-0030 notes still resolve.
+          uncommitted: false,
         },
         body,
       ),
-    [file.path, uncommitted, onCreateNote],
+    [file.path, onCreateNote],
   );
 
   // Header-only render when collapsed. We keep the same chrome so the
@@ -603,7 +538,7 @@ const FileBlock = memo(function FileBlock({
                       lineStart: null,
                       lineEnd: null,
                       side: null,
-                      uncommitted,
+                      uncommitted: false,
                     },
                     trimmed,
                   )
@@ -670,30 +605,20 @@ const FileBlock = memo(function FileBlock({
           type="button"
           className="btn"
           onClick={() => setAddingFile(true)}
-          title={
-            uncommitted
-              ? 'Add a file-level Review note on this working-tree change'
-              : 'Add a file-level Review note'
-          }
+          title="Add a file-level Review note"
         >
           <Icon name="comment-fill" size={11} /> Note
         </button>
-        {/* No viewed toggle in the uncommitted section (flag F4): a viewed mark
-            is anchored to the blob the author saw, and working-tree content has
-            no blob to anchor to. */}
-        {!uncommitted && (
-          <button
-            type="button"
-            className="btn"
-            onClick={() => onToggleViewed(file.path)}
-            style={
-              isViewed ? { background: 'rgba(52,199,89,0.14)', color: 'var(--green-d)' } : undefined
-            }
-          >
-            <Icon name={isViewed ? 'check' : 'eye'} size={11} />{' '}
-            {isViewed ? 'Viewed' : 'Mark viewed'}
-          </button>
-        )}
+        <button
+          type="button"
+          className="btn"
+          onClick={() => onToggleViewed(file.path)}
+          style={
+            isViewed ? { background: 'rgba(52,199,89,0.14)', color: 'var(--green-d)' } : undefined
+          }
+        >
+          <Icon name={isViewed ? 'check' : 'eye'} size={11} /> {isViewed ? 'Viewed' : 'Mark viewed'}
+        </button>
       </div>
 
       {/* Outdated band */}
@@ -736,7 +661,13 @@ const FileBlock = memo(function FileBlock({
                   return;
                 }
                 onCreateNote(
-                  { file: file.path, lineStart: null, lineEnd: null, side: null, uncommitted },
+                  {
+                    file: file.path,
+                    lineStart: null,
+                    lineEnd: null,
+                    side: null,
+                    uncommitted: false,
+                  },
                   trimmed,
                 )
                   .then(() => setAddingFile(false))

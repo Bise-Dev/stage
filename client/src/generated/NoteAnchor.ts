@@ -13,12 +13,13 @@ export type NoteAnchor = { file: string, lineStart: number | null, lineEnd: numb
  */
 side: Side | null, 
 /**
- * Which Self-Review section the anchor lives in: the committed diff
- * (`false`, the default) or the **uncommitted** working-tree section
- * (`true`). Both sections can hold the same path at different line
- * numbers, so the section is part of the anchor's identity — and it picks
- * which diff `outdated` is computed against
- * ([`crate::diff::notes_with_outdated`]). Pre-existing rows read back as
- * `false`, which is what they were.
+ * **Legacy** (pre-ADR-0030): which Self-Review *section* the anchor was
+ * left in — the committed diff (`false`) or the working-tree section
+ * (`true`). Self-Review no longer has two sections: "+ Uncommitted"
+ * widens the one diff, so every anchor written since is `false` and a
+ * note is identified by its path alone. The flag is still honoured on
+ * read, because it picks which diff `outdated` is computed against
+ * ([`crate::diff::notes_with_outdated`]) — a `true` anchor is checked
+ * against the working-tree diff, which is the stricter of the two.
  */
 uncommitted: boolean, };

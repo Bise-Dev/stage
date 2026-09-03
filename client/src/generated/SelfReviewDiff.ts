@@ -5,7 +5,9 @@ import type { SelfReviewStats } from "./SelfReviewStats";
 
 export type SelfReviewDiff = { currentBranch: string, scope: SelfReviewScope, 
 /**
- * Only set when `scope == Base`; the ref the diff was computed against.
+ * Only set when `scope == Base`; the ref the diff was actually computed
+ * against, after the remote-tracking preference in [`resolve_base_commit`]
+ * (e.g. `origin/main` for a requested `main`).
  */
 baseRef: string | null, 
 /**
