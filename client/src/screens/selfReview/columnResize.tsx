@@ -1,10 +1,10 @@
 import { useCallback, useRef, useState } from 'react';
 
 /**
- * Draggable, persisted column widths for the Self-Review layout. The file list
- * and the Debrief rail are otherwise fixed-width columns; the author can drag
- * the divider between sensible min/max bounds and the choice survives reloads
- * (localStorage, same precedent as `LAYOUT_KEY` / `viewedStore`).
+ * Draggable, persisted column widths. Used by the Self-Review layout (the file
+ * list and the Debrief rail) and by the branch table's header: the author can
+ * drag a divider between sensible min/max bounds and the choice survives
+ * reloads (localStorage, same precedent as `LAYOUT_KEY` / `viewedStore`).
  */
 
 function clamp(n: number, min: number, max: number): number {
@@ -114,6 +114,43 @@ export function ResizeHandle({
         zIndex: 1,
         cursor: 'col-resize',
         background: 'transparent',
+      }}
+    />
+  );
+}
+
+/**
+ * The same drag, sitting on a table header's right edge. A `<th>` can't be a
+ * flex track, so this one is absolutely positioned inside it (the header must
+ * be `position: relative`) and widened by a transparent hit area so a 1px
+ * divider is still grabbable.
+ */
+export function ColumnResizeHandle({
+  onResizeStart,
+  onResizeKey,
+  ariaLabel,
+}: {
+  onResizeStart: (e: React.PointerEvent) => void;
+  onResizeKey: (e: React.KeyboardEvent) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={ariaLabel}
+      tabIndex={0}
+      onPointerDown={onResizeStart}
+      onKeyDown={onResizeKey}
+      style={{
+        position: 'absolute',
+        top: 0,
+        bottom: 0,
+        right: -4,
+        width: 9,
+        cursor: 'col-resize',
+        background: 'transparent',
+        zIndex: 1,
       }}
     />
   );
