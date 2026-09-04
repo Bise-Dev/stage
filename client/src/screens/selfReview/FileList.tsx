@@ -25,9 +25,13 @@ export type FileListChapter = { title: string; files: string[] };
  * Rendered inside the shared `CollapsibleRail` (M2). When a Debrief exists,
  * files group under **chapter title headers** (L9 §3c N1) with a trailing
  * "Other files" group for unnarrated ones; no Debrief → one flat group.
- * Within each group, viewed files compact into dim struck-through rows at the
- * group's bottom (design `V6_FileList`, per-group since L9). While a filter
- * query is active, only groups containing matches render.
+ * Within each group the rows stay in the diff's own order, and a viewed file
+ * compacts into a dim struck-through row **in place** rather than sinking to
+ * the group's bottom (as `V6_FileList` had it): this list is the jump list for
+ * the diff pane, which renders viewed files collapsed but never reordered, so
+ * any divergence makes a row's neighbours differ between the two panes and a
+ * click reads as landing on the wrong file. While a filter query is active,
+ * only groups containing matches render.
  *
  * There is exactly **one list**: folding the working tree in widens the diff
  * the parent hands down, it doesn't append a second section (ADR-0030), so a
@@ -149,27 +153,37 @@ export function FileList({
             {files.length === 0 ? 'No changes.' : 'No files match the filter.'}
           </div>
         )}
-        {groups.map((g, gi) => {
-          const unseen = g.files.filter((f) => !viewed.has(f.path));
-          const seen = g.files.filter((f) => viewed.has(f.path));
-          return (
-            <Fragment key={g.title ?? '·flat·'}>
-              {g.title !== null && (
-                <div
-                  className="section-label"
-                  title={g.title}
-                  style={{
-                    padding: gi === 0 ? '6px 8px 4px' : '12px 8px 4px',
-                    color: g.title === 'Other files' ? 'var(--gray-500)' : 'var(--gray-600)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {g.title}
-                </div>
-              )}
-              {unseen.map((f) => (
+        {groups.map((g, gi) => (
+          <Fragment key={g.title ?? '·flat·'}>
+            {g.title !== null && (
+              <div
+                className="section-label"
+                title={g.title}
+                style={{
+                  padding: gi === 0 ? '6px 8px 4px' : '12px 8px 4px',
+                  color: g.title === 'Other files' ? 'var(--gray-500)' : 'var(--gray-600)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {g.title}
+              </div>
+            )}
+            {/* One pass, in diff order: a viewed file compacts into a dim
+                struck-through `SeenRow` in place (see the ordering note on the
+                component). The checkbox still toggles it back to a full row. */}
+            {g.files.map((f) =>
+              viewed.has(f.path) ? (
+                <SeenRow
+                  key={f.path}
+                  file={f}
+                  active={f.path === selectedId}
+                  noteCount={noteCounts.get(f.path) ?? 0}
+                  onSelect={() => onSelect(f.path)}
+                  onToggleViewed={() => onToggleViewed(f.path)}
+                />
+              ) : (
                 <FileRow
                   key={f.path}
                   file={f}
@@ -179,23 +193,10 @@ export function FileList({
                   onSelect={() => onSelect(f.path)}
                   onToggleViewed={() => onToggleViewed(f.path)}
                 />
-              ))}
-              {/* Seen — viewed files compact into dim single-line rows at the
-                  group's bottom (per-group since L9 §3c N1); the checkbox
-                  still toggles them back to full rows. */}
-              {seen.map((f) => (
-                <SeenRow
-                  key={f.path}
-                  file={f}
-                  active={f.path === selectedId}
-                  noteCount={noteCounts.get(f.path) ?? 0}
-                  onSelect={() => onSelect(f.path)}
-                  onToggleViewed={() => onToggleViewed(f.path)}
-                />
-              ))}
-            </Fragment>
-          );
-        })}
+              ),
+            )}
+          </Fragment>
+        ))}
       </div>
       {viewed.size > 0 && (
         <div
