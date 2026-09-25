@@ -201,9 +201,11 @@ now resolved:
 
 ## ADR impact
 
-- **Supersedes:** ADR-0001 (three-tier topology), ADR-0005 (SDK device-flow), ADR-0007 (loopback
-  callback), ADR-0008 (GitHub-as-Stage-IdP), ADR-0009 (overview aggregation endpoint), ADR-0017
-  (repo-access gate via app installation).
+- **Supersedes:** ADR-0001 (three-tier topology), ADR-0002 (Workspace UUID identity), ADR-0004
+  (flat REST URL style), ADR-0005 (backend styleguide baseline), ADR-0006 (stateless Local Client
+  SDK), ADR-0007 (loopback callback), ADR-0008 (GitHub-as-Stage-IdP), ADR-0009 (overview aggregation
+  endpoint), ADR-0013 (client session persistence), ADR-0017 (repo-access gate via app
+  installation), ADR-0020 (Workspace authorization model).
 - **Amends:** ADR-0014 (`stage open` gains a PR-identity form and `OpenMode::Review`); ADR-0016
   (observe-only, with one user-confirmed checkout exception).
 - **Reaffirms:** ADR-0018 (storyline diff is committed tree-to-tree). ADR-0003's *write-through

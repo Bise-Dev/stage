@@ -1,6 +1,7 @@
 # Branch actions are one shared menu; every branch name is an action surface
 
-Status: accepted — supersedes the read-only scope note in `BranchGraph`
+**Status:** accepted — supersedes the read-only scope note in `BranchGraph`
+**Date:** 2026-08-25
 
 The branch action menu was built for one place: the chevron at the end of a `BranchTable` row. Branch names appear in four places, though — table rows, the graph's rail list, the graph's inline branch-tip chips, and (as a title fallback only) the GitHub-only rows. We decided that **a branch name is an action surface wherever it appears, and there is exactly one menu behind all of them**: a `BranchMenuProvider` at the overview level holds the rows and the action callbacks, renders a single menu instance, and every trigger site is one `openAt(event, branchName)` call. Right-click opens it where the row *is* the branch (a table row, a rail row) or on the chip itself; a hover-revealed chevron mirrors the table's affordance on rail rows so the menu is discoverable and keyboard-reachable in both views. Per-surface menus were rejected: three copies of the name→row lookup and three copies of the dismiss behaviour is exactly how two views come to disagree about what a branch can do.
 

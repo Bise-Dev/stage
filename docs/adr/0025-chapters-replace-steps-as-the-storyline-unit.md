@@ -1,6 +1,7 @@
 # Chapters replace steps as the storyline unit
 
-Status: accepted
+**Status:** accepted
+**Date:** 2026-08-19
 
 A Storyline was an ordered list of per-file **steps**, each carrying its own intro — which made authoring cost scale with the number of changed files (28 intros for a 28-file branch) and pushed authors toward boilerplate. We decided the narrative unit is now the **Chapter**: a titled, author-ordered group of changed files with **one intro**; files inside a chapter carry no per-file title or intro. Files left out of every chapter still publish, rendered as an automatic alphabetical "Everything else" section at the end, and never block the publish gate (which becomes: ≥1 chapter, every chapter titled with a non-empty intro, no stale chapter — the stale and uncommitted-work gates from ADR-0024 carry over unchanged). The Debrief adopts the same shape so it seeds a Storyline 1:1.
 

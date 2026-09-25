@@ -1,6 +1,6 @@
 # ADR-0006 · Local Client SDK is stateless and does not own the device-flow poll loop
 
-**Status:** accepted
+**Status:** superseded by [ADR-0022](0022-local-stage-folder-replaces-backend.md) (was: accepted) — the Local Client SDK and its auth endpoints were deleted with the backend
 **Date:** 2026-05-25
 
 ## Context

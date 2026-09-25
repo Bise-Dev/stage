@@ -8,7 +8,7 @@ Django has no opinionated layout for applications larger than the tutorial. The 
 
 A widely-adopted correction is to introduce an explicit **service layer** (writes) and **selector layer** (reads) per app, and to keep everything else — views, serializers, models — thin and free of business logic. The well-known reference for this pattern is the [HackSoft Django Styleguide](https://github.com/HackSoftware/Django-Styleguide), which the structural choices below borrow from heavily.
 
-The Stage backend was originally bootstrapped from [`brunovollmer/Django-Starter`](https://github.com/brunovollmer/Django-Starter) and inherits its conventions wholesale; this ADR documents the baseline as it applies to Stage.
+The (since-deleted) Stage backend was originally bootstrapped from [`brunovollmer/Django-Starter`](https://github.com/brunovollmer/Django-Starter) and inherits its conventions wholesale; this ADR documents the baseline as it applies to Stage.
 
 ## Decision
 
