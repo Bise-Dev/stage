@@ -73,3 +73,9 @@ A read-only, structured event stream for inspecting what the app is doing at run
 ## Tooling
 - **Package manager**: Bun. One lockfile (`bun.lock`).
 - **Lint / format**: Biome. One config, one binary, both jobs.
+
+## Webview security (CSP)
+- **`app.security.csp`** in `src-tauri/tauri.conf.json` is a strict allowlist, because the webview renders markdown written by agents and pulled from GitHub (`react-markdown`, raw HTML off). Scripts load only from the bundle (`script-src 'self'`, no `eval`/wasm needed). Images load from the bundle, `data:`/`blob:`, and GitHub's user-content hosts (`*.githubusercontent.com`) — anything else is blocked, so a markdown image can't phone home to an arbitrary host. `object-src`, `base-uri` and `form-action` are `'none'`.
+- **`style-src` keeps `'unsafe-inline'`**, and `dangerousDisableAssetCspModification: ["style-src"]` stops Tauri from appending hashes/nonces to it — a hash would make the browser ignore `'unsafe-inline'` and break libraries that set inline styles. Style injection is the low-risk half; scripts stay locked down.
+- **`devCsp`** is the same policy plus what the Vite dev server needs: the React Refresh inline preamble (`script-src 'unsafe-inline'`) and the HMR websockets (`connect-src ws://localhost:1420 ws://localhost:1421`).
+- Adding a new remote origin (image host, font, fetch target) means adding it to **both** policies — a violation fails silently in the UI, and shows only in the webview console.

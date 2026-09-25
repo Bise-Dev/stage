@@ -1,6 +1,6 @@
 # ADR-0002 · Workspace identity is a UUID; lifecycle phases are computed
 
-**Status:** accepted
+**Status:** superseded by [ADR-0022](0022-local-stage-folder-replaces-backend.md) (was: accepted) — the backend-minted Workspace UUID is gone; the *computed, never stored* phases survive as **Review status** (CONTEXT.md)
 **Date:** 2026-05-23
 
 ## Context

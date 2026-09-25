@@ -1,5 +1,8 @@
 # Publish gates on uncommitted work; Stage may author a commit-all as the chosen disposition
 
+**Status:** accepted
+**Date:** 2026-07-26
+
 An early dogfooded publish shipped a code-less PR: the implementation existed only as staged, uncommitted working-tree changes, and `publish_review` happily made its scoped `.stage` commit, pushed, and opened a PR containing none of the actual change — with no warning anywhere. We decided Publish must not run silently over a dirty tree: the engine (`stage-core`) refuses to publish when the working tree differs from `HEAD` (staged, unstaged-tracked, or untracked non-ignored paths; Stage's own `.stage/<branch>/` writes excluded) unless the `PublishRequest` carries an explicit author-chosen **disposition** — **commit everything** (`git add -A` semantics, author-editable message pre-filled from the PR title), **publish without it**, or cancel.
 
 The commit-all disposition is the one place Stage authors a commit of the author's code. Everywhere else Stage is strictly observe-only over the author's work (its only commits are scoped `.stage` commits; it never creates, checks out, or mutates worktrees) — this is a deliberate, narrowly-scoped exception, taken only on an explicit per-publish click, because the most common dirty-at-publish case *is* "the change is the uncommitted work" and sending the author away to a terminal mid-publish is the kind of friction that gets the warning dismissed instead of acted on.

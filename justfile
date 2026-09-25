@@ -27,7 +27,7 @@ run:
     want="{{MPROCS_MIN_VERSION}}"
     if [ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -1)" != "$want" ]; then
         echo "error: mprocs $have is too old — mprocs.yaml needs >= $want for proc_log" >&2
-        echo "       upgrade with: volta install mprocs@latest" >&2
+        echo "       upgrade mprocs (https://github.com/pvolok/mprocs#installation)" >&2
         exit 1
     fi
     branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"

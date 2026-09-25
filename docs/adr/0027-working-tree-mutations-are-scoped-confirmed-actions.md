@@ -1,6 +1,7 @@
 # Working-tree mutations are scoped, confirmed actions
 
-Status: accepted — amends ADR-0016 (worktrees remain observe-only by default); amended 2026-08-19 (explicit switch action)
+**Status:** accepted — amends ADR-0016 (worktrees remain observe-only by default); amended 2026-08-19 (explicit switch action)
+**Date:** 2026-08-19
 
 ADR-0016 made Stage strictly observe-only toward worktrees, with the reviewer-entry checkout (ADR-0022 §6) as the lone exception. The unified branch→review flow needs branch actions to start from any row in the branch list, so we amended the rule rather than reversing it: **reading never mutates, and mutation happens only where the working tree genuinely matters, always behind an explicit confirmation that lists the exact git commands** (stash → checkout → stash pop, commit, push).
 

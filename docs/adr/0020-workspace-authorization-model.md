@@ -1,6 +1,6 @@
 # ADR-0020 · Workspace authorization model
 
-**Status:** accepted
+**Status:** superseded by [ADR-0022](0022-local-stage-folder-replaces-backend.md) (was: accepted) — no backend enforces access; a Review lives in the author's own repo and GitHub's permissions apply
 **Date:** 2026-06-15
 
 ## Context

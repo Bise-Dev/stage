@@ -1,11 +1,11 @@
 # ADR-0004 · Flat REST URL style for the Stage backend
 
-**Status:** accepted
+**Status:** superseded by [ADR-0022](0022-local-stage-folder-replaces-backend.md) (was: accepted) — there is no backend and no REST API
 **Date:** 2026-05-23
 
 ## Context
 
-The Stage backend forks `brunovollmer/Django-Starter`, whose conventions [ADR-0005](./0005-backend-architecture-and-styleguide-baseline.md) inherits — including the HackSoft-style "one `APIView` subclass per HTTP operation" rule. In that style, every verb gets its own URL segment:
+The (since-deleted) Stage backend forked [`brunovollmer/Django-Starter`](https://github.com/brunovollmer/Django-Starter), whose conventions [ADR-0005](./0005-backend-architecture-and-styleguide-baseline.md) inherits — including the HackSoft-style "one `APIView` subclass per HTTP operation" rule. In that style, every verb gets its own URL segment:
 
 ```
 GET    /items/                       # ItemListApi

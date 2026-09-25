@@ -1,6 +1,6 @@
 # ADR-0013 · Client session persistence + explicit local-only mode
 
-**Status:** accepted
+**Status:** superseded by [ADR-0022](0022-local-stage-folder-replaces-backend.md) (was: accepted) — there is no Stage session to persist; the `gh` token owner is the identity, and "local-only" is the only mode
 **Date:** 2026-06-04
 
 ## Context
